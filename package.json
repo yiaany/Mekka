@@ -12,7 +12,7 @@
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc --build --pretty false",
-    "test": "bun test apps/health-service/test/health.test.ts",
+    "test": "bun test apps/health-service/test/health.test.ts packages/protocol/test/protocol.test.ts",
     "build": "tsc --build --pretty false",
     "dev:health": "bun --watch apps/health-service/src/index.ts",
     "start:health": "bun apps/health-service/src/index.ts",

@@ -14,7 +14,7 @@ The product is designed around one resource model for three entry points:
   approvals, and audit trails.
 
 > **Project status:** pre-alpha. The repository currently provides the engineering foundation:
-> strict Bun/TypeScript workspaces, shared protocol types, test utilities, CI, and a health
+> strict Bun/TypeScript workspaces, shared protocol contracts, test utilities, CI, and a health
 > service. Database, Auth, Storage, Realtime, Functions, and Studio are planned, not shipped.
 
 ## Why Mekka
@@ -96,7 +96,7 @@ with an explicit error rather than choosing an implicit fallback.
 apps/
   health-service/     Minimal Elysia service and startup smoke test
 packages/
-  protocol/           Stable shared contracts and error categories
+  protocol/           Tenant context, capabilities, correlation IDs, and public error contract
   testkit/            Small shared test helpers
 docs/
   session-logs/       Russian implementation records for completed sessions

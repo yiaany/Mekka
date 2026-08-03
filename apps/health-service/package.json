@@ -1,0 +1,13 @@
+{
+  "name": "@mekka/health-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mekka/protocol": "workspace:*",
+    "elysia": "1.4.29"
+  },
+  "devDependencies": {
+    "@mekka/testkit": "workspace:*"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "mekka",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "typecheck": "tsc --build --pretty false",
+    "test": "bun test apps/health-service/test/health.test.ts",
+    "build": "tsc --build --pretty false",
+    "dev:health": "bun --watch apps/health-service/src/index.ts",
+    "start:health": "bun apps/health-service/src/index.ts",
+    "smoke:health": "bun apps/health-service/src/smoke.ts",
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test && bun run build && bun run smoke:health"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.6",
+    "bun-types": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}

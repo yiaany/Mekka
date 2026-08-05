@@ -1,0 +1,190 @@
+import { Check, Copy, MousePointerClick, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Button, cn, copyToClipboard, Tabs, TabsContent, TabsList, TabsTrigger } from 'ui'
+import { CodeBlock } from 'ui-patterns/CodeBlock'
+import { GenericSkeletonLoader } from 'ui-patterns/ShimmeringLoader'
+
+import type { LogData, PreviewLogData, QueryType } from './Logs.types'
+import { apiKey, role as extractRole, jwtAPIKey, parseMultigresEventMessage } from './Logs.utils'
+import DefaultPreviewSelectionRenderer from './LogSelectionRenderers/DefaultPreviewSelectionRenderer'
+import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
+
+export interface LogSelectionProps {
+  log?: LogData
+  onClose: () => void
+  queryType?: QueryType
+  projectRef: string
+  isLoading: boolean
+  error?: string | object
+}
+
+const LogSelection = ({ log, onClose, queryType, isLoading, error }: LogSelectionProps) => {
+  const [showCopied, setShowCopied] = useState(false)
+
+  useEffect(() => {
+    if (!showCopied) return
+    const timer = setTimeout(() => setShowCopied(false), 2000)
+    return () => clearTimeout(timer)
+  }, [showCopied])
+
+  const LogDetails = () => {
+    if (error) return <LogErrorState error={error} />
+    if (!log) return <LogDetailEmptyState />
+
+    switch (queryType) {
+      case 'api':
+        const status = log?.metadata?.[0]?.response?.[0]?.status_code
+        const method = log?.metadata?.[0]?.request?.[0]?.method
+        const path = log?.metadata?.[0]?.request?.[0]?.path
+        const search = log?.metadata?.[0]?.request?.[0]?.search
+        const user_agent = log?.metadata?.[0]?.request?.[0]?.headers[0].user_agent
+        const error_code = log?.metadata?.[0]?.response?.[0]?.headers?.[0]?.x_sb_error_code
+        const apikey = jwtAPIKey(log?.metadata) ?? apiKey(log?.metadata)
+        const role = extractRole(log?.metadata)
+
+        const { id, metadata, timestamp, event_message, ...rest } = log
+
+        const apiLog = {
+          id,
+          status,
+          method,
+          path,
+          search,
+          user_agent,
+          timestamp,
+          event_message,
+          metadata,
+          ...(apikey ? { apikey } : null),
+          ...(error_code ? { error_code } : null),
+          ...(role ? { role } : null),
+          ...rest,
+        }
+
+        return <DefaultPreviewSelectionRenderer log={apiLog} />
+
+      case 'multigres': {
+        const parsedMultigresMessage = parseMultigresEventMessage(log.event_message)
+        // Spread the log last so its canonical fields (id, timestamp, event_message)
+        // always win over any same-named keys inside the parsed event_message.
+        const multigresLog = (
+          parsedMultigresMessage ? { ...parsedMultigresMessage, ...log } : log
+        ) as PreviewLogData
+        return <DefaultPreviewSelectionRenderer log={multigresLog} />
+      }
+
+      case 'database':
+        const hint = log?.metadata?.[0]?.parsed?.[0]?.hint
+        const detail = log?.metadata?.[0]?.parsed?.[0]?.detail
+        const query = log?.metadata?.[0]?.parsed?.[0]?.query
+        const postgresLog = {
+          ...(hint && { hint }),
+          ...(detail && { detail }),
+          ...(query && { query }),
+          ...log,
+        }
+        return <DefaultPreviewSelectionRenderer log={postgresLog} />
+      default:
+        return <DefaultPreviewSelectionRenderer log={log} />
+    }
+  }
+
+  return (
+    <div className="relative flex h-full grow flex-col overflow-y-scroll bg-surface-100 border-t">
+      <div className="relative grow flex flex-col h-full">
+        <Tabs defaultValue="details" className="flex flex-col h-full">
+          <TabsList className="px-2 pt-2 sticky top-0 z-10 bg-surface-100">
+            <TabsTrigger className="px-3" value="details">
+              Details
+            </TabsTrigger>
+            <TabsTrigger disabled={!log} className="px-3" value="raw">
+              Raw
+            </TabsTrigger>
+
+            <div className="*:px-1.5 *:text-foreground-lighter ml-auto flex gap-1 absolute right-2 top-2">
+              <ButtonTooltip
+                disabled={!log || isLoading}
+                variant="text"
+                tooltip={{
+                  content: {
+                    side: 'left',
+                    text: isLoading ? 'Loading log...' : 'Copy as JSON',
+                  },
+                }}
+                icon={showCopied ? <Check /> : <Copy />}
+                onClick={() => {
+                  setShowCopied(true)
+                  copyToClipboard(JSON.stringify(log, null, 2))
+                }}
+              />
+
+              <Button variant="text" onClick={onClose}>
+                <X size={14} strokeWidth={2} />
+              </Button>
+            </div>
+          </TabsList>
+          <div className="flex-1 h-full">
+            {isLoading ? (
+              <div className="p-4">
+                <GenericSkeletonLoader />
+              </div>
+            ) : (
+              <>
+                <TabsContent className="space-y-6 h-full" value="details">
+                  <LogDetails />
+                </TabsContent>
+                <TabsContent value="raw">
+                  <CodeBlock
+                    hideLineNumbers
+                    language="json"
+                    className="prose w-full pt-0 max-w-full border-none"
+                  >
+                    {JSON.stringify(log, null, 2)}
+                  </CodeBlock>
+                </TabsContent>
+              </>
+            )}
+          </div>
+        </Tabs>
+      </div>
+    </div>
+  )
+}
+
+export default LogSelection
+
+function LogDetailEmptyState({
+  title = 'Select an Event',
+  message = 'Select an Event to view the complete JSON payload',
+}: {
+  title?: string
+  message?: string
+}) {
+  return (
+    <div
+      className={cn(
+        'flex h-full w-full flex-col items-center justify-center gap-2 overflow-y-scroll text-center transition-all px-4'
+      )}
+    >
+      <div
+        className={cn(
+          'flex w-full max-w-sm flex-col items-center justify-center gap-6 text-center transition-all delay-300 duration-500'
+        )}
+      >
+        <div className="relative flex h-4 w-32 items-center rounded-sm border border-control px-2">
+          <div className="h-0.5 w-2/3 rounded-full bg-surface-300"></div>
+          <div className="absolute right-1 -bottom-4">
+            <MousePointerClick size="24" strokeWidth={1} />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <h3 className="text-sm text-foreground">{title}</h3>
+          <p className="text-xs text-foreground-lighter">{message}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LogErrorState({ error }: { error?: string | object }) {
+  return <pre>{JSON.stringify(error, null, 2)}</pre>
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "./custom-content.schema.json",
+
+  "app:title": "Mekka",
+
+  "dashboard_auth:custom_provider": null,
+
+  "dashboard_auth:custom_providers": null,
+
+  "docs:row_level_security_guide_path": "/guides/auth/row-level-security",
+
+  "organization:legal_documents": null,
+
+  "project_homepage:client_libraries": [],
+  "project_homepage:example_projects": null,
+
+  "logs:default_query": null,
+
+  "infra:cloud_providers": [],
+  "infra:aws_nimbus_label": "",
+
+  "ssl:certificate_url": ""
+}

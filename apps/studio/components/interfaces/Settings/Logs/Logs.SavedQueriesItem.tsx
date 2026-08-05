@@ -1,0 +1,134 @@
+import { useParams } from 'common'
+import { SqlEditor } from 'icons'
+import { Edit, Trash } from 'lucide-react'
+import { useRouter } from 'next/router'
+import { parseAsString, useQueryStates } from 'nuqs'
+import { useState } from 'react'
+import { toast } from 'sonner'
+import { DropdownMenuItem, DropdownMenuSeparator } from 'ui'
+import { ConfirmationModal } from 'ui-patterns/Dialogs/ConfirmationModal'
+
+import { UpdateSavedQueryModal } from './Logs.UpdateSavedQueryModal'
+import { LogsSidebarItem } from './SidebarV2/SidebarItem'
+import { useContentDeleteMutation } from '@/data/content/content-delete-mutation'
+import { useContentUpsertMutation } from '@/data/content/content-upsert-mutation'
+import type { UntrustedLogSqlFragment } from '@/data/logs/safe-analytics-sql'
+
+interface SavedQueriesItemProps {
+  item: {
+    id: string
+    name: string
+    description?: string
+    owner_id: number
+    content: {
+      unchecked_sql: UntrustedLogSqlFragment
+    }
+  }
+}
+
+export const SavedQueriesItem = ({ item }: SavedQueriesItemProps) => {
+  const router = useRouter()
+  const { ref, queryId } = useParams()
+  const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false)
+  const [showUpdateModal, setShowUpdateModal] = useState<boolean>(false)
+
+  const [_, setParams] = useQueryStates({
+    queryId: parseAsString.withDefault(''),
+    q: parseAsString.withDefault(''),
+    s: parseAsString.withDefault(''),
+    its: parseAsString.withDefault(''),
+    ite: parseAsString.withDefault(''),
+  })
+
+  const { mutate: deleteContent } = useContentDeleteMutation({
+    onSuccess: (_, vars) => {
+      setShowConfirmModal(false)
+      if (queryId && vars.ids.includes(queryId)) {
+        setParams({ queryId: '', q: '', s: '', its: '', ite: '' })
+      }
+      toast.success('Successfully deleted query')
+    },
+    onError: (error) => {
+      toast.error(`Failed to delete saved query: ${error.message}`)
+    },
+  })
+  const { mutateAsync: updateContent } = useContentUpsertMutation({
+    onSuccess: () => {
+      setShowUpdateModal(false)
+      toast.success('Successfully updated query')
+    },
+    onError: (error) => {
+      toast.error(`Failed to update query: ${error.message}`)
+    },
+  })
+
+  const onConfirmDelete = async () => {
+    if (!ref || typeof ref !== 'string') return console.error('Invalid project reference')
+    deleteContent({ projectRef: ref, ids: [item.id] })
+  }
+
+  const onConfirmUpdate = async ({ name, description }: { name: string; description?: string }) => {
+    if (!ref || typeof ref !== 'string') return console.error('Invalid project reference')
+    await updateContent({
+      projectRef: ref,
+      payload: {
+        ...item,
+        name,
+        description: description || undefined,
+        type: 'log_sql',
+        visibility: 'user',
+      },
+    })
+  }
+
+  const isActive = router.query.queryId === item.id
+
+  return (
+    <>
+      <LogsSidebarItem
+        label={item.name}
+        icon={<SqlEditor size="15" />}
+        href={`/project/${ref}/logs/explorer?queryId=${encodeURIComponent(item.id)}&q=${encodeURIComponent(item.content.unchecked_sql)}`}
+        isActive={isActive}
+        dropdownItems={
+          <>
+            <DropdownMenuItem onClick={() => setShowUpdateModal(true)}>
+              <Edit size={14} className="mr-2" />
+              Edit query
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                setShowConfirmModal(true)
+              }}
+            >
+              <Trash size={14} className="mr-2" />
+              Delete query
+            </DropdownMenuItem>
+          </>
+        }
+      />
+      <ConfirmationModal
+        variant="destructive"
+        visible={showConfirmModal}
+        confirmLabel="Delete query"
+        title="Confirm to delete saved query"
+        onCancel={() => setShowConfirmModal(false)}
+        onConfirm={onConfirmDelete}
+      >
+        <p className="text-sm text-foreground-light">
+          Are you sure you want to delete {item.name}?
+        </p>
+      </ConfirmationModal>
+      <UpdateSavedQueryModal
+        header="Update saved query"
+        visible={showUpdateModal}
+        initialValues={{ name: item.name, description: item.description }}
+        onCancel={() => {
+          setShowUpdateModal(false)
+        }}
+        onSubmit={onConfirmUpdate}
+      />
+    </>
+  )
+}

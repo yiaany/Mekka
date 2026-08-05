@@ -1,0 +1,62 @@
+import pgMeta from '@supabase/pg-meta'
+import { QueryClient, useQuery } from '@tanstack/react-query'
+import { z } from 'zod'
+
+import { databaseKeys } from './keys'
+import { executeSql } from '@/data/sql/execute-sql-mutation'
+import { EMPTY_ARR } from '@/lib/void'
+import { ResponseError, UseCustomQueryOptions } from '@/types'
+
+export type SchemasVariables = {
+  projectRef?: string
+  connectionString?: string | null
+}
+
+export type Schema = z.infer<typeof pgMeta.schemas.zod>
+
+const pgMetaSchemasList = pgMeta.schemas.list()
+
+export type SchemasData = z.infer<typeof pgMetaSchemasList.zod>
+export type SchemasError = ResponseError
+
+export async function getSchemas(
+  { projectRef, connectionString }: SchemasVariables,
+  signal?: AbortSignal
+) {
+  const { result } = await executeSql(
+    {
+      projectRef,
+      connectionString,
+      sql: pgMetaSchemasList.sql,
+      queryKey: ['schemas'],
+    },
+    signal
+  )
+
+  return Array.isArray(result) ? result : EMPTY_ARR
+}
+
+export const useSchemasQuery = <TData = SchemasData>(
+  { projectRef, connectionString }: SchemasVariables,
+  { enabled = true, ...options }: UseCustomQueryOptions<SchemasData, SchemasError, TData> = {}
+) =>
+  useQuery<SchemasData, SchemasError, TData>({
+    queryKey: databaseKeys.schemas(projectRef),
+    queryFn: ({ signal }) => getSchemas({ projectRef, connectionString }, signal),
+    enabled: enabled && typeof projectRef !== 'undefined',
+    ...options,
+  })
+
+export function invalidateSchemasQuery(client: QueryClient, projectRef: string | undefined) {
+  return client.invalidateQueries({ queryKey: databaseKeys.schemas(projectRef) })
+}
+
+export function prefetchSchemas(
+  client: QueryClient,
+  { projectRef, connectionString }: SchemasVariables
+) {
+  return client.fetchQuery({
+    queryKey: databaseKeys.schemas(projectRef),
+    queryFn: ({ signal }) => getSchemas({ projectRef, connectionString }, signal),
+  })
+}

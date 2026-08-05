@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/migration-engine" },
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/schema-manifest" },
+    { "path": "../../packages/storage-core" }
+  ]
+}

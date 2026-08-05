@@ -2,7 +2,19 @@
   "files": [],
   "references": [
     { "path": "./packages/protocol" },
+    { "path": "./packages/storage-core" },
+    { "path": "./packages/schema-manifest" },
+    { "path": "./packages/query-ast" },
+    { "path": "./packages/sqlite-compiler" },
+    { "path": "./packages/policy-engine" },
+    { "path": "./packages/realtime-core" },
+    { "path": "./packages/migration-engine" },
+    { "path": "./packages/auth-core" },
+    { "path": "./packages/onboarding-core" },
+    { "path": "./packages/studio-domain-sdk" },
     { "path": "./packages/testkit" },
+    { "path": "./apps/gateway" },
+    { "path": "./apps/sqlite-meta" },
     { "path": "./apps/health-service" }
   ]
 }

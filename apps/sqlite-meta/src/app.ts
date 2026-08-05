@@ -1,0 +1,1005 @@
+import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { Elysia } from "elysia";
+import {
+  MigrationError,
+  applyMigration,
+  createCheckpoint,
+  createMigrationArtifact,
+} from "@mekka/migration-engine";
+import {
+  type ErrorCode,
+  ProtocolError,
+  createErrorEnvelope,
+  hasCapability,
+  parseTenantIdentityFromHeaders,
+  resolveCorrelationId,
+  type TenantContext,
+  type TenantIdentity,
+} from "@mekka/protocol";
+import {
+  buildSchemaManifest,
+  type SchemaManifest,
+  type SchemaManifestCache,
+  type SchemaTable,
+} from "@mekka/schema-manifest";
+import type { StorageAdapter, StorageValue } from "@mekka/storage-core";
+
+export type SqliteMetaColumn = Readonly<{
+  name: string;
+  type: string;
+  nullable: boolean;
+  primaryKeyPosition: number;
+  defaultValue: string | null;
+}>;
+
+export type SqliteMetaIndex = Readonly<{
+  name: string;
+  table: string;
+  unique: boolean;
+  columns: readonly string[];
+}>;
+
+export type SqliteMetaTable = Readonly<{
+  name: string;
+  columns: readonly SqliteMetaColumn[];
+  primaryKey: readonly string[];
+  indexes: readonly SqliteMetaIndex[];
+}>;
+
+type MutationResult<T> = Readonly<{
+  resource: T;
+  migrationSql: string;
+  checkpointId: string | null;
+}>;
+
+export type SqliteMetaSchemaHealth = Readonly<{
+  status: "ok";
+  formatVersion: number;
+  schemaVersion: number;
+  schemaHash: string;
+}>;
+
+export type SqliteMetaProject = Readonly<{
+  tenant: TenantIdentity;
+  storage: StorageAdapter;
+  schemaCache?: SchemaManifestCache;
+}>;
+
+export type SqliteMetaAuditEvent = Readonly<{
+  action:
+    | "create_table"
+    | "rename_table"
+    | "delete_table"
+    | "add_column"
+    | "rename_column"
+    | "create_index"
+    | "create_row"
+    | "update_row"
+    | "delete_row"
+    | "run_sql_read"
+    | "run_sql_write";
+  actorId: string;
+  migrationHash?: string;
+  checkpointId?: string | null;
+  statementHash?: string;
+  rowCount?: number;
+}>;
+
+export type SqliteMetaDependencies = Readonly<{
+  authenticate(request: Request): Promise<TenantContext> | TenantContext;
+  resolveProject(context: TenantContext): Promise<SqliteMetaProject> | SqliteMetaProject;
+  recordAudit(event: SqliteMetaAuditEvent): void;
+  checkpointDirectory: string;
+  now?: () => number;
+}>;
+
+type ColumnInput = Readonly<{
+  name: string;
+  type: string;
+  nullable?: boolean;
+  primaryKey?: boolean;
+}>;
+
+type RowValue = string | number | null;
+type RowInput = Readonly<Record<string, RowValue>>;
+type SqlOperation = "read" | "write";
+
+const identifierPattern = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const idempotencyKeyPattern = /^[A-Za-z0-9_-]{16,128}$/;
+const schemaHashPattern = /^[a-f0-9]{64}$/;
+const allowedTypes = new Set(["INTEGER", "TEXT", "REAL", "BLOB", "NUMERIC"]);
+const maxRowPageSize = 200;
+const maxSqlLength = 8_192;
+
+export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
+  const now = dependencies.now ?? Date.now;
+  return new Elysia({ name: "sqlite-meta" })
+    .get("/tables", async ({ request }) =>
+      handle(request, dependencies, now, "schema:read", (_context, project) =>
+        tablesDto(manifest(project)),
+      ),
+    )
+    .get("/tables/:table", async ({ request, params }) =>
+      handle(request, dependencies, now, "schema:read", (_context, project) =>
+        tableDto(requireTable(manifest(project), readRouteIdentifier(params.table, "table"))),
+      ),
+    )
+    .get("/schema/health", async ({ request }) =>
+      handle(request, dependencies, now, "schema:read", (_context, project) => {
+        const schema = manifest(project);
+        return Object.freeze({
+          status: "ok" as const,
+          formatVersion: schema.formatVersion,
+          schemaVersion: schema.schemaVersion,
+          schemaHash: schema.hash,
+        });
+      }),
+    )
+    .get("/rows/:table", async ({ request, params }) =>
+      handle(request, dependencies, now, "data:read", (_context, project) => {
+        const table = readRouteIdentifier(params.table, "table");
+        const definition = requireTable(manifest(project), table);
+        const search = new URL(request.url).searchParams;
+        const limit = readBoundedQueryInteger(search.get("limit"), 50, 1, maxRowPageSize);
+        const offset = readBoundedQueryInteger(search.get("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
+        const filterColumn = search.get("filter_column");
+        const filterValue = search.get("filter_value");
+        if ((filterColumn === null) !== (filterValue === null)) {
+          throw new MetaError("validation", "Filter column and value must be supplied together.");
+        }
+        const filter =
+          filterColumn === null
+            ? undefined
+            : {
+                column: requireExposedColumn(definition, filterColumn),
+                value: filterValue as string,
+              };
+        const where =
+          filter === undefined ? "" : ` WHERE ${quote(filter.column)} LIKE ? ESCAPE '\\'`;
+        const parameters: StorageValue[] =
+          filter === undefined ? [] : [`%${escapeLike(filter.value)}%`];
+        const totalCount = project.storage.execute<{ count: number }>({
+          sql: `SELECT COUNT(*) AS count FROM ${quote(table)}${where}`,
+          parameters,
+        }).rows[0]?.count;
+        const rows = project.storage.execute<Record<string, StorageValue>>({
+          sql: `SELECT * FROM ${quote(table)}${where} LIMIT ? OFFSET ?`,
+          parameters: [...parameters, limit, offset],
+        }).rows;
+        return Object.freeze({
+          rows: Object.freeze(rows.map(rowDto)),
+          totalCount: typeof totalCount === "number" ? totalCount : 0,
+          limit,
+          offset,
+        });
+      }),
+    )
+    .post("/rows/:table", async ({ request, params }) =>
+      handle(request, dependencies, now, "data:write", async (context, project) => {
+        const table = readRouteIdentifier(params.table, "table");
+        const definition = requireTable(manifest(project), table);
+        const values = readRowValues(await readBody(request), definition, true);
+        const idempotencyKey = readIdempotencyKey(request.headers);
+        const columns = Object.keys(values);
+        const result = project.storage.execute({
+          sql: `INSERT INTO ${quote(table)} (${columns.map(quote).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+          parameters: columns.map((column) => values[column] as StorageValue),
+        });
+        recordDataAudit(dependencies, context, "create_row", `INSERT ${table}`, result.changes);
+        return Object.freeze({ changes: result.changes, idempotencyKey });
+      }),
+    )
+    .patch("/rows/:table", async ({ request, params }) =>
+      handle(request, dependencies, now, "data:write", async (context, project) => {
+        const table = readRouteIdentifier(params.table, "table");
+        const definition = requireTable(manifest(project), table);
+        const body = await readBody(request);
+        const key = readRowKey(body, definition);
+        const values = readRowValues(readRecord(body.values, "values"), definition, false);
+        const idempotencyKey = readIdempotencyKey(request.headers);
+        const columns = Object.keys(values);
+        if (columns.length === 0)
+          throw new MetaError("validation", "At least one row value is required.");
+        const result = project.storage.execute({
+          sql: `UPDATE ${quote(table)} SET ${columns.map((column) => `${quote(column)} = ?`).join(", ")} WHERE ${quote(key.column)} IS ?`,
+          parameters: [...columns.map((column) => values[column] as StorageValue), key.value],
+        });
+        recordDataAudit(dependencies, context, "update_row", `UPDATE ${table}`, result.changes);
+        return Object.freeze({ changes: result.changes, idempotencyKey });
+      }),
+    )
+    .delete("/rows/:table", async ({ request, params }) =>
+      handle(request, dependencies, now, "data:write", async (context, project) => {
+        const table = readRouteIdentifier(params.table, "table");
+        const definition = requireTable(manifest(project), table);
+        const key = readDeleteRowKey(request, definition);
+        const idempotencyKey = readIdempotencyKey(request.headers);
+        const result = project.storage.execute({
+          sql: `DELETE FROM ${quote(table)} WHERE ${quote(key.column)} IS ?`,
+          parameters: [key.value],
+        });
+        recordDataAudit(dependencies, context, "delete_row", `DELETE ${table}`, result.changes);
+        return Object.freeze({ changes: result.changes, idempotencyKey });
+      }),
+    )
+    .post("/sql", async ({ request }) => handleSql(request, dependencies, now))
+    .post("/tables", async ({ request }) =>
+      handle(request, dependencies, now, "schema:manage", async (context, project) => {
+        const body = await readBody(request);
+        const name = readIdentifier(body, "name");
+        const columns = readColumns(body);
+        const expectedSchemaHash = readSchemaHash(body);
+        const sql = createTableSql(name, columns);
+        return mutate(
+          context,
+          project,
+          dependencies,
+          request.headers,
+          "create_table",
+          name,
+          expectedSchemaHash,
+          sql,
+          false,
+        );
+      }),
+    )
+    .patch("/tables/:table", async ({ request, params }) =>
+      handle(request, dependencies, now, "schema:manage", async (context, project) => {
+        const body = await readBody(request);
+        const table = readRouteIdentifier(params.table, "table");
+        const name = readIdentifier(body, "name");
+        const expectedSchemaHash = readSchemaHash(body);
+        requireTable(manifest(project), table);
+        return mutate(
+          context,
+          project,
+          dependencies,
+          request.headers,
+          "rename_table",
+          table,
+          expectedSchemaHash,
+          `ALTER TABLE ${quote(table)} RENAME TO ${quote(name)}`,
+          false,
+        );
+      }),
+    )
+    .delete("/tables/:table", async ({ request, params }) =>
+      handle(request, dependencies, now, "schema:manage", async (context, project) => {
+        const table = readRouteIdentifier(params.table, "table");
+        const expectedSchemaHash = readExpectedSchemaQuery(request);
+        requireTable(manifest(project), table);
+        return mutate(
+          context,
+          project,
+          dependencies,
+          request.headers,
+          "delete_table",
+          table,
+          expectedSchemaHash,
+          `DROP TABLE ${quote(table)}`,
+          true,
+        );
+      }),
+    )
+    .get("/columns", async ({ request }) =>
+      handle(request, dependencies, now, "schema:read", (_context, project) => {
+        const table = new URL(request.url).searchParams.get("table");
+        const tables =
+          table === null ? manifest(project).tables : [requireTable(manifest(project), table)];
+        return tables.flatMap((candidate) =>
+          tableDto(candidate).columns.map((column) => ({ table: candidate.name, ...column })),
+        );
+      }),
+    )
+    .post("/columns", async ({ request }) =>
+      handle(request, dependencies, now, "schema:manage", async (context, project) => {
+        const body = await readBody(request);
+        const table = readIdentifier(body, "table");
+        const column = readColumn(body);
+        const expectedSchemaHash = readSchemaHash(body);
+        requireTable(manifest(project), table);
+        if (column.primaryKey === true || column.nullable === false) {
+          throw new MetaError(
+            "unsupported",
+            "Adding primary key or NOT NULL columns is not supported.",
+          );
+        }
+        return mutate(
+          context,
+          project,
+          dependencies,
+          request.headers,
+          "add_column",
+          table,
+          expectedSchemaHash,
+          `ALTER TABLE ${quote(table)} ADD COLUMN ${columnSql(column)}`,
+          false,
+        );
+      }),
+    )
+    .patch("/columns/:table/:column", async ({ request, params }) =>
+      handle(request, dependencies, now, "schema:manage", async (context, project) => {
+        const body = await readBody(request);
+        const table = readRouteIdentifier(params.table, "table");
+        const column = readRouteIdentifier(params.column, "column");
+        const name = readIdentifier(body, "name");
+        const expectedSchemaHash = readSchemaHash(body);
+        const current = requireTable(manifest(project), table);
+        if (
+          !current.columns.some(
+            (candidate) => candidate.name === column && candidate.hidden === "none",
+          )
+        ) {
+          throw new MetaError("validation", "Column is not exposed by the schema.");
+        }
+        return mutate(
+          context,
+          project,
+          dependencies,
+          request.headers,
+          "rename_column",
+          table,
+          expectedSchemaHash,
+          `ALTER TABLE ${quote(table)} RENAME COLUMN ${quote(column)} TO ${quote(name)}`,
+          false,
+        );
+      }),
+    )
+    .get("/indexes", async ({ request }) =>
+      handle(request, dependencies, now, "schema:read", (_context, project) => {
+        const table = new URL(request.url).searchParams.get("table");
+        const tables =
+          table === null ? manifest(project).tables : [requireTable(manifest(project), table)];
+        return tables.flatMap((candidate) => tableDto(candidate).indexes);
+      }),
+    )
+    .post("/indexes", async ({ request }) =>
+      handle(request, dependencies, now, "schema:manage", async (context, project) => {
+        const body = await readBody(request);
+        const table = readIdentifier(body, "table");
+        const name = readIdentifier(body, "name");
+        const columns = readIdentifierArray(body, "columns");
+        const unique = readOptionalBoolean(body, "unique") ?? false;
+        const expectedSchemaHash = readSchemaHash(body);
+        const current = requireTable(manifest(project), table);
+        for (const column of columns) {
+          if (
+            !current.columns.some(
+              (candidate) => candidate.name === column && candidate.hidden === "none",
+            )
+          ) {
+            throw new MetaError("validation", "Index column is not exposed by the schema.");
+          }
+        }
+        return mutate(
+          context,
+          project,
+          dependencies,
+          request.headers,
+          "create_index",
+          table,
+          expectedSchemaHash,
+          `CREATE ${unique ? "UNIQUE " : ""}INDEX ${quote(name)} ON ${quote(table)} (${columns.map(quote).join(", ")})`,
+          false,
+        );
+      }),
+    );
+}
+
+async function handle<T>(
+  request: Request,
+  dependencies: SqliteMetaDependencies,
+  now: () => number,
+  requiredCapability: string,
+  operation: (context: TenantContext, project: SqliteMetaProject) => Promise<T> | T,
+): Promise<Response> {
+  try {
+    const headerTenant = parseTenantIdentityFromHeaders(request.headers);
+    const context = await dependencies.authenticate(request);
+    if (
+      !sameTenant(headerTenant, context.tenant) ||
+      !hasRequiredCapability(context, requiredCapability, now())
+    ) {
+      throw new MetaError("forbidden", "Schema management is not permitted.");
+    }
+    const project = await dependencies.resolveProject(context);
+    if (!sameTenant(project.tenant, context.tenant)) {
+      throw new MetaError("forbidden", "Resolved project does not match request tenant.");
+    }
+    return Response.json(await operation(context, project), {
+      headers: { "x-correlation-id": context.correlationId },
+    });
+  } catch (error) {
+    const metaError = toMetaError(error);
+    const correlationId = resolveCorrelationId(request.headers);
+    return Response.json(createErrorEnvelope(metaError.code, correlationId), {
+      status: metaError.status,
+      headers: { "x-correlation-id": correlationId },
+    });
+  }
+}
+
+function hasRequiredCapability(
+  context: TenantContext,
+  requiredCapability: string,
+  now: number,
+): boolean {
+  if (hasCapability(context, requiredCapability, now)) return true;
+  return requiredCapability === "schema:read" && hasCapability(context, "schema:manage", now);
+}
+
+async function handleSql(
+  request: Request,
+  dependencies: SqliteMetaDependencies,
+  now: () => number,
+): Promise<Response> {
+  try {
+    const headerTenant = parseTenantIdentityFromHeaders(request.headers);
+    const context = await dependencies.authenticate(request);
+    if (!sameTenant(headerTenant, context.tenant)) {
+      throw new MetaError("forbidden", "Resolved project does not match request tenant.");
+    }
+    const sql = readSql(await readBody(request));
+    const operation = sqlOperation(sql);
+    const requiredCapability = operation === "read" ? "data:read" : "sql:execute";
+    if (!hasRequiredCapability(context, requiredCapability, now())) {
+      throw new MetaError("forbidden", "SQL execution is not permitted.");
+    }
+    const project = await dependencies.resolveProject(context);
+    if (!sameTenant(project.tenant, context.tenant)) {
+      throw new MetaError("forbidden", "Resolved project does not match request tenant.");
+    }
+    assertSqlTables(sql, manifest(project));
+    const result = project.storage.execute<Record<string, StorageValue>>({ sql });
+    recordDataAudit(
+      dependencies,
+      context,
+      operation === "read" ? "run_sql_read" : "run_sql_write",
+      sql,
+      result.changes,
+    );
+    return Response.json(
+      Object.freeze({ rows: Object.freeze(result.rows.map(rowDto)), changes: result.changes }),
+      { headers: { "x-correlation-id": context.correlationId } },
+    );
+  } catch (error) {
+    const metaError = toMetaError(error);
+    const correlationId = resolveCorrelationId(request.headers);
+    return Response.json(createErrorEnvelope(metaError.code, correlationId), {
+      status: metaError.status,
+      headers: { "x-correlation-id": correlationId },
+    });
+  }
+}
+
+function readSql(body: Record<string, unknown>): string {
+  const value = body.sql;
+  if (typeof value !== "string" || value.trim().length === 0 || value.length > maxSqlLength) {
+    throw new MetaError("validation", "SQL must be a bounded non-empty string.");
+  }
+  if (containsMultipleStatements(value)) {
+    throw new MetaError("validation", "Only one SQL statement is allowed.");
+  }
+  if (
+    /\b(?:attach|detach|pragma|vacuum|begin|commit|rollback|savepoint|release|alter|create|drop|replace|reindex|analyze|trigger|virtual|load_extension)\b/i.test(
+      value,
+    )
+  ) {
+    throw new MetaError("unsupported", "This SQL statement is not permitted.");
+  }
+  if (/\b(?:sqlite_master|sqlite_schema|_mekka_[A-Za-z0-9_]*)\b/i.test(value)) {
+    throw new MetaError("forbidden", "System tables are not available through SQL editor.");
+  }
+  return value.trim();
+}
+
+function sqlOperation(sql: string): SqlOperation {
+  if (/^select\b/i.test(sql)) {
+    const limit = /\blimit\s+(\d+)\s*;?$/i.exec(sql);
+    if (limit === null || Number(limit[1]) > maxRowPageSize) {
+      throw new MetaError("validation", `SELECT statements require LIMIT <= ${maxRowPageSize}.`);
+    }
+    return "read";
+  }
+  if (/^(?:insert|update|delete)\b/i.test(sql)) {
+    if (/^(?:update|delete)\b/i.test(sql) && !/\bwhere\b/i.test(sql)) {
+      throw new MetaError("validation", "UPDATE and DELETE statements require WHERE.");
+    }
+    return "write";
+  }
+  throw new MetaError("unsupported", "Only SELECT, INSERT, UPDATE and DELETE are supported.");
+}
+
+function assertSqlTables(sql: string, schema: SchemaManifest): void {
+  const references = sql.matchAll(/\b(?:from|into|update)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/gi);
+  for (const reference of references) {
+    const table = reference[1];
+    if (table === undefined || !schema.tables.some((candidate) => candidate.name === table)) {
+      throw new MetaError(
+        "validation",
+        "SQL references a table that is not exposed by the schema.",
+      );
+    }
+  }
+}
+
+function readBoundedQueryInteger(
+  value: string | null,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new MetaError("validation", "Pagination value is out of range.");
+  }
+  return parsed;
+}
+
+function requireExposedColumn(table: SchemaTable, value: string): string {
+  if (!identifierPattern.test(value))
+    throw new MetaError("validation", "Column must be a SQLite identifier.");
+  if (!table.columns.some((column) => column.name === value && column.hidden === "none")) {
+    throw new MetaError("validation", "Column is not exposed by the schema.");
+  }
+  return value;
+}
+
+function readRowValues(
+  body: Record<string, unknown>,
+  table: SchemaTable,
+  requireValues: boolean,
+): RowInput {
+  const values = body.values === undefined ? body : readRecord(body.values, "values");
+  const entries = Object.entries(values);
+  if ((requireValues && entries.length === 0) || entries.length > 64) {
+    throw new MetaError("validation", "Row values must be a non-empty bounded object.");
+  }
+  const parsed: Record<string, RowValue> = {};
+  for (const [column, value] of entries) {
+    requireExposedColumn(table, column);
+    if (typeof value !== "string" && typeof value !== "number" && value !== null) {
+      throw new MetaError("validation", "Row values must be strings, numbers or null.");
+    }
+    if (typeof value === "string" && value.length > 16_384) {
+      throw new MetaError("quota", "Row value exceeds the allowed size.");
+    }
+    parsed[column] = value;
+  }
+  return Object.freeze(parsed);
+}
+
+function readRowKey(
+  body: Record<string, unknown>,
+  table: SchemaTable,
+): Readonly<{ column: string; value: RowValue }> {
+  const key = readRecord(body.key, "key");
+  const column = requireExposedColumn(table, readStringField(key, "column"));
+  const value = key.value;
+  if (typeof value !== "string" && typeof value !== "number" && value !== null) {
+    throw new MetaError("validation", "Row key value must be a string, number or null.");
+  }
+  return Object.freeze({ column, value });
+}
+
+function readDeleteRowKey(
+  request: Request,
+  table: SchemaTable,
+): Readonly<{ column: string; value: RowValue }> {
+  const search = new URL(request.url).searchParams;
+  const column = requireExposedColumn(table, search.get("key_column") ?? "");
+  const rawValue = search.get("key_value");
+  if (rawValue === null || rawValue.length > 16_384) {
+    throw new MetaError("validation", "Row key value is required.");
+  }
+  return Object.freeze({ column, value: rawValue });
+}
+
+function readRecord(value: unknown, name: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new MetaError("validation", `${name} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function readStringField(body: Record<string, unknown>, name: string): string {
+  const value = body[name];
+  if (typeof value !== "string") throw new MetaError("validation", `${name} must be a string.`);
+  return value;
+}
+
+function rowDto(row: Record<string, StorageValue>): Record<string, RowValue> {
+  const result: Record<string, RowValue> = {};
+  for (const [column, value] of Object.entries(row)) {
+    if (typeof value === "string" || typeof value === "number" || value === null)
+      result[column] = value;
+    else result[column] = String(value);
+  }
+  return Object.freeze(result);
+}
+
+function escapeLike(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
+function containsMultipleStatements(sql: string): boolean {
+  let quote: "'" | '"' | "`" | null = null;
+  let semicolonFound = false;
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql.charAt(index);
+    const nextCharacter = sql.charAt(index + 1);
+    if (quote !== null) {
+      if (character === quote) {
+        if (nextCharacter === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") quote = character;
+    else if (character === ";") semicolonFound = true;
+    else if (semicolonFound && !/\s/.test(character)) return true;
+  }
+  return false;
+}
+
+function recordDataAudit(
+  dependencies: SqliteMetaDependencies,
+  context: TenantContext,
+  action: Extract<
+    SqliteMetaAuditEvent["action"],
+    `create_row` | `update_row` | `delete_row` | `run_sql_read` | `run_sql_write`
+  >,
+  statement: string,
+  rowCount: number,
+): void {
+  dependencies.recordAudit({
+    action,
+    actorId: context.actor.id,
+    statementHash: createHash("sha256").update(statement).digest("hex"),
+    rowCount,
+  });
+}
+
+function mutate(
+  context: TenantContext,
+  project: SqliteMetaProject,
+  dependencies: SqliteMetaDependencies,
+  headers: Headers,
+  action: SqliteMetaAuditEvent["action"],
+  table: string,
+  expectedSchemaHash: string,
+  sql: string,
+  destructive: boolean,
+): MutationResult<SqliteMetaTable | SqliteMetaIndex> {
+  const idempotencyKey = readIdempotencyKey(headers);
+  const deletedTable =
+    action === "delete_table" ? tableDto(requireTable(manifest(project), table)) : undefined;
+  const artifact = createMigrationArtifact({
+    id: migrationId(context, action, table, idempotencyKey),
+    actorId: context.actor.id,
+    idempotencyKey,
+    expectedSchemaHash,
+    sql,
+  });
+  const checkpoint = destructive
+    ? createCheckpoint(project.storage, {
+        id: `checkpoint-${artifact.id}`,
+        checkpointPath: join(dependencies.checkpointDirectory, `${artifact.id}.sqlite`),
+        checkpointDirectory: dependencies.checkpointDirectory,
+      })
+    : undefined;
+  const result = applyMigration(
+    project.storage,
+    artifact,
+    checkpoint === undefined ? {} : { checkpoint },
+  );
+  project.schemaCache?.invalidate();
+  dependencies.recordAudit({
+    action,
+    actorId: context.actor.id,
+    migrationHash: result.migrationHash,
+    checkpointId: checkpoint?.id ?? null,
+  });
+  if (deletedTable !== undefined) return mutationResult(deletedTable, sql, checkpoint?.id ?? null);
+  const current = manifest(project);
+  if (action === "create_index") {
+    const index = tableDto(requireTable(current, table)).indexes.find((candidate) =>
+      sql.includes(quote(candidate.name)),
+    );
+    if (index === undefined) {
+      throw new MetaError("infrastructure", "Created index could not be resolved.");
+    }
+    return mutationResult(index, sql, checkpoint?.id ?? null);
+  }
+  const targetName = action === "rename_table" ? sql.match(/TO "([^"]+)"$/)?.[1] : table;
+  return mutationResult(
+    tableDto(requireTable(current, targetName ?? table)),
+    sql,
+    checkpoint?.id ?? null,
+  );
+}
+
+function mutationResult<T>(
+  resource: T,
+  migrationSql: string,
+  checkpointId: string | null,
+): MutationResult<T> {
+  return Object.freeze({ resource, migrationSql, checkpointId });
+}
+
+function readIdempotencyKey(headers: Headers): string {
+  const key = headers.get("idempotency-key");
+  if (key === null || key === undefined || !idempotencyKeyPattern.test(key)) {
+    throw new MetaError("validation", "A valid Idempotency-Key header is required.");
+  }
+  return key;
+}
+
+async function readBody(request: Request): Promise<Record<string, unknown>> {
+  if (request.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase() !== "application/json") {
+    throw new MetaError("validation", "Content-Type must be application/json.");
+  }
+  try {
+    const value: unknown = await request.json();
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new MetaError("validation", "Request body must be a JSON object.");
+    }
+    return value as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof MetaError) {
+      throw error;
+    }
+    throw new MetaError("validation", "Request body must be valid JSON.");
+  }
+}
+
+function manifest(project: SqliteMetaProject): SchemaManifest {
+  return project.schemaCache?.get() ?? buildSchemaManifest(project.storage);
+}
+
+function tablesDto(schema: SchemaManifest): readonly SqliteMetaTable[] {
+  return schema.tables.map(tableDto);
+}
+
+function tableDto(table: SchemaTable): SqliteMetaTable {
+  const columns = table.columns
+    .filter((column) => column.hidden === "none")
+    .map((column) =>
+      Object.freeze({
+        name: column.name,
+        type: column.type,
+        nullable: !column.notNull,
+        primaryKeyPosition: column.primaryKeyPosition,
+        defaultValue: column.defaultValue,
+      }),
+    );
+  const indexes = table.indexes
+    .filter((index) => index.origin === "created")
+    .map((index) =>
+      Object.freeze({
+        name: index.name,
+        table: table.name,
+        unique: index.unique,
+        columns: Object.freeze(
+          index.columns
+            .filter((column) => column.key && column.name !== null)
+            .map((column) => column.name as string),
+        ),
+      }),
+    );
+  return Object.freeze({
+    name: table.name,
+    columns: Object.freeze(columns),
+    primaryKey: Object.freeze(
+      columns
+        .filter((column) => column.primaryKeyPosition > 0)
+        .sort((left, right) => left.primaryKeyPosition - right.primaryKeyPosition)
+        .map((column) => column.name),
+    ),
+    indexes: Object.freeze(indexes),
+  });
+}
+
+function createTableSql(name: string, columns: readonly ColumnInput[]): string {
+  const primaryKey = columns
+    .filter((column) => column.primaryKey === true)
+    .map((column) => quote(column.name));
+  return `CREATE TABLE ${quote(name)} (${[
+    ...columns.map(columnSql),
+    ...(primaryKey.length === 0 ? [] : [`PRIMARY KEY (${primaryKey.join(", ")})`]),
+  ].join(", ")})`;
+}
+
+function columnSql(column: ColumnInput): string {
+  const type = readType(column.type);
+  return `${quote(column.name)} ${type}${column.nullable === false || column.primaryKey === true ? " NOT NULL" : ""}`;
+}
+
+function readColumns(body: Record<string, unknown>): readonly ColumnInput[] {
+  const value = body.columns;
+  if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
+    throw new MetaError("validation", "columns must be a non-empty bounded array.");
+  }
+  const columns = value.map((item) => readColumnValue(item));
+  if (new Set(columns.map((column) => column.name)).size !== columns.length) {
+    throw new MetaError("validation", "Column names must be unique.");
+  }
+  return Object.freeze(columns);
+}
+
+function readColumn(body: Record<string, unknown>): ColumnInput {
+  return readColumnValue(body);
+}
+
+function readColumnValue(value: unknown): ColumnInput {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new MetaError("validation", "Column must be an object.");
+  }
+  const body = value as Record<string, unknown>;
+  const nullable = readOptionalBoolean(body, "nullable");
+  const primaryKey = readOptionalBoolean(body, "primaryKey");
+  return Object.freeze({
+    name: readIdentifier(body, "name"),
+    type: readType(body.type),
+    ...(nullable === undefined ? {} : { nullable }),
+    ...(primaryKey === undefined ? {} : { primaryKey }),
+  });
+}
+
+function readIdentifier(body: Record<string, unknown>, name: string): string {
+  const value = body[name];
+  if (typeof value !== "string" || !identifierPattern.test(value)) {
+    throw new MetaError("validation", `${name} must be a SQLite identifier.`);
+  }
+  return value;
+}
+
+function readRouteIdentifier(value: unknown, name: string): string {
+  if (typeof value !== "string" || !identifierPattern.test(value)) {
+    throw new MetaError("validation", `${name} must be a SQLite identifier.`);
+  }
+  return value;
+}
+
+function readIdentifierArray(body: Record<string, unknown>, name: string): readonly string[] {
+  const value = body[name];
+  if (!Array.isArray(value) || value.length === 0 || value.length > 16) {
+    throw new MetaError("validation", `${name} must be a non-empty bounded array.`);
+  }
+  const values = value.map((entry) => {
+    if (typeof entry !== "string" || !identifierPattern.test(entry)) {
+      throw new MetaError("validation", `${name} must contain SQLite identifiers.`);
+    }
+    return entry;
+  });
+  if (new Set(values).size !== values.length) {
+    throw new MetaError("validation", `${name} must not contain duplicates.`);
+  }
+  return Object.freeze(values);
+}
+
+function readType(value: unknown): string {
+  if (typeof value !== "string" || !allowedTypes.has(value.toUpperCase())) {
+    throw new MetaError(
+      "unsupported",
+      "Only INTEGER, TEXT, REAL, BLOB and NUMERIC types are supported.",
+    );
+  }
+  return value.toUpperCase();
+}
+
+function readOptionalBoolean(body: Record<string, unknown>, name: string): boolean | undefined {
+  const value = body[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "boolean") {
+    throw new MetaError("validation", `${name} must be boolean.`);
+  }
+  return value;
+}
+
+function readSchemaHash(body: Record<string, unknown>): string {
+  const value = body.expectedSchemaHash;
+  if (typeof value !== "string" || !schemaHashPattern.test(value)) {
+    throw new MetaError("validation", "expectedSchemaHash must be a SHA-256 hash.");
+  }
+  return value;
+}
+
+function readExpectedSchemaQuery(request: Request): string {
+  const value = new URL(request.url).searchParams.get("expected_schema_hash");
+  if (value === null || !schemaHashPattern.test(value)) {
+    throw new MetaError("validation", "expected_schema_hash must be a SHA-256 hash.");
+  }
+  return value;
+}
+
+function requireTable(schema: SchemaManifest, name: string): SchemaTable {
+  const table = schema.tables.find((candidate) => candidate.name === name);
+  if (table === undefined) {
+    throw new MetaError("validation", "Table is not exposed by the schema.");
+  }
+  return table;
+}
+
+function migrationId(
+  context: TenantContext,
+  action: SqliteMetaAuditEvent["action"],
+  table: string,
+  idempotencyKey: string,
+): string {
+  return `meta-${createHash("sha256")
+    .update(
+      `${context.tenant.organizationId}:${context.tenant.projectId}:${context.tenant.environmentId}:${context.tenant.branchId}:${context.tenant.generation}:${context.actor.id}:${action}:${table}:${idempotencyKey}`,
+    )
+    .digest("hex")}`;
+}
+
+function quote(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+function sameTenant(left: TenantIdentity, right: TenantIdentity): boolean {
+  return (
+    left.organizationId === right.organizationId &&
+    left.projectId === right.projectId &&
+    left.environmentId === right.environmentId &&
+    left.branchId === right.branchId &&
+    left.generation === right.generation
+  );
+}
+
+class MetaError extends Error {
+  constructor(
+    readonly code: ErrorCode,
+    override readonly message: string,
+  ) {
+    super(message);
+    this.name = "MetaError";
+  }
+
+  get status(): number {
+    switch (this.code) {
+      case "auth":
+        return 401;
+      case "forbidden":
+        return 403;
+      case "conflict":
+        return 409;
+      case "quota":
+        return 429;
+      case "unsupported":
+        return 501;
+      case "infrastructure":
+        return 503;
+      case "validation":
+        return 400;
+    }
+    return 503;
+  }
+}
+
+function toMetaError(error: unknown): MetaError {
+  if (error instanceof MetaError) {
+    return error;
+  }
+  if (error instanceof MigrationError) {
+    switch (error.code) {
+      case "MIGRATION_CONFLICT":
+        return new MetaError("conflict", error.message);
+      case "MIGRATION_FORBIDDEN":
+        return new MetaError("forbidden", error.message);
+      case "MIGRATION_VALIDATION":
+        return new MetaError("validation", error.message);
+      case "MIGRATION_INFRASTRUCTURE":
+        return new MetaError("infrastructure", error.message);
+    }
+  }
+  if (error instanceof ProtocolError) {
+    return new MetaError(error.code, error.message);
+  }
+  return new MetaError("infrastructure", "SQLite meta operation failed.");
+}

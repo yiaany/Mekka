@@ -1,0 +1,19 @@
+{
+  "name": "shared-data",
+  "version": "0.0.0",
+  "description": "Data shared between Supabase apps",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "scripts": {
+    "clean": "rimraf .turbo tsconfig.tsbuildinfo",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsconfig": "workspace:"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "zod": "catalog:"
+  }
+}

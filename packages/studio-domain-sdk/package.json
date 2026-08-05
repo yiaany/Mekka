@@ -1,0 +1,15 @@
+{
+  "name": "@mekka/studio-domain-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@mekka/protocol": "workspace:*"
+  }
+}

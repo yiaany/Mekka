@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/policy-engine" },
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/query-ast" },
+    { "path": "../../packages/realtime-core" },
+    { "path": "../../packages/schema-manifest" },
+    { "path": "../../packages/sqlite-compiler" },
+    { "path": "../../packages/storage-core" }
+  ]
+}

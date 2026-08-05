@@ -1,0 +1,16 @@
+{
+  "name": "@mekka/storage-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "3.1023.0",
+    "@mekka/protocol": "workspace:*"
+  }
+}

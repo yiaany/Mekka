@@ -1,0 +1,23 @@
+{
+  "name": "icons",
+  "main": "./src/icons/index.ts",
+  "scripts": {
+    "build:icons": "node ./scripts/validateIcons.mjs && build-icons --templateSrc=./scripts/exportTemplate.mjs --renderUniqueKey --iconFileExtension=.ts --exportFileName=index.ts",
+    "test": "node --test ./scripts/validateIcons.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "validate:icons": "node ./scripts/validateIcons.mjs",
+    "clean": "rimraf .turbo tsconfig.tsbuildinfo"
+  },
+  "dependencies": {
+    "@typescript/native": "catalog:",
+    "typescript": "catalog:",
+    "@supabase/build-icons": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "tsconfig": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "catalog:"
+  }
+}

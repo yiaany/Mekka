@@ -1,0 +1,16 @@
+{
+  "name": "@mekka/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mekka/policy-engine": "workspace:*",
+    "@mekka/protocol": "workspace:*",
+    "@mekka/query-ast": "workspace:*",
+    "@mekka/realtime-core": "workspace:*",
+    "@mekka/schema-manifest": "workspace:*",
+    "@mekka/sqlite-compiler": "workspace:*",
+    "@mekka/storage-core": "workspace:*",
+    "elysia": "1.4.29"
+  }
+}

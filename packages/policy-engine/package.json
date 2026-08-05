@@ -1,0 +1,19 @@
+{
+  "name": "@mekka/policy-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@mekka/protocol": "workspace:*",
+    "@mekka/query-ast": "workspace:*",
+    "@mekka/schema-manifest": "workspace:*",
+    "@mekka/sqlite-compiler": "workspace:*",
+    "@mekka/storage-core": "workspace:*"
+  }
+}

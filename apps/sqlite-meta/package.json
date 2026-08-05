@@ -1,0 +1,16 @@
+{
+  "name": "@mekka/sqlite-meta",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mekka/migration-engine": "workspace:*",
+    "@mekka/protocol": "workspace:*",
+    "@mekka/schema-manifest": "workspace:*",
+    "@mekka/storage-core": "workspace:*",
+    "elysia": "1.4.29"
+  },
+  "devDependencies": {
+    "@mekka/studio-domain-sdk": "workspace:*"
+  }
+}

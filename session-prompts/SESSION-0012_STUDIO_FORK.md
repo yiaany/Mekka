@@ -1,7 +1,7 @@
 # SESSION-0012: Private fork Supabase Studio
 
 ## Цель
-Импортировать рабочий Supabase Studio как лицензированный private fork без Supabase branding и cloud coupling.
+Импортировать рабочий Supabase Studio как лицензированный private fork без Supabase branding и cloud coupling. НО НЕ МЕНЯТЬ UI
 
 ## Зависимости
 - SESSION-0001, SESSION-0011.

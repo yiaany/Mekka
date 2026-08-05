@@ -1,7 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { parseTenantIdentity } from "@mekka/protocol";
 import { openStorageAdapter, type StorageAdapter, type StorageExecutor } from "@mekka/storage-core";
-import { appendChangeEvents, ChangefeedError, pruneChangefeed, readChangefeed } from "../src/index";
+import {
+  appendChangeEvents,
+  ChangefeedError,
+  pruneChangefeed,
+  readChangefeed,
+  readChangefeedForDelivery,
+} from "../src/index";
 
 const tenant = parseTenantIdentity({
   organizationId: "org-main",
@@ -156,6 +162,53 @@ describe("SQLite realtime changefeed", () => {
       storage.close();
     }
   });
+
+  test("requires resync for legacy events without a policy snapshot", () => {
+    const storage = openStorageAdapter({ databasePath: ":memory:" });
+
+    try {
+      readChangefeed(storage, { tenant, afterCursor: 0, limit: 1 });
+      storage.execute({
+        sql: "INSERT INTO _mekka_realtime_events (event_id, organization_id, project_id, environment_id, branch_id, generation, transaction_id, transaction_sequence, occurred_at, operation, table_name, old_record, record) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        parameters: [
+          "event_legacy_01",
+          tenant.organizationId,
+          tenant.projectId,
+          tenant.environmentId,
+          tenant.branchId,
+          tenant.generation,
+          "transaction_legacy_01",
+          1,
+          50,
+          "INSERT",
+          "notes",
+          null,
+          JSON.stringify({ id: 1 }),
+        ],
+      });
+      storage.execute({
+        sql: "INSERT INTO _mekka_realtime_state (organization_id, project_id, environment_id, branch_id, generation, retained_after_cursor, last_cursor) VALUES (?, ?, ?, ?, ?, 0, 1)",
+        parameters: [
+          tenant.organizationId,
+          tenant.projectId,
+          tenant.environmentId,
+          tenant.branchId,
+          tenant.generation,
+        ],
+      });
+
+      expect(() =>
+        readChangefeedForDelivery(storage, { tenant, afterCursor: 0, limit: 1 }),
+      ).toThrow(
+        new ChangefeedError(
+          "CHANGEFEED_RESYNC_REQUIRED",
+          "The requested cursor contains events from before policy snapshots were available; a full resync is required.",
+        ),
+      );
+    } finally {
+      storage.close();
+    }
+  });
 });
 
 function append(
@@ -174,5 +227,13 @@ function change(
   oldRecord: Readonly<Record<string, string | number | null>> | null,
   record: Readonly<Record<string, string | number | null>> | null,
 ) {
-  return Object.freeze({ eventId, operation, table: "notes", oldRecord, record });
+  return Object.freeze({
+    eventId,
+    operation,
+    table: "notes",
+    oldRecord,
+    record,
+    policyOldRecord: oldRecord,
+    policyRecord: record,
+  });
 }

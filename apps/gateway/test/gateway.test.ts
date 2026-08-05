@@ -513,6 +513,7 @@ async function createGatewayFixture(
     objectStorage,
     executor,
     policies,
+    realtimeChannels: [],
   };
   const app = createGatewayApp({
     authenticate: (request) => {
@@ -523,6 +524,13 @@ async function createGatewayFixture(
     },
     resolveProject: () => project,
     resolveProjectByTenant: () => project,
+    authenticateRealtimeToken: (token) => {
+      if (token !== "gateway-realtime-token") {
+        throw new ProtocolError("auth");
+      }
+      return { context: tenantContext, expiresAt: 4_000_000_000 };
+    },
+    resolveRealtimeProject: () => project,
     consumeRateLimit: () => fixture.rateLimitAllowed,
     consumeSignedRateLimit: () => fixture.rateLimitAllowed,
     storagePublicOrigin: "https://storage.example.test",

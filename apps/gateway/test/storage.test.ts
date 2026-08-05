@@ -694,6 +694,14 @@ async function createFixture(
       fixture.signedProjectResolutions += 1;
       return requireProject(projects, tenant);
     },
+    authenticateRealtimeToken: (token) => {
+      const realtimeContext = contexts.get(token);
+      if (realtimeContext === undefined) {
+        throw new ProtocolError("auth");
+      }
+      return { context: realtimeContext, expiresAt: 4_000_000_000 };
+    },
+    resolveRealtimeProject: (tenantContext) => requireProject(projects, tenantContext.tenant),
     consumeRateLimit: () => true,
     consumeSignedRateLimit: (request) => {
       fixture.signedRateRequests.push(request);
@@ -767,6 +775,7 @@ async function createProjectResources(
     objectStorage,
     executor: { execute: (statement) => adapter.execute(statement) },
     policies: { formatVersion: policyFormatVersion, tables: [] },
+    realtimeChannels: [],
   });
   return Object.freeze({ adapter, provider, delayedProvider, objectStorage, project });
 }

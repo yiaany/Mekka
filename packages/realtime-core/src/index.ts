@@ -23,12 +23,20 @@ export type ChangefeedEvent = Readonly<{
   record: ChangeRecord | null;
 }>;
 
+export type DeliveryChangefeedEvent = Readonly<{
+  event: ChangefeedEvent;
+  policyOldRecord: ChangeRecord | null;
+  policyRecord: ChangeRecord | null;
+}>;
+
 export type PendingChange = Readonly<{
   eventId: string;
   operation: ChangeOperation;
   table: string;
   oldRecord: ChangeRecord | null;
   record: ChangeRecord | null;
+  policyOldRecord: ChangeRecord | null;
+  policyRecord: ChangeRecord | null;
 }>;
 
 export type AppendChangefeedInput = Readonly<{
@@ -46,6 +54,11 @@ export type ReadChangefeedInput = Readonly<{
 
 export type ChangefeedBatch = Readonly<{
   events: readonly ChangefeedEvent[];
+  nextCursor: number;
+}>;
+
+export type DeliveryChangefeedBatch = Readonly<{
+  events: readonly DeliveryChangefeedEvent[];
   nextCursor: number;
 }>;
 
@@ -70,6 +83,9 @@ const safeTablePattern = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 export function initializeChangefeed(storage: StorageExecutor): void {
   storage.execute({
     sql: "CREATE TABLE IF NOT EXISTS _mekka_realtime_events (cursor INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE, organization_id TEXT NOT NULL, project_id TEXT NOT NULL, environment_id TEXT NOT NULL, branch_id TEXT NOT NULL, generation INTEGER NOT NULL, transaction_id TEXT NOT NULL, transaction_sequence INTEGER NOT NULL, occurred_at INTEGER NOT NULL, operation TEXT NOT NULL CHECK (operation IN ('INSERT', 'UPDATE', 'DELETE')), table_name TEXT NOT NULL, old_record TEXT, record TEXT, UNIQUE (organization_id, project_id, environment_id, branch_id, generation, transaction_id, transaction_sequence))",
+  });
+  storage.execute({
+    sql: "CREATE TABLE IF NOT EXISTS _mekka_realtime_policy_events (cursor INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, project_id TEXT NOT NULL, environment_id TEXT NOT NULL, branch_id TEXT NOT NULL, generation INTEGER NOT NULL, policy_old_record TEXT, policy_record TEXT, FOREIGN KEY (cursor) REFERENCES _mekka_realtime_events (cursor) ON DELETE CASCADE)",
   });
   storage.execute({
     sql: "CREATE INDEX IF NOT EXISTS _mekka_realtime_events_tenant_cursor ON _mekka_realtime_events (organization_id, project_id, environment_id, branch_id, generation, cursor)",
@@ -113,6 +129,19 @@ export function appendChangeEvents(
       ],
     });
     const cursor = readCursor(result.lastInsertRowid, "Inserted change cursor");
+    transaction.execute({
+      sql: "INSERT INTO _mekka_realtime_policy_events (cursor, organization_id, project_id, environment_id, branch_id, generation, policy_old_record, policy_record) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      parameters: [
+        cursor,
+        tenant.organizationId,
+        tenant.projectId,
+        tenant.environmentId,
+        tenant.branchId,
+        tenant.generation,
+        serializeRecord(change.policyOldRecord),
+        serializeRecord(change.policyRecord),
+      ],
+    });
     events.push(freezeEvent(cursor, tenant, input, sequence, change));
   }
 
@@ -160,6 +189,36 @@ export function readChangefeed(
   });
 }
 
+export function readChangefeedForDelivery(
+  storage: StorageExecutor,
+  input: ReadChangefeedInput,
+): DeliveryChangefeedBatch {
+  const tenant = parseTenantIdentity(input.tenant);
+  validateCursor(input.afterCursor, "Changefeed cursor");
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 1_000) {
+    throw validation("Changefeed limit must be between 1 and 1000.");
+  }
+
+  initializeChangefeed(storage);
+  const state = readState(storage, tenant);
+  if (input.afterCursor < state.retainedAfterCursor) {
+    throw resyncRequired();
+  }
+  if (input.afterCursor > state.lastCursor) {
+    throw validation("Changefeed cursor is ahead of the tenant journal.");
+  }
+
+  const rows = storage.execute<DeliveryChangefeedRow>({
+    sql: "SELECT events.cursor, events.event_id AS eventId, events.transaction_id AS transactionId, events.transaction_sequence AS transactionSequence, events.occurred_at AS occurredAt, events.operation, events.table_name AS tableName, events.old_record AS oldRecord, events.record, policy.policy_old_record AS policyOldRecord, policy.policy_record AS policyRecord FROM _mekka_realtime_events AS events LEFT JOIN _mekka_realtime_policy_events AS policy ON policy.cursor = events.cursor AND policy.organization_id = events.organization_id AND policy.project_id = events.project_id AND policy.environment_id = events.environment_id AND policy.branch_id = events.branch_id AND policy.generation = events.generation WHERE events.organization_id = ? AND events.project_id = ? AND events.environment_id = ? AND events.branch_id = ? AND events.generation = ? AND events.cursor > ? ORDER BY events.cursor ASC LIMIT ?",
+    parameters: tenantParameters(tenant, [input.afterCursor, input.limit]),
+  }).rows;
+  const events = rows.map((row) => parseDeliveryEventRow(row, tenant));
+  return Object.freeze({
+    events: Object.freeze(events),
+    nextCursor: events.at(-1)?.event.cursor ?? input.afterCursor,
+  });
+}
+
 export function pruneChangefeed(
   storage: StorageAdapter,
   tenantInput: TenantIdentity,
@@ -196,6 +255,12 @@ type ChangefeedRow = Readonly<{
   oldRecord: StorageValue;
   record: StorageValue;
 }>;
+
+type DeliveryChangefeedRow = ChangefeedRow &
+  Readonly<{
+    policyOldRecord: StorageValue;
+    policyRecord: StorageValue;
+  }>;
 
 function readState(
   storage: StorageExecutor,
@@ -241,6 +306,25 @@ function parseEventRow(row: ChangefeedRow, tenant: TenantIdentity): ChangefeedEv
   });
 }
 
+function parseDeliveryEventRow(
+  row: DeliveryChangefeedRow,
+  tenant: TenantIdentity,
+): DeliveryChangefeedEvent {
+  const event = parseEventRow(row, tenant);
+  const policyOldRecord = parseRecord(row.policyOldRecord);
+  const policyRecord = parseRecord(row.policyRecord);
+  if (
+    (event.operation === "INSERT" && policyRecord === null) ||
+    (event.operation === "UPDATE" && (policyOldRecord === null || policyRecord === null)) ||
+    (event.operation === "DELETE" && policyOldRecord === null)
+  ) {
+    throw resyncRequired(
+      "The requested cursor contains events from before policy snapshots were available; a full resync is required.",
+    );
+  }
+  return Object.freeze({ event, policyOldRecord, policyRecord });
+}
+
 function validatePendingChange(change: PendingChange): void {
   if (!safeEventIdPattern.test(change.eventId) || !safeTablePattern.test(change.table)) {
     throw validation("Changefeed event identifier or table is invalid.");
@@ -254,6 +338,18 @@ function validatePendingChange(change: PendingChange): void {
   }
   validateRecord(change.oldRecord);
   validateRecord(change.record);
+  validateRecord(change.policyOldRecord);
+  validateRecord(change.policyRecord);
+  if (
+    (change.operation === "INSERT" &&
+      (change.policyOldRecord !== null || change.policyRecord === null)) ||
+    (change.operation === "UPDATE" &&
+      (change.policyOldRecord === null || change.policyRecord === null)) ||
+    (change.operation === "DELETE" &&
+      (change.policyOldRecord === null || change.policyRecord !== null))
+  ) {
+    throw validation("Changefeed policy record shape does not match its operation.");
+  }
 }
 
 function validateRecord(record: ChangeRecord | null): void {
@@ -368,6 +464,12 @@ function validateCursor(value: number, field: string): void {
 
 function validation(message: string): ChangefeedError {
   return new ChangefeedError("CHANGEFEED_VALIDATION", message);
+}
+
+function resyncRequired(
+  message = "The requested cursor is older than retained changefeed history; a full resync is required.",
+): ChangefeedError {
+  return new ChangefeedError("CHANGEFEED_RESYNC_REQUIRED", message);
 }
 
 function infrastructure(message: string): ChangefeedError {

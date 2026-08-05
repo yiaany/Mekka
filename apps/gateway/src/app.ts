@@ -28,6 +28,11 @@ import type {
 } from "@mekka/storage-core";
 import { Elysia } from "elysia";
 import { openApiDocument } from "./openapi";
+import {
+  createRealtimeRoutes,
+  type RealtimeChannelRule,
+  type RealtimeGatewayDependencies,
+} from "./realtime";
 import { createStorageRoutes } from "./storage";
 
 export type RestQueryExecutor = Readonly<{
@@ -43,6 +48,7 @@ export type RestProject = Readonly<{
   objectStorage: ObjectStorageCore;
   executor: RestQueryExecutor;
   policies: PolicyDocument;
+  realtimeChannels: readonly RealtimeChannelRule[];
 }>;
 
 export type GatewayMetric = Readonly<{
@@ -79,7 +85,8 @@ export type GatewayDependencies = Readonly<{
   recordStorageAudit(event: StorageAuditEvent): Promise<void> | void;
   now?: () => number;
   limits?: Partial<GatewayLimits>;
-}>;
+}> &
+  RealtimeGatewayDependencies;
 
 export type GatewayLimits = Readonly<{
   maxRows: number;
@@ -124,6 +131,7 @@ export function createGatewayApp(dependencies: GatewayDependencies) {
 
   return new Elysia({ name: "gateway" })
     .get("/openapi.json", () => openApiDocument)
+    .use(createRealtimeRoutes(dependencies))
     .use(createStorageRoutes(dependencies, limits, now))
     .get("/rest/v1/:table", async ({ request, params }) => {
       const startedAt = now();
@@ -511,6 +519,9 @@ function executeMutation(
               ? null
               : redactChangeRecord(manifest, project.policies, context, tableName, oldRow),
           record: redactChangeRecord(manifest, project.policies, context, tableName, record),
+          policyOldRecord:
+            oldRow === null ? null : snapshotChangeRecord(manifest, tableName, oldRow),
+          policyRecord: snapshotChangeRecord(manifest, tableName, record),
         }),
       );
     }
@@ -537,6 +548,8 @@ function executeMutation(
             table: tableName,
             oldRecord: redactChangeRecord(manifest, project.policies, context, tableName, oldRow),
             record: redactChangeRecord(manifest, project.policies, context, tableName, changed),
+            policyOldRecord: snapshotChangeRecord(manifest, tableName, oldRow),
+            policyRecord: snapshotChangeRecord(manifest, tableName, changed),
           }),
         );
       } else {
@@ -555,6 +568,8 @@ function executeMutation(
             table: tableName,
             oldRecord: redactChangeRecord(manifest, project.policies, context, tableName, oldRow),
             record: null,
+            policyOldRecord: snapshotChangeRecord(manifest, tableName, oldRow),
+            policyRecord: null,
           }),
         );
       }
@@ -602,6 +617,21 @@ function redactChangeRecord(
   return Object.freeze(
     Object.fromEntries(
       decision.allowedFields.map((field) => [field, serializeChangeValue(row[field] ?? null)]),
+    ),
+  );
+}
+
+function snapshotChangeRecord(
+  manifest: SchemaManifest,
+  tableName: string,
+  row: Readonly<Record<string, StorageValue>>,
+): ChangeRecord {
+  const table = requireTable(manifest, tableName);
+  return Object.freeze(
+    Object.fromEntries(
+      table.columns
+        .filter((column) => column.hidden === "none")
+        .map((column) => [column.name, serializeChangeValue(row[column.name] ?? null)]),
     ),
   );
 }

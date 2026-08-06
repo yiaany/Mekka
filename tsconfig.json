@@ -9,11 +9,13 @@
     { "path": "./packages/policy-engine" },
     { "path": "./packages/realtime-core" },
     { "path": "./packages/migration-engine" },
+    { "path": "./packages/branch-core" },
     { "path": "./packages/auth-core" },
     { "path": "./packages/onboarding-core" },
     { "path": "./packages/studio-domain-sdk" },
     { "path": "./packages/testkit" },
     { "path": "./apps/gateway" },
+    { "path": "./apps/mcp" },
     { "path": "./apps/sqlite-meta" },
     { "path": "./apps/health-service" }
   ]

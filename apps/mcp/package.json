@@ -1,0 +1,19 @@
+{
+  "name": "@mekka/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@mekka/auth-core": "workspace:*",
+    "@mekka/branch-core": "workspace:*",
+    "@mekka/migration-engine": "workspace:*",
+    "@mekka/policy-engine": "workspace:*",
+    "@mekka/protocol": "workspace:*",
+    "@mekka/query-ast": "workspace:*",
+    "@mekka/schema-manifest": "workspace:*",
+    "@mekka/sqlite-compiler": "workspace:*",
+    "@mekka/storage-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "catalog:"
+  }
+}

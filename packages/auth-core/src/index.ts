@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { parseTenantIdentity, type TenantIdentity } from "@mekka/protocol";
 import { betterAuth } from "better-auth";
@@ -108,6 +108,11 @@ export type ProjectAuthServiceOptions = Readonly<{
   oauth?: AuthOAuthConfiguration;
   admin?: AuthAdminOptions;
   now?: () => number;
+}>;
+
+export type ProjectAuthPreviewStoreLifecycle = Readonly<{
+  create(tenant: TenantIdentity, syntheticUsers: readonly SyntheticAuthUser[]): Promise<void>;
+  delete(tenant: TenantIdentity): Promise<void>;
 }>;
 
 export type AuthBinding = Readonly<{
@@ -375,6 +380,45 @@ export async function openProjectAuthService(
     database.close(false);
     throw error;
   }
+}
+
+export async function deleteProjectAuthPreviewStore(
+  authStorageDirectory: string,
+  tenantInput: TenantIdentity,
+): Promise<void> {
+  const tenant = parseTenantIdentity(tenantInput);
+  const databasePath = createStorePath(authStorageDirectory, tenant, "preview");
+  const directory = resolve(databasePath, "..");
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await rm(directory, { force: true, recursive: true, maxRetries: 1, retryDelay: 25 });
+      return;
+    } catch (error) {
+      if (attempt === 19) throw error;
+      await new Promise<void>((resolveRetry) => setTimeout(resolveRetry, 50));
+    }
+  }
+}
+
+export function createProjectAuthPreviewStoreLifecycle(
+  options: Omit<ProjectAuthServiceOptions, "tenant" | "mode">,
+): ProjectAuthPreviewStoreLifecycle {
+  return Object.freeze({
+    async create(tenant, syntheticUsers): Promise<void> {
+      const service = await openProjectAuthService({
+        ...options,
+        tenant,
+        mode: {
+          kind: "preview",
+          ...(syntheticUsers.length > 0 ? { syntheticUsers } : {}),
+        },
+      });
+      service.close();
+    },
+    async delete(tenant): Promise<void> {
+      await deleteProjectAuthPreviewStore(options.authStorageDirectory, tenant);
+    },
+  });
 }
 
 function createVerificationEmail(database: Database, email: string, otp: string): AuthEmailMessage {

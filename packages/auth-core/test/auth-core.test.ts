@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import {
   type AuthSigningKeySet,
   type AuthSigningKeyStore,
   LocalAuthEmailSink,
+  createProjectAuthPreviewStoreLifecycle,
   openProjectAuthService,
 } from "../src/index";
 
@@ -696,47 +698,43 @@ describe("project auth service", () => {
         productionDatabase.close(false);
       }
 
-      const preview = await openProjectAuthService({
-        tenant: previewTenant,
-        mode: {
-          kind: "preview",
-          syntheticUsers: [{ id: "demo-user", name: "Demo user", email: "demo@example.test" }],
-        },
+      const previewStores = createProjectAuthPreviewStoreLifecycle({
         authStorageDirectory: directory,
         publicOrigin: "https://auth.example.test",
         secretStore,
         emailProvider: new LocalAuthEmailSink(),
         ...securityOptions(),
       });
+      await previewStores.create(previewTenant, [
+        { id: "demo-user", name: "Demo user", email: "demo@example.test" },
+      ]);
 
+      const previewDatabase = new Database(databasePath(directory, previewTenant, "preview"));
       try {
-        const previewDatabase = new Database(databasePath(directory, previewTenant, "preview"));
-        try {
-          expect(
-            previewDatabase
-              .query<{ email: string }, []>("SELECT email FROM user ORDER BY email")
-              .all(),
-          ).toEqual([{ email: "demo@example.test" }]);
-          expect(
-            previewDatabase
-              .query<{ count: number }, []>("SELECT count(*) AS count FROM account")
-              .get(),
-          ).toEqual({
-            count: 0,
-          });
-          expect(
-            previewDatabase
-              .query<{ count: number }, []>("SELECT count(*) AS count FROM session")
-              .get(),
-          ).toEqual({
-            count: 0,
-          });
-        } finally {
-          previewDatabase.close(false);
-        }
+        expect(
+          previewDatabase
+            .query<{ email: string }, []>("SELECT email FROM user ORDER BY email")
+            .all(),
+        ).toEqual([{ email: "demo@example.test" }]);
+        expect(
+          previewDatabase
+            .query<{ count: number }, []>("SELECT count(*) AS count FROM account")
+            .get(),
+        ).toEqual({
+          count: 0,
+        });
+        expect(
+          previewDatabase
+            .query<{ count: number }, []>("SELECT count(*) AS count FROM session")
+            .get(),
+        ).toEqual({
+          count: 0,
+        });
       } finally {
-        preview.close();
+        previewDatabase.close(false);
       }
+      await previewStores.delete(previewTenant);
+      expect(existsSync(databasePath(directory, previewTenant, "preview"))).toBe(false);
     } finally {
       production.close();
     }

@@ -50,6 +50,7 @@ export type CheckpointOptions = Readonly<{
 export type RestoreOptions = Readonly<{
   destinationPath: string;
   destinationDirectory: string;
+  sourceDirectory?: string;
 }>;
 
 export type MigrationErrorCode =
@@ -83,9 +84,9 @@ export function applyMigration(
   options: ApplyMigrationOptions = {},
 ): MigrationApplyResult {
   validateArtifact(artifact);
-  const currentSchemaHash = buildSchemaManifest(storage).hash;
 
   return storage.transaction((transaction) => {
+    const currentSchemaHash = buildSchemaManifest(transaction).hash;
     initializeLedger(transaction);
     const existing = readLedger(transaction, artifact.id);
     if (existing !== null) {
@@ -171,7 +172,7 @@ export function restoreCheckpoint(backup: BackupArtifact, options: RestoreOption
   validateBackup(backup);
   const source = openStorageAdapter({
     databasePath: backup.checkpointPath,
-    databaseDirectory: options.destinationDirectory,
+    databaseDirectory: options.sourceDirectory ?? options.destinationDirectory,
   });
   try {
     verifyIntegrity(source);

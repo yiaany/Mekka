@@ -339,7 +339,7 @@ export function createStudioDomainClient(
     },
     async renameTable(payload, idempotencyKey) {
       assertIdentifier(payload.table);
-      assertIdentifier(payload.name);
+      assertCreatableIdentifier(payload.name);
       assertSchemaHash(payload.expectedSchemaHash);
       return parseMutation(
         await mutationRequest(
@@ -394,7 +394,7 @@ export function createStudioDomainClient(
     async renameColumn(payload, idempotencyKey) {
       assertIdentifier(payload.table);
       assertIdentifier(payload.column);
-      assertIdentifier(payload.name);
+      assertCreatableIdentifier(payload.name);
       assertSchemaHash(payload.expectedSchemaHash);
       return parseMutation(
         await mutationRequest(
@@ -1071,7 +1071,7 @@ async function readJson(response: Response, correlationId: CorrelationId): Promi
     if (Number.isFinite(contentLength) && contentLength > maxResponseBytes)
       throw malformedResponse();
     const body = await response.text();
-    if (body.length > maxResponseBytes) throw malformedResponse();
+    if (new TextEncoder().encode(body).byteLength > maxResponseBytes) throw malformedResponse();
     return JSON.parse(body) as unknown;
   } catch {
     throw new StudioDomainError("infrastructure", response.status || 503, correlationId);
@@ -1170,6 +1170,14 @@ function assertIdentifier(value: string): void {
   }
 }
 
+function assertCreatableIdentifier(value: string): void {
+  assertIdentifier(value);
+  const normalized = value.toLowerCase();
+  if (normalized.startsWith("sqlite_") || normalized.startsWith("_mekka_")) {
+    throw new StudioDomainError("validation", 400, createCorrelationId());
+  }
+}
+
 function assertSchemaHash(value: string): void {
   if (!/^[a-f0-9]{64}$/.test(value)) {
     throw new StudioDomainError("validation", 400, createCorrelationId());
@@ -1181,12 +1189,12 @@ function validateCreateTable(value: {
   columns: readonly StudioTableColumn[];
   expectedSchemaHash: string;
 }): void {
-  assertIdentifier(value.name);
+  assertCreatableIdentifier(value.name);
   assertSchemaHash(value.expectedSchemaHash);
   if (!Array.isArray(value.columns) || value.columns.length === 0 || value.columns.length > 64) {
     throw new StudioDomainError("validation", 400, createCorrelationId());
   }
-  for (const column of value.columns) validateColumn(column, true);
+  for (const column of value.columns) validateColumn(column, true, true);
   if (new Set(value.columns.map((column) => column.name)).size !== value.columns.length) {
     throw new StudioDomainError("validation", 400, createCorrelationId());
   }
@@ -1195,8 +1203,10 @@ function validateCreateTable(value: {
 function validateColumn(
   value: Omit<StudioTableColumn, "primaryKey"> | StudioTableColumn,
   allowPrimaryKey: boolean,
+  creatable = true,
 ): void {
-  assertIdentifier(value.name);
+  if (creatable) assertCreatableIdentifier(value.name);
+  else assertIdentifier(value.name);
   readColumnType(value.type);
   if (typeof value.nullable !== "boolean") {
     throw new StudioDomainError("validation", 400, createCorrelationId());

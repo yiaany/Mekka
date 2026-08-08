@@ -1,4 +1,5 @@
 import { AuthClient, navigatorLock, User } from '@supabase/auth-js'
+import { redactAuthDebugValue } from './gotrue-redaction'
 import { isBrowser } from './helpers'
 
 export const STORAGE_KEY = process.env.NEXT_PUBLIC_STORAGE_KEY || 'supabase.dashboard.auth.token'
@@ -74,19 +75,11 @@ let dbHandle = new Promise<IDBDatabase | null>((accept, _) => {
   }
 })
 
-const logIndexedDB = (message: string, ...args: any[]) => {
-  console.log(message, ...args)
+const logAuthDebug = (message: string, ...args: any[]) => {
+  const redactedMessage = redactAuthDebugValue(message) as string
+  const redactedArgs = args.map((value) => redactAuthDebugValue(value))
+  console.log(redactedMessage, ...redactedArgs)
 
-  const copyArgs = structuredClone(args)
-
-  copyArgs.forEach((value) => {
-    if (typeof value === 'object' && value !== null) {
-      delete value.user
-      delete value.access_token
-      delete value.token_type
-      delete value.provider_token
-    }
-  })
   ;(async () => {
     try {
       const db = await dbHandle
@@ -104,9 +97,9 @@ const logIndexedDB = (message: string, ...args: any[]) => {
       const events = tx.objectStore('events')
 
       events.add({
-        m: message.replace(/^GoTrueClient@/i, ''),
-        a: copyArgs,
-        l: window.location.pathname,
+        m: redactedMessage.replace(/^GoTrueClient@/i, ''),
+        a: redactedArgs,
+        l: redactAuthDebugValue(window.location.pathname),
         t: tabId,
       })
     } catch (e: any) {
@@ -183,7 +176,7 @@ export const gotrueClient = new AuthClient({
   url: process.env.NEXT_PUBLIC_GOTRUE_URL,
   storageKey: STORAGE_KEY,
   detectSessionInUrl: shouldDetectSessionInUrl,
-  debug: debug ? (persistedDebug ? logIndexedDB : true) : false,
+  debug: debug ? logAuthDebug : false,
   lock: navigatorLockEnabled ? debuggableNavigatorLock : undefined,
   ...('localStorage' in globalThis
     ? { storage: globalThis.localStorage, userStorage: globalThis.localStorage }

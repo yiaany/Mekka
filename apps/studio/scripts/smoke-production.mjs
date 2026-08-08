@@ -156,6 +156,75 @@ try {
   if (initializedMcp?.result?.protocolVersion !== "2025-11-25") {
     throw new Error("Production MCP endpoint did not initialize.");
   }
+  const readMutation = await callMcpTool(agentGrant.token, "propose_migration", {
+    migrationId: "read-token-must-not-write",
+    idempotencyKey: `read-token-denied-${Date.now()}`,
+    sql: "CREATE TABLE read_token_must_not_write (id INTEGER)",
+  });
+  if (readMutation.isError !== true) {
+    throw new Error("Read-only Agent Access unexpectedly received mutation scope.");
+  }
+
+  const writeGrant = await requestJson("/api/platform/project-auth/local/agent-token", {
+    authorization,
+    method: "POST",
+    body: JSON.stringify({ accessToken: login.accessToken, mode: "write" }),
+  });
+  if (
+    typeof writeGrant.token !== "string" ||
+    writeGrant.mode !== "write" ||
+    writeGrant.tenant?.branchId === "branch-main"
+  ) {
+    throw new Error("Read-write Agent Access was not isolated to a preview branch.");
+  }
+  const mcpTable = `mcp_smoke_${Date.now()}`;
+  const proposed = await callMcpTool(writeGrant.token, "propose_migration", {
+    migrationId: `create-${mcpTable}`,
+    idempotencyKey: `proposal-${mcpTable}`,
+    sql: `CREATE TABLE ${mcpTable} (id INTEGER NOT NULL PRIMARY KEY)`,
+  });
+  const proposalId = readMcpToolJson(proposed)?.proposalId;
+  if (typeof proposalId !== "string") throw new Error("MCP did not return a proposal ID.");
+  await expectMcpToolSuccess(writeGrant.token, "apply_to_preview", { proposalId });
+  await expectMcpToolSuccess(writeGrant.token, "validate_changes", { proposalId });
+  const pendingPromotion = readMcpToolJson(
+    await expectMcpToolSuccess(writeGrant.token, "request_promotion", { proposalId }),
+  );
+  if (pendingPromotion?.promotion !== "pending") {
+    throw new Error("MCP production promotion did not stop for Studio approval.");
+  }
+  const approvalList = await requestJson("/api/platform/mcp/approvals", { authorization });
+  const approval = approvalList.approvals?.find((candidate) => candidate.proposalId === proposalId);
+  if (!approval || approval.sql !== `CREATE TABLE ${mcpTable} (id INTEGER NOT NULL PRIMARY KEY)`) {
+    throw new Error("Studio approval did not expose the exact proposed SQL.");
+  }
+  const approvalDecision = await requestJson(
+    `/api/platform/mcp/approvals/${encodeURIComponent(approval.approvalId)}`,
+    {
+    authorization,
+    method: "PATCH",
+    body: JSON.stringify({ state: "approved" }),
+    },
+  );
+  if (typeof approvalDecision.executionToken !== "string") {
+    throw new Error("Studio approval did not issue an execution step-up token.");
+  }
+  const withoutStepUp = readMcpToolJson(
+    await expectMcpToolSuccess(writeGrant.token, "request_promotion", { proposalId }),
+  );
+  if (withoutStepUp?.promotion !== "pending") {
+    throw new Error("Pre-approval write grant unexpectedly authorized production execution.");
+  }
+  const appliedPromotion = readMcpToolJson(
+    await expectMcpToolSuccess(writeGrant.token, "request_promotion", {
+      proposalId,
+      executionToken: approvalDecision.executionToken,
+    }),
+  );
+  if (appliedPromotion?.promotion !== "applied") {
+    throw new Error("Approved MCP migration was not promoted to production.");
+  }
+  await expectStatus(`/api/platform/sqlite-meta/local/tables/${mcpTable}`, 200, { authorization });
   const authUsers = await requestJson("/api/platform/auth-admin/local/users", {
     authorization,
     headers: {
@@ -196,6 +265,17 @@ try {
       authorization,
       method: "DELETE",
       headers: { "idempotency-key": `production-smoke-delete-${Date.now()}` },
+    },
+  );
+  const mcpHealth = await requestJson("/api/platform/sqlite-meta/local/schema/health", {
+    authorization,
+  });
+  await requestJson(
+    `/api/platform/sqlite-meta/local/tables/${mcpTable}?expected_schema_hash=${mcpHealth.schemaHash}`,
+    {
+      authorization,
+      method: "DELETE",
+      headers: { "idempotency-key": `production-smoke-mcp-delete-${Date.now()}` },
     },
   );
   const tables = await requestJson("/api/platform/sqlite-meta/local/tables", {
@@ -262,6 +342,40 @@ async function requestJson(pathname, options = {}) {
     },
   });
   return response.json();
+}
+
+async function callMcpTool(token, name, args) {
+  return requestJson("/mcp", {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "tools/call",
+      params: { name, arguments: args },
+    }),
+  }).then((response) => response.result);
+}
+
+async function expectMcpToolSuccess(token, name, args) {
+  const result = await callMcpTool(token, name, args);
+  if (result?.isError === true) {
+    throw new Error(`MCP tool ${name} failed: ${JSON.stringify(result.content)}`);
+  }
+  return result;
+}
+
+function readMcpToolJson(result) {
+  const text = result?.content?.find((item) => item.type === "text")?.text;
+  if (typeof text !== "string") return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function freePort() {

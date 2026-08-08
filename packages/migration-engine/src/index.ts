@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { buildSchemaManifest } from "@mekka/schema-manifest";
+import { existsSync, statSync, unlinkSync } from "node:fs";
+import { dirname } from "node:path";
+import { buildSchemaManifest, isReservedSchemaIdentifier } from "@mekka/schema-manifest";
 import { openStorageAdapter, type StorageAdapter, type StorageExecutor } from "@mekka/storage-core";
 
 export const migrationArtifactFormatVersion = 1;
@@ -28,6 +30,8 @@ export type MigrationApplyResult = Readonly<{
   migrationHash: string;
   schemaHash: string;
 }>;
+
+export type MigrationPreflightResult = MigrationApplyResult | null;
 
 export type ApplyMigrationOptions = Readonly<{
   checkpoint?: BackupArtifact;
@@ -78,12 +82,27 @@ export function createMigrationArtifact(input: CreateMigrationArtifactInput): Mi
   return Object.freeze({ ...input, formatVersion: migrationArtifactFormatVersion, hash });
 }
 
+export function isDestructiveMigrationSql(sql: string): boolean {
+  return isDestructiveDdl(sql);
+}
+
 export function applyMigration(
   storage: StorageAdapter,
   artifact: MigrationArtifact,
   options: ApplyMigrationOptions = {},
 ): MigrationApplyResult {
-  validateArtifact(artifact);
+  const preflight = preflightMigration(storage, artifact);
+  if (preflight !== null) return preflight;
+  const destructive = isDestructiveDdl(artifact.sql);
+  if (destructive) {
+    if (options.checkpoint === undefined) {
+      throw new MigrationError(
+        "MIGRATION_FORBIDDEN",
+        "Destructive migration requires a checkpoint for the current schema.",
+      );
+    }
+    verifyBackupArtifact(options.checkpoint);
+  }
 
   return storage.transaction((transaction) => {
     const currentSchemaHash = buildSchemaManifest(transaction).hash;
@@ -114,10 +133,7 @@ export function applyMigration(
         "Migration expected schema does not match target.",
       );
     }
-    if (
-      isDestructiveDdl(artifact.sql) &&
-      options.checkpoint?.sourceSchemaHash !== currentSchemaHash
-    ) {
+    if (destructive && options.checkpoint?.sourceSchemaHash !== currentSchemaHash) {
       throw new MigrationError(
         "MIGRATION_FORBIDDEN",
         "Destructive migration requires a checkpoint for the current schema.",
@@ -146,6 +162,46 @@ export function applyMigration(
   });
 }
 
+export function discardCheckpoint(backup: BackupArtifact): void {
+  validateBackup(backup);
+  removeCheckpointFile(backup.checkpointPath);
+}
+
+export function preflightMigration(
+  storage: StorageAdapter,
+  artifact: MigrationArtifact,
+): MigrationPreflightResult {
+  validateArtifact(artifact);
+  const currentSchemaHash = buildSchemaManifest(storage).hash;
+  const existing = migrationLedgerExists(storage) ? readLedger(storage, artifact.id) : null;
+  if (existing !== null) {
+    if (existing.hash !== artifact.hash) {
+      throw new MigrationError(
+        "MIGRATION_CONFLICT",
+        "Migration identifier was reused with a different artifact.",
+      );
+    }
+    if (existing.state !== "applied") {
+      throw new MigrationError(
+        "MIGRATION_INFRASTRUCTURE",
+        "Migration ledger is in an unexpected state.",
+      );
+    }
+    return Object.freeze({
+      status: "replayed" as const,
+      migrationHash: artifact.hash,
+      schemaHash: existing.schemaHash,
+    });
+  }
+  if (currentSchemaHash !== artifact.expectedSchemaHash) {
+    throw new MigrationError(
+      "MIGRATION_CONFLICT",
+      "Migration expected schema does not match target.",
+    );
+  }
+  return null;
+}
+
 export function createCheckpoint(
   storage: StorageAdapter,
   options: CheckpointOptions,
@@ -155,17 +211,26 @@ export function createCheckpoint(
   }
   const sourceSchemaHash = buildSchemaManifest(storage).hash;
   const schemaFingerprint = fingerprintSchema(storage);
-  storage.createCheckpoint({
-    destinationPath: options.checkpointPath,
-    destinationDirectory: options.checkpointDirectory,
-  });
-  return Object.freeze({
+  const backup = Object.freeze({
     formatVersion: backupFormatVersion,
     id: options.id,
     sourceSchemaHash,
     schemaFingerprint,
     checkpointPath: options.checkpointPath,
   });
+  let checkpointCreated = false;
+  try {
+    storage.createCheckpoint({
+      destinationPath: options.checkpointPath,
+      destinationDirectory: options.checkpointDirectory,
+    });
+    checkpointCreated = true;
+    verifyBackupArtifact(backup);
+    return backup;
+  } catch (error) {
+    if (checkpointCreated) removeCheckpointFile(options.checkpointPath);
+    throw error;
+  }
 }
 
 export function restoreCheckpoint(backup: BackupArtifact, options: RestoreOptions): StorageAdapter {
@@ -213,6 +278,14 @@ function initializeLedger(storage: StorageExecutor): void {
   storage.execute({
     sql: "CREATE TABLE IF NOT EXISTS _mekka_migrations (id TEXT PRIMARY KEY, hash TEXT NOT NULL, actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, expected_schema_hash TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('applying', 'applied')), applied_schema_hash TEXT)",
   });
+}
+
+function migrationLedgerExists(storage: StorageExecutor): boolean {
+  return (
+    storage.execute({
+      sql: "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = '_mekka_migrations'",
+    }).rows[0] !== undefined
+  );
 }
 
 function readLedger(
@@ -305,10 +378,18 @@ function validateDdl(sql: string): void {
   if (/\b(?:attach|detach|pragma|trigger|view|virtual|load_extension|vacuum)\b/i.test(normalized)) {
     throw new MigrationError("MIGRATION_FORBIDDEN", "Migration uses a dangerous schema construct.");
   }
+  for (const identifier of createdOrRenamedIdentifiers(normalized)) {
+    if (isReservedSchemaIdentifier(identifier)) {
+      throw new MigrationError(
+        "MIGRATION_FORBIDDEN",
+        "Migration cannot create or rename a reserved schema identifier.",
+      );
+    }
+  }
 }
 
 function isDestructiveDdl(sql: string): boolean {
-  return /^DROP (?:TABLE|INDEX)\b/i.test(sql.trim());
+  return /^DROP (?:TABLE|INDEX)\b/i.test(sql.trim().replaceAll(/\s+/g, " "));
 }
 
 function verifyIntegrity(storage: StorageExecutor): void {
@@ -320,6 +401,86 @@ function verifyIntegrity(storage: StorageExecutor): void {
       "MIGRATION_INFRASTRUCTURE",
       "SQLite integrity check failed for checkpoint.",
     );
+  }
+}
+
+function verifyBackupArtifact(backup: BackupArtifact): void {
+  validateBackup(backup);
+  if (!existsSync(backup.checkpointPath) || !statSync(backup.checkpointPath).isFile()) {
+    throw new MigrationError("MIGRATION_INFRASTRUCTURE", "Checkpoint file is unavailable.");
+  }
+  let checkpoint: StorageAdapter;
+  try {
+    checkpoint = openStorageAdapter({
+      databasePath: backup.checkpointPath,
+      databaseDirectory: dirname(backup.checkpointPath),
+    });
+  } catch {
+    throw new MigrationError("MIGRATION_INFRASTRUCTURE", "Checkpoint file could not be opened.");
+  }
+  try {
+    verifyIntegrity(checkpoint);
+    if (fingerprintSchema(checkpoint) !== backup.schemaFingerprint) {
+      throw new MigrationError("MIGRATION_CONFLICT", "Checkpoint does not match backup metadata.");
+    }
+  } finally {
+    checkpoint.close();
+  }
+}
+
+function createdOrRenamedIdentifiers(sql: string): readonly string[] {
+  const patterns = [
+    /^CREATE TABLE (?:IF NOT EXISTS )?"?([A-Za-z_][A-Za-z0-9_]*)"? /i,
+    /^ALTER TABLE "?[A-Za-z_][A-Za-z0-9_]*"? ADD COLUMN "?([A-Za-z_][A-Za-z0-9_]*)"? /i,
+    /^ALTER TABLE "?[A-Za-z_][A-Za-z0-9_]*"? RENAME TO "?([A-Za-z_][A-Za-z0-9_]*)"?$/i,
+    /^ALTER TABLE "?[A-Za-z_][A-Za-z0-9_]*"? RENAME COLUMN "?[A-Za-z_][A-Za-z0-9_]*"? TO "?([A-Za-z_][A-Za-z0-9_]*)"?$/i,
+    /^CREATE (?:UNIQUE )?INDEX "?([A-Za-z_][A-Za-z0-9_]*)"? ON /i,
+  ];
+  const identifiers = patterns.flatMap((pattern) => pattern.exec(sql)?.[1] ?? []);
+  const createTable = /^CREATE TABLE (?:IF NOT EXISTS )?"?[A-Za-z_][A-Za-z0-9_]*"? \((.*)\)$/i.exec(
+    sql,
+  );
+  const tableDefinitions = createTable?.[1];
+  if (tableDefinitions) {
+    for (const definition of splitTopLevelDefinitions(tableDefinitions)) {
+      const column = /^"?([A-Za-z_][A-Za-z0-9_]*)"?\s+/i.exec(definition.trim())?.[1];
+      if (column && !/^(?:primary|unique|foreign|check|constraint)$/i.test(column)) {
+        identifiers.push(column);
+      }
+    }
+  }
+  return identifiers;
+}
+
+function splitTopLevelDefinitions(value: string): string[] {
+  const definitions: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (character === quote && value[index + 1] === quote) index += 1;
+      else if (character === quote) quote = null;
+      continue;
+    }
+    if (character === "'" || character === '"') quote = character;
+    else if (character === "(") depth += 1;
+    else if (character === ")") depth -= 1;
+    else if (character === "," && depth === 0) {
+      definitions.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  definitions.push(value.slice(start));
+  return definitions;
+}
+
+function removeCheckpointFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 

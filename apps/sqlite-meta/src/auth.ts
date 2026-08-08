@@ -1,13 +1,13 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  LocalAuthEmailSink,
-  openProjectAuthService,
   type AuthAdminAuditEvent,
   type AuthAdminSecretName,
   type AuthEmailProvider,
   type AuthSigningKeySet,
+  LocalAuthEmailSink,
+  openProjectAuthService,
 } from "@mekka/auth-core";
 import { parseTenantIdentity } from "@mekka/protocol";
 import { exportJWK, exportPKCS8, generateKeyPair } from "jose";
@@ -21,14 +21,19 @@ const tenant = parseTenantIdentity({
 });
 
 export async function openLocalAuthRuntime(dataDirectory: string) {
+  const isLocalDevelopment = process.env.MEKKA_LOCAL_DEV === "1";
+  const configuredSessionSecret = process.env.MEKKA_AUTH_SESSION_SECRET?.trim() ?? "";
+  if (!isLocalDevelopment && configuredSessionSecret.length === 0) {
+    throw new Error("MEKKA_AUTH_SESSION_SECRET is required outside local development.");
+  }
   const authDirectory = join(dataDirectory, "auth");
   await mkdir(authDirectory, { recursive: true });
   const publicOrigin = process.env.AUTH_PUBLIC_ORIGIN ?? "http://127.0.0.1:8082";
   const sessionSecret =
-    process.env.MEKKA_AUTH_SESSION_SECRET ?? "local-only-auth-session-secret-that-is-long-enough";
+    configuredSessionSecret || "local-only-auth-session-secret-that-is-long-enough";
   const oauthFile = join(authDirectory, "oauth-secrets.json");
   const oauthSecrets = await readJson<Record<string, string>>(oauthFile, {});
-  const localEmailSink = process.env.MEKKA_LOCAL_DEV === "1" ? new LocalAuthEmailSink() : null;
+  const localEmailSink = isLocalDevelopment ? new LocalAuthEmailSink() : null;
   const emailProvider = localEmailSink ?? createResendEmailProvider();
   const signingKeySet = await loadSigningKeySet(join(authDirectory, "signing-key.json"));
   const secretStore = {
@@ -79,6 +84,12 @@ export async function openLocalAuthRuntime(dataDirectory: string) {
     binding: service.binding,
     verifyAccessToken(token: string) {
       return service.verifyAccessToken(token);
+    },
+    isSessionActive(sessionId: string, userId: string): boolean {
+      return service.isSessionActive(sessionId, userId);
+    },
+    hashAgentAccessToken(token: string): string {
+      return createHmac("sha256", sessionSecret).update(token).digest("hex");
     },
     async handlePublicRequest(request: Request): Promise<Response> {
       const incoming = new URL(request.url);

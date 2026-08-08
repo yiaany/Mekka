@@ -1,11 +1,11 @@
 import {
-  queryAstFormatVersion,
   type BooleanGroup,
   type Filter,
   type FilterExpression,
   type MutationAst,
   type MutationInput,
   type QueryAst,
+  queryAstFormatVersion,
 } from "@mekka/query-ast";
 import type { SchemaManifest, SchemaTable } from "@mekka/schema-manifest";
 import type { StorageValue } from "@mekka/storage-core";
@@ -96,6 +96,11 @@ export function compileMutation(manifest: SchemaManifest, ast: MutationAst): Com
     ast.primaryKey === null
       ? null
       : compileMutationInput(ast.primaryKey, columns, "Mutation primary key");
+  if (ast.action === "delete") {
+    if (values.columns.length !== 0) throw malformed("Delete mutations must not include values.");
+  } else if (values.columns.length === 0) {
+    throw malformed("Mutation values must not be empty.");
+  }
 
   switch (ast.action) {
     case "insert":

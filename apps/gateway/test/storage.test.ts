@@ -133,6 +133,23 @@ describe("storage gateway", () => {
     expect(JSON.stringify(fixture.auditEvents)).not.toContain("report.txt");
   });
 
+  test("does not change a successful response when the external audit callback fails", async () => {
+    const fixture = await createFixture({ rejectAudit: true });
+    const response = await fixture.app.handle(
+      storageRequest("/storage/v1/buckets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": "audit-failure-001" },
+        body: JSON.stringify({ name: "audit-failure", isPublic: false }),
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.text()).not.toContain("external audit secret");
+    expect(
+      await fixture.app.handle(storageRequest("/storage/v1/buckets/audit-failure")),
+    ).toMatchObject({ status: 200 });
+  });
+
   test("denies Storage administration without a current tenant capability", async () => {
     const fixture = await createFixture();
     const denied = await fixture.app.handle(
@@ -639,10 +656,11 @@ async function createFixture(
       maxSignedUrlTtlSeconds: number;
       resumableUploadTtlMs: number;
       delayMainProviderPut: boolean;
+      rejectAudit: boolean;
     }>
   > = {},
 ): Promise<StorageFixture> {
-  const { delayMainProviderPut = false, ...limits } = options;
+  const { delayMainProviderPut = false, rejectAudit = false, ...limits } = options;
   const fixture = {
     clock: 1_000_000,
     policyAllowed: true,
@@ -710,7 +728,10 @@ async function createFixture(
     },
     storagePublicOrigin: "https://storage.example.test",
     recordMetric: (metric) => fixture.metrics.push(metric),
-    recordStorageAudit: (event) => fixture.auditEvents.push(event),
+    recordStorageAudit: async (event) => {
+      if (rejectAudit) throw new Error("external audit secret");
+      fixture.auditEvents.push(event);
+    },
     now: () => fixture.clock,
     limits,
   });

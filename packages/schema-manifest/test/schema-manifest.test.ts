@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
 import {
-  SchemaManifestError,
   buildSchemaManifest,
   createSchemaManifestCache,
+  isReservedSchemaIdentifier,
+  SchemaManifestError,
   schemaManifestFormatVersion,
 } from "../src/index";
 
@@ -31,6 +32,14 @@ async function createTemporaryAdapter(): Promise<StorageAdapter> {
 }
 
 describe("SQLite schema manifest", () => {
+  test("recognizes reserved schema identifiers case-insensitively", () => {
+    expect(isReservedSchemaIdentifier("sqlite_shadow")).toBe(true);
+    expect(isReservedSchemaIdentifier("SQLITE_shadow")).toBe(true);
+    expect(isReservedSchemaIdentifier("_mekka_ledger")).toBe(true);
+    expect(isReservedSchemaIdentifier("_MEKKA_ledger")).toBe(true);
+    expect(isReservedSchemaIdentifier("customer_notes")).toBe(false);
+  });
+
   test("builds a deterministic golden manifest without runtime tables or data", async () => {
     const adapter = await createTemporaryAdapter();
 

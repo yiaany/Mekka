@@ -713,16 +713,20 @@ async function recordAudit(
   bucketName: string,
   objectPath?: string,
 ): Promise<void> {
-  await dependencies.recordStorageAudit({
-    action,
-    tenant: context.tenant,
-    actor: context.actor,
-    correlationId: context.correlationId,
-    bucketName,
-    ...(objectPath === undefined
-      ? {}
-      : { objectPathHash: createHash("sha256").update(objectPath).digest("hex") }),
-  });
+  try {
+    await dependencies.recordStorageAudit({
+      action,
+      tenant: context.tenant,
+      actor: context.actor,
+      correlationId: context.correlationId,
+      bucketName,
+      ...(objectPath === undefined
+        ? {}
+        : { objectPathHash: createHash("sha256").update(objectPath).digest("hex") }),
+    });
+  } catch {
+    // Audit transport failures must not alter an already completed storage operation.
+  }
 }
 
 function parseSignInput(body: Uint8Array): Readonly<{ expiresIn: number }> {
@@ -915,7 +919,7 @@ function storageErrorResponse(error: unknown, headers: Headers): Response {
   const correlationId = resolveCorrelationId(headers);
   return Response.json(createErrorEnvelope(mapped.code, correlationId), {
     status: mapped.status,
-    headers: { "x-correlation-id": correlationId },
+    headers: { "cache-control": "no-store", "x-correlation-id": correlationId },
   });
 }
 
@@ -979,7 +983,13 @@ function recordStorageMetric(
   status: number,
   durationMs: number,
 ): void {
-  dependencies.recordMetric({ outcome, status, durationMs, rowCount: 0 });
+  try {
+    void Promise.resolve(
+      dependencies.recordMetric({ outcome, status, durationMs, rowCount: 0 }),
+    ).catch(() => undefined);
+  } catch {
+    // Telemetry failures must not alter the client response.
+  }
 }
 
 function sameTenant(left: TenantIdentity, right: TenantIdentity): boolean {

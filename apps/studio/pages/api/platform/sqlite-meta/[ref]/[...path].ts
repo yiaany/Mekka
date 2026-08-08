@@ -16,6 +16,7 @@ const mutationPaths = [
   /^rows\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
   /^sql$/,
 ];
+const maxUpstreamResponseBytes = 2 * 1024 * 1024;
 const forwardedHeaders = [
   tenantHeaders.correlationId,
 ] as const;
@@ -79,6 +80,7 @@ export default async function handler(
   }
 
   const headers = new Headers({ accept: "application/json" });
+  if (internalProxyToken) headers.set("x-mekka-internal-proxy", internalProxyToken);
   for (const name of forwardedHeaders) {
     const value = req.headers[name];
     if (typeof value === "string") headers.set(name, value);
@@ -106,7 +108,11 @@ export default async function handler(
   if (req.method !== "GET") headers.set("content-type", "application/json");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 10_000);
   req.once("aborted", () => controller.abort());
   try {
     const requestUrl = new URL(req.url ?? "/", "http://studio.local");
@@ -119,15 +125,21 @@ export default async function handler(
         signal: controller.signal,
       },
     );
-    const body = await response.arrayBuffer();
+    const body = await readBoundedBody(response);
     const contentType = response.headers.get("content-type");
     const correlationId = response.headers.get(tenantHeaders.correlationId);
     if (contentType) res.setHeader("content-type", contentType);
     if (correlationId)
       res.setHeader(tenantHeaders.correlationId, correlationId);
-    return res.status(response.status).send(Buffer.from(body));
+    return res.status(response.status).send(body);
   } catch (error) {
+    if (timedOut) {
+      return res.status(504).json({ error: { message: "Studio backend timed out" } });
+    }
     if (controller.signal.aborted) return;
+    if (error instanceof UpstreamResponseTooLargeError) {
+      return res.status(502).json({ error: { message: "Studio backend response is invalid" } });
+    }
     return res
       .status(503)
       .json({ error: { message: "Studio backend is unavailable" } });
@@ -135,6 +147,34 @@ export default async function handler(
     clearTimeout(timeout);
   }
 }
+
+async function readBoundedBody(response: Response): Promise<Buffer> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxUpstreamResponseBytes) {
+    await response.body?.cancel();
+    throw new UpstreamResponseTooLargeError();
+  }
+  if (response.body === null) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return Buffer.concat(chunks, total);
+      total += value.byteLength;
+      if (total > maxUpstreamResponseBytes) {
+        await reader.cancel();
+        throw new UpstreamResponseTooLargeError();
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+class UpstreamResponseTooLargeError extends Error {}
 
 function isLoopback(address: string | undefined): boolean {
   return (

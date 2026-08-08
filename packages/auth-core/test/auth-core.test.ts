@@ -13,8 +13,8 @@ import {
   AuthServiceError,
   type AuthSigningKeySet,
   type AuthSigningKeyStore,
-  LocalAuthEmailSink,
   createProjectAuthPreviewStoreLifecycle,
+  LocalAuthEmailSink,
   openProjectAuthService,
 } from "../src/index";
 
@@ -883,6 +883,66 @@ describe("project auth service", () => {
         authRequest(service, "/refresh", { refreshToken: refreshBody.refreshToken }),
       );
       expect(rotatedTokenAfterReuse.status).toBe(401);
+    } finally {
+      service.close();
+    }
+  });
+
+  test("revokes the login refresh token on sign-out", async () => {
+    const directory = await createFixture();
+    const emailProvider = new LocalAuthEmailSink();
+    const service = await openProjectAuthService({
+      tenant: tenant("project-sign-out"),
+      mode: { kind: "production" },
+      authStorageDirectory: directory,
+      publicOrigin: "https://auth.example.test",
+      secretStore,
+      emailProvider,
+      ...securityOptions(),
+    });
+
+    try {
+      const email = "sign-out@example.test";
+      const password = "correct-horse-battery-staple";
+      await service.handleRequest(
+        authRequest(service, "/sign-up/email", { email, name: "Member", password }),
+      );
+      await service.handleRequest(
+        authRequest(service, "/email-otp/verify-email", {
+          email,
+          otp: otpFromMessage(emailProvider.messages[0].text),
+        }),
+      );
+      const login = await service.handleRequest(
+        authRequest(service, "/sign-in/email", { email, password }),
+      );
+      expect(login.status).toBe(200);
+      const { accessToken, refreshToken } = (await login.json()) as {
+        accessToken: string;
+        refreshToken: string;
+      };
+      const verifiedAccessToken = await service.verifyAccessToken(accessToken);
+      expect(
+        service.isSessionActive(verifiedAccessToken.sessionId, verifiedAccessToken.userId),
+      ).toBe(true);
+      const sessionCookie = cookieFromSetCookie(login.headers.get("set-cookie"), "session_token");
+
+      const signOut = await service.handleRequest(
+        new Request(`${service.binding.issuer}/sign-out`, {
+          method: "POST",
+          headers: { cookie: sessionCookie, origin: "https://auth.example.test" },
+        }),
+      );
+      expect(signOut.status).toBe(200);
+      expect(
+        service.isSessionActive(verifiedAccessToken.sessionId, verifiedAccessToken.userId),
+      ).toBe(false);
+
+      const refresh = await service.handleRequest(
+        authRequest(service, "/refresh", { refreshToken }),
+      );
+      expect(refresh.status).toBe(401);
+      expect(await refresh.json()).toEqual({ code: "AUTH_REFRESH_TOKEN_INVALID" });
     } finally {
       service.close();
     }

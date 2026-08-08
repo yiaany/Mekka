@@ -79,6 +79,11 @@ export class SchemaManifestError extends Error {
 const defaultInternalTablePrefix = "_mekka_";
 const minimumSqliteVersion = [3, 37, 0] as const;
 
+export function isReservedSchemaIdentifier(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return normalized.startsWith("sqlite_") || normalized.startsWith(defaultInternalTablePrefix);
+}
+
 export function buildSchemaManifest(
   storage: StorageExecutor,
   options: SchemaManifestOptions = {},
@@ -91,7 +96,6 @@ export function buildSchemaManifest(
   const tables = readTables(storage, internalTablePrefix);
   const canonical = JSON.stringify({
     formatVersion: schemaManifestFormatVersion,
-    schemaVersion,
     tables,
   });
 
@@ -330,7 +334,10 @@ function readIndexColumns(
 }
 
 function isInternalTable(name: string, internalTablePrefix: string): boolean {
-  return name.startsWith("sqlite_") || name.startsWith(internalTablePrefix);
+  const normalized = name.toLowerCase();
+  return (
+    normalized.startsWith("sqlite_") || normalized.startsWith(internalTablePrefix.toLowerCase())
+  );
 }
 
 function validateInternalTablePrefix(value: string): void {

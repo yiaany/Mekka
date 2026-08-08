@@ -25,6 +25,8 @@ async function checkReadiness(): Promise<Response> {
     [tenantHeaders.generation]:
       process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? "1",
   });
+  const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN;
+  if (internalProxyToken) headers.set("x-mekka-internal-proxy", internalProxyToken);
 
   try {
     const response = await fetch(

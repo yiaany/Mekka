@@ -34,7 +34,12 @@ import {
   getFirstTouchData,
   type SharedTelemetryData,
 } from './telemetry-first-touch-store'
-import { getSharedTelemetryData, getTelemetryCookieOptions } from './telemetry-utils'
+import {
+  getSharedTelemetryData,
+  getTelemetryCookieOptions,
+  isSafeTelemetryAttributionKey,
+  sanitizeTelemetryUrl,
+} from './telemetry-utils'
 
 export {
   buildSessionRecordingConfig,
@@ -68,8 +73,7 @@ function getFirstTouchAttributionProps(telemetryData: SharedTelemetryData) {
   const urlString = telemetryData.page_url
 
   try {
-    const url = new URL(urlString)
-    url.hash = ''
+    const url = new URL(sanitizeTelemetryUrl(urlString))
     const params = url.searchParams
 
     const getParam = (key: string) => {
@@ -163,22 +167,24 @@ function handlePageTelemetry({
       !isOAuthRedirectReferrer(firstReferrerData.referrer) &&
       (!isExternalReferrer(pageData.ph.referrer) || isOAuthRedirectReferrer(pageData.ph.referrer))
     ) {
-      pageData.ph.referrer = firstReferrerData.referrer
+      pageData.ph.referrer = sanitizeTelemetryUrl(firstReferrerData.referrer)
       firstReferrerCookieConsumed = true
 
       const { utms, click_ids, landing_url } = firstReferrerData
 
       Object.entries(utms).forEach(([key, value]) => {
+        if (!isSafeTelemetryAttributionKey(key)) return
         const phKey = key.startsWith('utm_') ? `$${key}` : key
         firstTouchAttributionProps[phKey] = value
       })
 
       Object.entries(click_ids).forEach(([key, value]) => {
+        if (!isSafeTelemetryAttributionKey(key)) return
         firstTouchAttributionProps[key] = value
       })
 
       try {
-        const url = new URL(landing_url)
+        const url = new URL(sanitizeTelemetryUrl(landing_url))
         firstTouchAttributionProps.first_touch_url = url.href
         firstTouchAttributionProps.first_touch_pathname = url.pathname
 

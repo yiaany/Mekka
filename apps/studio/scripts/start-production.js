@@ -12,6 +12,7 @@ const accessToken = process.env.MEKKA_STUDIO_ACCESS_TOKEN ?? "";
 const port = process.env.PORT ?? "8082";
 const environment = {
   ...process.env,
+  NODE_ENV: "production",
   MEKKA_PUBLIC_URL:
     process.env.MEKKA_PUBLIC_URL ??
     process.env.NEXT_PUBLIC_SITE_URL ??

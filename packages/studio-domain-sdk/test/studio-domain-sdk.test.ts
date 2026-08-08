@@ -269,6 +269,22 @@ describe("Studio Domain SDK", () => {
     });
   });
 
+  test("enforces the response cap in UTF-8 bytes instead of UTF-16 code units", async () => {
+    const client = createClient(async () =>
+      Response.json([
+        {
+          name: "notes",
+          columns: [],
+          primaryKey: [],
+          indexes: [],
+          padding: "é".repeat(1024 * 1024 + 1),
+        },
+      ]),
+    );
+
+    await expect(client.listTables()).rejects.toMatchObject({ code: "infrastructure" });
+  });
+
   test.each([
     [401, "auth"],
     [403, "forbidden"],
@@ -355,6 +371,22 @@ describe("Studio Domain SDK", () => {
           expectedSchemaHash: "a".repeat(64),
         },
         "create-invalid-idempotency",
+      ),
+    ).rejects.toMatchObject({ code: "validation" });
+    await expect(
+      client.createTable(
+        {
+          name: "sqlite_shadow",
+          columns: [{ name: "id", type: "INTEGER", nullable: false, primaryKey: true }],
+          expectedSchemaHash: "a".repeat(64),
+        },
+        "create-reserved-idempotency",
+      ),
+    ).rejects.toMatchObject({ code: "validation" });
+    await expect(
+      client.renameTable(
+        { table: "notes", name: "_mekka_notes", expectedSchemaHash: "a".repeat(64) },
+        "rename-reserved-idempotency",
       ),
     ).rejects.toMatchObject({ code: "validation" });
   });

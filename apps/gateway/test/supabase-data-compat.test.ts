@@ -26,6 +26,26 @@ afterEach(async () => {
 }, 15_000);
 
 describe("supabase-js Data API compatibility", () => {
+  test("authenticates before validating Supabase request headers", async () => {
+    const fixture = await createFixture();
+    try {
+      const response = await fixture.app.handle(
+        new Request("http://gateway.local/rest/v1/notes?select=id", {
+          headers: {
+            apikey: "invalid-key",
+            authorization: "Bearer invalid-key",
+            accept: "text/plain",
+          },
+        }),
+      );
+
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ code: "MEKKA_AUTH" });
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
   test("executes policy-scoped select, filters, order, range and exact count by URL and key", async () => {
     const fixture = await createFixture();
     try {

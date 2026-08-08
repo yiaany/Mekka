@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildSchemaManifest } from "@mekka/schema-manifest";
 import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
 import {
-  MigrationError,
   applyMigration,
   createCheckpoint,
   createMigrationArtifact,
+  isDestructiveMigrationSql,
+  MigrationError,
   restoreCheckpoint,
 } from "../src/index";
 
@@ -62,6 +63,12 @@ function artifact(
 }
 
 describe("migration engine", () => {
+  test("classifies destructive DDL after normalizing whitespace", () => {
+    expect(isDestructiveMigrationSql("DROP\nTABLE accounts")).toBe(true);
+    expect(isDestructiveMigrationSql("DROP\tINDEX accounts_name_idx")).toBe(true);
+    expect(isDestructiveMigrationSql("ALTER TABLE accounts ADD COLUMN email TEXT")).toBe(false);
+  });
+
   test("applies a hash-addressed migration once and replays its committed result safely", async () => {
     const fixture = await createFixture();
     try {
@@ -122,6 +129,28 @@ describe("migration engine", () => {
           sql: "CREATE TRIGGER unsafe AFTER INSERT ON accounts BEGIN SELECT 1 END",
         }),
       ).toThrow(new MigrationError("MIGRATION_FORBIDDEN", "Migration DDL is not allowlisted."));
+      for (const sql of [
+        "CREATE TABLE sqlite_shadow (id INTEGER)",
+        "ALTER TABLE accounts ADD COLUMN _mekka_secret TEXT",
+        "ALTER TABLE accounts RENAME TO sqlite_accounts",
+        "ALTER TABLE accounts RENAME COLUMN name TO _mekka_name",
+        "CREATE INDEX sqlite_accounts_idx ON accounts (name)",
+      ]) {
+        expect(() =>
+          createMigrationArtifact({
+            id: `migration-reserved-${sql.length}`,
+            actorId: "actor-admin",
+            idempotencyKey: `reserved-key-${sql.length}`,
+            expectedSchemaHash: buildSchemaManifest(fixture.adapter).hash,
+            sql,
+          }),
+        ).toThrow(
+          new MigrationError(
+            "MIGRATION_FORBIDDEN",
+            "Migration cannot create or rename a reserved schema identifier.",
+          ),
+        );
+      }
     } finally {
       fixture.adapter.close();
     }
@@ -192,6 +221,93 @@ describe("migration engine", () => {
       ).toThrow();
     } finally {
       restored?.close();
+      fixture.adapter.close();
+    }
+  });
+
+  test("validates destructive checkpoint files, integrity and schema metadata before apply", async () => {
+    const fixture = await createFixture();
+    try {
+      const destructive = createMigrationArtifact({
+        id: "migration-drop-accounts",
+        actorId: "actor-admin",
+        idempotencyKey: "drop-accounts-key",
+        expectedSchemaHash: buildSchemaManifest(fixture.adapter).hash,
+        sql: "DROP TABLE accounts",
+      });
+
+      const missing = createCheckpoint(fixture.adapter, {
+        id: "checkpoint-missing",
+        checkpointPath: join(fixture.directory, "missing.sqlite"),
+        checkpointDirectory: fixture.directory,
+      });
+      await unlink(missing.checkpointPath);
+      expect(() => applyMigration(fixture.adapter, destructive, { checkpoint: missing })).toThrow(
+        new MigrationError("MIGRATION_INFRASTRUCTURE", "Checkpoint file is unavailable."),
+      );
+
+      const corrupted = createCheckpoint(fixture.adapter, {
+        id: "checkpoint-corrupted",
+        checkpointPath: join(fixture.directory, "corrupted.sqlite"),
+        checkpointDirectory: fixture.directory,
+      });
+      await writeFile(corrupted.checkpointPath, new Uint8Array(4096));
+      expect(() => applyMigration(fixture.adapter, destructive, { checkpoint: corrupted })).toThrow(
+        MigrationError,
+      );
+
+      const forged = createCheckpoint(fixture.adapter, {
+        id: "checkpoint-forged",
+        checkpointPath: join(fixture.directory, "forged.sqlite"),
+        checkpointDirectory: fixture.directory,
+      });
+      expect(() =>
+        applyMigration(fixture.adapter, destructive, {
+          checkpoint: { ...forged, schemaFingerprint: "a".repeat(64) },
+        }),
+      ).toThrow(
+        new MigrationError("MIGRATION_CONFLICT", "Checkpoint does not match backup metadata."),
+      );
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
+  test("does not delete an existing checkpoint when duplicate creation fails", async () => {
+    const fixture = await createFixture();
+    try {
+      const checkpointPath = join(fixture.directory, "existing.sqlite");
+      createCheckpoint(fixture.adapter, {
+        id: "checkpoint-existing",
+        checkpointPath,
+        checkpointDirectory: fixture.directory,
+      });
+      expect(() =>
+        createCheckpoint(fixture.adapter, {
+          id: "checkpoint-duplicate",
+          checkpointPath,
+          checkpointDirectory: fixture.directory,
+        }),
+      ).toThrow();
+      expect(await stat(checkpointPath)).toBeDefined();
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
+  test("rejects reserved column names declared inside CREATE TABLE", async () => {
+    const fixture = await createFixture();
+    try {
+      expect(() =>
+        createMigrationArtifact({
+          id: "migration-reserved-column",
+          actorId: "actor-admin",
+          idempotencyKey: "reserved-column-key",
+          expectedSchemaHash: buildSchemaManifest(fixture.adapter).hash,
+          sql: "CREATE TABLE safe_table (_mekka_secret TEXT)",
+        }),
+      ).toThrow(MigrationError);
+    } finally {
       fixture.adapter.close();
     }
   });

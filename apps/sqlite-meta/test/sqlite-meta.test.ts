@@ -1,17 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  ProtocolError,
   createTenantContext,
-  tenantHeaders,
+  ProtocolError,
   type TenantContext,
+  tenantHeaders,
 } from "@mekka/protocol";
 import { createSchemaManifestCache } from "@mekka/schema-manifest";
-import { createStudioDomainClient } from "@mekka/studio-domain-sdk";
 import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
+import { createStudioDomainClient } from "@mekka/studio-domain-sdk";
 import { createSqliteMetaApp, type SqliteMetaAuditEvent } from "../src/app";
+import { openLocalAuthRuntime } from "../src/auth";
 
 const temporaryDirectories: string[] = [];
 const correlationId = "018e6c28-0000-7000-8000-000000000001";
@@ -296,6 +297,100 @@ describe("sqlite-meta management API", () => {
     }
   });
 
+  test("rejects reserved identifiers in every schema create and rename path", async () => {
+    const fixture = await createFixture();
+    try {
+      const initialHash = schemaHash(fixture.adapter);
+      const reservedTable = await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "sqlite_shadow",
+            expectedSchemaHash: initialHash,
+            columns: [{ name: "id", type: "INTEGER" }],
+          },
+          "reserved-table-idem",
+        ),
+      );
+      const reservedColumn = await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "notes",
+            expectedSchemaHash: initialHash,
+            columns: [{ name: "_mekka_secret", type: "TEXT" }],
+          },
+          "reserved-column-idem",
+        ),
+      );
+      await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "notes",
+            expectedSchemaHash: initialHash,
+            columns: [{ name: "id", type: "INTEGER" }],
+          },
+          "reserved-base-table",
+        ),
+      );
+      const currentHash = schemaHash(fixture.adapter);
+      const responses = [
+        await fixture.app.handle(
+          request(
+            "/tables/notes",
+            "PATCH",
+            { name: "_mekka_notes", expectedSchemaHash: currentHash },
+            "reserved-rename-table",
+          ),
+        ),
+        await fixture.app.handle(
+          request(
+            "/columns",
+            "POST",
+            {
+              table: "notes",
+              name: "SQLITE_value",
+              type: "TEXT",
+              expectedSchemaHash: currentHash,
+            },
+            "reserved-add-column",
+          ),
+        ),
+        await fixture.app.handle(
+          request(
+            "/columns/notes/id",
+            "PATCH",
+            { name: "_MEKKA_id", expectedSchemaHash: currentHash },
+            "reserved-rename-column",
+          ),
+        ),
+        await fixture.app.handle(
+          request(
+            "/indexes",
+            "POST",
+            {
+              table: "notes",
+              name: "sqlite_notes_idx",
+              columns: ["id"],
+              expectedSchemaHash: currentHash,
+            },
+            "reserved-create-index",
+          ),
+        ),
+      ];
+
+      expect(
+        [reservedTable, reservedColumn, ...responses].map((response) => response.status),
+      ).toEqual([400, 400, 400, 400, 400, 400]);
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
   test("requires tenant capability and creates a checkpoint before destructive table deletion", async () => {
     const fixture = await createFixture();
     try {
@@ -355,6 +450,65 @@ describe("sqlite-meta management API", () => {
         action: "delete_table",
         checkpointId: expect.any(String),
       });
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
+  test("checks destructive stale schema and replay before creating another checkpoint", async () => {
+    const fixture = await createFixture();
+    try {
+      await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "temporary",
+            expectedSchemaHash: schemaHash(fixture.adapter),
+            columns: [{ name: "id", type: "INTEGER" }],
+          },
+          "checkpoint-base-table",
+        ),
+      );
+      const staleHash = schemaHash(fixture.adapter);
+      fixture.adapter.execute({ sql: "CREATE INDEX temporary_id_idx ON temporary (id)" });
+      const stale = await fixture.app.handle(
+        request(
+          `/tables/temporary?expected_schema_hash=${staleHash}`,
+          "DELETE",
+          undefined,
+          "checkpoint-stale-delete",
+        ),
+      );
+      expect(stale.status).toBe(409);
+      expect(
+        (await readdir(temporaryDirectories.at(-1) ?? tmpdir())).filter((name) =>
+          name.endsWith(".sqlite"),
+        ),
+      ).toEqual(["project.sqlite"]);
+
+      const expectedSchemaHash = schemaHash(fixture.adapter);
+      const first = await fixture.app.handle(
+        request(
+          `/tables/temporary?expected_schema_hash=${expectedSchemaHash}`,
+          "DELETE",
+          undefined,
+          "checkpoint-replay-delete",
+        ),
+      );
+      const filesAfterFirst = await readdir(temporaryDirectories.at(-1) ?? tmpdir());
+      const replay = await fixture.app.handle(
+        request(
+          `/tables/temporary?expected_schema_hash=${expectedSchemaHash}`,
+          "DELETE",
+          undefined,
+          "checkpoint-replay-delete",
+        ),
+      );
+      expect(first.status).toBe(200);
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual(await first.json());
+      expect(await readdir(temporaryDirectories.at(-1) ?? tmpdir())).toEqual(filesAfterFirst);
     } finally {
       fixture.adapter.close();
     }
@@ -528,6 +682,149 @@ describe("sqlite-meta management API", () => {
       fixture.adapter.close();
     }
   });
+
+  test("requires a real top-level WHERE for UPDATE and DELETE", async () => {
+    const fixture = await createFixture(["schema:manage", "sql:execute"]);
+    try {
+      await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "notes",
+            expectedSchemaHash: schemaHash(fixture.adapter),
+            columns: [{ name: "id", type: "INTEGER", primaryKey: true }],
+          },
+          "where-guard-table",
+        ),
+      );
+      fixture.adapter.execute({ sql: "INSERT INTO notes (id) VALUES (1)" });
+      for (const sql of [
+        "UPDATE notes SET id = 'WHERE'",
+        "DELETE FROM notes /* WHERE id = 1 */",
+        "DELETE FROM notes -- WHERE id = 1",
+        "UPDATE notes SET id = (SELECT id FROM notes WHERE id = 1)",
+      ]) {
+        const response = await fixture.app.handle(
+          request("/sql", "POST", { sql }, `where-guard-${sql.length}-id`),
+        );
+        expect(response.status).toBe(400);
+      }
+      const valid = await fixture.app.handle(
+        request(
+          "/sql",
+          "POST",
+          { sql: "UPDATE notes SET id = 2 /* WHERE decoy */ WHERE id = 1" },
+          "where-guard-valid-id",
+        ),
+      );
+      expect(valid.status).toBe(200);
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
+  test("commits SQL writes with a durable idempotency ledger and audit outbox", async () => {
+    let auditAvailable = false;
+    const fixture = await createFixture(["schema:manage", "sql:execute"], () => {
+      if (!auditAvailable) throw new Error("audit unavailable");
+    });
+    try {
+      await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "sql_notes",
+            expectedSchemaHash: schemaHash(fixture.adapter),
+            columns: [{ name: "id", type: "INTEGER", primaryKey: true }],
+          },
+          "sql-ledger-table-001",
+        ),
+      );
+      const first = await fixture.app.handle(
+        request(
+          "/sql",
+          "POST",
+          { sql: "INSERT INTO sql_notes (id) VALUES (1) RETURNING id" },
+          "sql-ledger-write-001",
+        ),
+      );
+      const replay = await fixture.app.handle(
+        request(
+          "/sql",
+          "POST",
+          { sql: "INSERT INTO sql_notes (id) VALUES (1) RETURNING id" },
+          "sql-ledger-write-001",
+        ),
+      );
+      const conflict = await fixture.app.handle(
+        request(
+          "/sql",
+          "POST",
+          { sql: "INSERT INTO sql_notes (id) VALUES (2) RETURNING id" },
+          "sql-ledger-write-001",
+        ),
+      );
+
+      expect(first.status).toBe(200);
+      expect(await first.clone().json()).toEqual({
+        rows: [{ id: 1 }],
+        changes: 1,
+        idempotencyKey: "sql-ledger-write-001",
+      });
+      expect(await replay.json()).toEqual(await first.json());
+      expect(conflict.status).toBe(409);
+      expect(
+        fixture.adapter.execute<{ count: number }>({
+          sql: "SELECT COUNT(*) AS count FROM sql_notes",
+        }).rows,
+      ).toEqual([{ count: 1 }]);
+      expect(
+        fixture.adapter.execute<{ count: number }>({
+          sql: "SELECT COUNT(*) AS count FROM _mekka_audit_outbox",
+        }).rows,
+      ).toEqual([{ count: 1 }]);
+
+      auditAvailable = true;
+      const delivered = await fixture.app.handle(
+        request(
+          "/sql",
+          "POST",
+          { sql: "INSERT INTO sql_notes (id) VALUES (1) RETURNING id" },
+          "sql-ledger-write-001",
+        ),
+      );
+      expect(delivered.status).toBe(200);
+      expect(fixture.audits).toContainEqual(expect.objectContaining({ action: "run_sql_write" }));
+      expect(
+        fixture.adapter.execute<{ count: number }>({
+          sql: "SELECT COUNT(*) AS count FROM _mekka_audit_outbox",
+        }).rows,
+      ).toEqual([{ count: 0 }]);
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+});
+
+test("auth session secret fallback is local-development only", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "mekka-sqlite-meta-auth-"));
+  temporaryDirectories.push(directory);
+  const localDev = process.env.MEKKA_LOCAL_DEV;
+  const secret = process.env.MEKKA_AUTH_SESSION_SECRET;
+  try {
+    delete process.env.MEKKA_LOCAL_DEV;
+    delete process.env.MEKKA_AUTH_SESSION_SECRET;
+    await expect(openLocalAuthRuntime(directory)).rejects.toThrow(
+      "MEKKA_AUTH_SESSION_SECRET is required outside local development.",
+    );
+  } finally {
+    if (localDev === undefined) delete process.env.MEKKA_LOCAL_DEV;
+    else process.env.MEKKA_LOCAL_DEV = localDev;
+    if (secret === undefined) delete process.env.MEKKA_AUTH_SESSION_SECRET;
+    else process.env.MEKKA_AUTH_SESSION_SECRET = secret;
+  }
 });
 
 function createContext(actions: readonly string[] = ["schema:manage"]): TenantContext {

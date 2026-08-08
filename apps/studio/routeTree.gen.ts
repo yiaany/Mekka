@@ -179,6 +179,7 @@ import { Route as ProjectRefAdvisorsSecurityRouteImport } from './routes/project
 import { Route as ProjectRefAdvisorsRulesRouteImport } from './routes/project/$ref/advisors/rules'
 import { Route as ProjectRefAdvisorsPerformanceRouteImport } from './routes/project/$ref/advisors/performance'
 import { Route as ApiPlatformTelemetryEventRouteImport } from './routes/api/platform/telemetry/event'
+import { Route as ApiPlatformMcpApprovalsRouteImport } from './routes/api/platform/mcp/approvals'
 import { Route as ApiPlatformIntegrationsSlugRouteImport } from './routes/api/platform/integrations/$slug'
 import { Route as ApiAiSqlTitleV2RouteImport } from './routes/api/ai/sql/title-v2'
 import { Route as ApiAiSqlPolicyRouteImport } from './routes/api/ai/sql/policy'
@@ -266,6 +267,7 @@ import { Route as ApiPlatformPgMetaRefMaterializedViewsRouteImport } from './rou
 import { Route as ApiPlatformPgMetaRefForeignTablesRouteImport } from './routes/api/platform/pg-meta/$ref/foreign-tables'
 import { Route as ApiPlatformPgMetaRefExtensionsRouteImport } from './routes/api/platform/pg-meta/$ref/extensions'
 import { Route as ApiPlatformPgMetaRefColumnPrivilegesRouteImport } from './routes/api/platform/pg-meta/$ref/column-privileges'
+import { Route as ApiPlatformMcpApprovalsApprovalIdRouteImport } from './routes/api/platform/mcp/approvals/$approvalId'
 import { Route as ApiPlatformIntegrationsGithubRepositoriesRouteImport } from './routes/api/platform/integrations/github/repositories'
 import { Route as ApiPlatformIntegrationsGithubConnectionsRouteImport } from './routes/api/platform/integrations/github/connections'
 import { Route as ApiPlatformIntegrationsGithubAuthorizationRouteImport } from './routes/api/platform/integrations/github/authorization'
@@ -1243,6 +1245,11 @@ const ApiPlatformTelemetryEventRoute =
     path: '/api/platform/telemetry/event',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPlatformMcpApprovalsRoute = ApiPlatformMcpApprovalsRouteImport.update({
+  id: '/api/platform/mcp/approvals',
+  path: '/api/platform/mcp/approvals',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPlatformIntegrationsSlugRoute =
   ApiPlatformIntegrationsSlugRouteImport.update({
     id: '/api/platform/integrations/$slug',
@@ -1740,6 +1747,12 @@ const ApiPlatformPgMetaRefColumnPrivilegesRoute =
     path: '/api/platform/pg-meta/$ref/column-privileges',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPlatformMcpApprovalsApprovalIdRoute =
+  ApiPlatformMcpApprovalsApprovalIdRouteImport.update({
+    id: '/$approvalId',
+    path: '/$approvalId',
+    getParentRoute: () => ApiPlatformMcpApprovalsRoute,
+  } as any)
 const ApiPlatformIntegrationsGithubRepositoriesRoute =
   ApiPlatformIntegrationsGithubRepositoriesRouteImport.update({
     id: '/api/platform/integrations/github/repositories',
@@ -2208,6 +2221,7 @@ export interface FileRoutesByFullPath {
   '/api/ai/sql/policy': typeof ApiAiSqlPolicyRoute
   '/api/ai/sql/title-v2': typeof ApiAiSqlTitleV2Route
   '/api/platform/integrations/$slug': typeof ApiPlatformIntegrationsSlugRoute
+  '/api/platform/mcp/approvals': typeof ApiPlatformMcpApprovalsRouteWithChildren
   '/api/platform/telemetry/event': typeof ApiPlatformTelemetryEventRoute
   '/project/$ref/advisors/performance': typeof ProjectRefAdvisorsPerformanceRoute
   '/project/$ref/advisors/rules': typeof ProjectRefAdvisorsRulesRouteWithChildren
@@ -2310,6 +2324,7 @@ export interface FileRoutesByFullPath {
   '/api/platform/integrations/github/authorization': typeof ApiPlatformIntegrationsGithubAuthorizationRoute
   '/api/platform/integrations/github/connections': typeof ApiPlatformIntegrationsGithubConnectionsRoute
   '/api/platform/integrations/github/repositories': typeof ApiPlatformIntegrationsGithubRepositoriesRoute
+  '/api/platform/mcp/approvals/$approvalId': typeof ApiPlatformMcpApprovalsApprovalIdRoute
   '/api/platform/pg-meta/$ref/column-privileges': typeof ApiPlatformPgMetaRefColumnPrivilegesRoute
   '/api/platform/pg-meta/$ref/extensions': typeof ApiPlatformPgMetaRefExtensionsRoute
   '/api/platform/pg-meta/$ref/foreign-tables': typeof ApiPlatformPgMetaRefForeignTablesRoute
@@ -2517,6 +2532,7 @@ export interface FileRoutesByTo {
   '/api/ai/sql/policy': typeof ApiAiSqlPolicyRoute
   '/api/ai/sql/title-v2': typeof ApiAiSqlTitleV2Route
   '/api/platform/integrations/$slug': typeof ApiPlatformIntegrationsSlugRoute
+  '/api/platform/mcp/approvals': typeof ApiPlatformMcpApprovalsRouteWithChildren
   '/api/platform/telemetry/event': typeof ApiPlatformTelemetryEventRoute
   '/project/$ref/advisors/performance': typeof ProjectRefAdvisorsPerformanceRoute
   '/project/$ref/advisors/rules': typeof ProjectRefAdvisorsRulesRouteWithChildren
@@ -2616,6 +2632,7 @@ export interface FileRoutesByTo {
   '/api/platform/integrations/github/authorization': typeof ApiPlatformIntegrationsGithubAuthorizationRoute
   '/api/platform/integrations/github/connections': typeof ApiPlatformIntegrationsGithubConnectionsRoute
   '/api/platform/integrations/github/repositories': typeof ApiPlatformIntegrationsGithubRepositoriesRoute
+  '/api/platform/mcp/approvals/$approvalId': typeof ApiPlatformMcpApprovalsApprovalIdRoute
   '/api/platform/pg-meta/$ref/column-privileges': typeof ApiPlatformPgMetaRefColumnPrivilegesRoute
   '/api/platform/pg-meta/$ref/extensions': typeof ApiPlatformPgMetaRefExtensionsRoute
   '/api/platform/pg-meta/$ref/foreign-tables': typeof ApiPlatformPgMetaRefForeignTablesRoute
@@ -2835,6 +2852,7 @@ export interface FileRoutesById {
   '/api/ai/sql/policy': typeof ApiAiSqlPolicyRoute
   '/api/ai/sql/title-v2': typeof ApiAiSqlTitleV2Route
   '/api/platform/integrations/$slug': typeof ApiPlatformIntegrationsSlugRoute
+  '/api/platform/mcp/approvals': typeof ApiPlatformMcpApprovalsRouteWithChildren
   '/api/platform/telemetry/event': typeof ApiPlatformTelemetryEventRoute
   '/project/$ref/advisors/performance': typeof ProjectRefAdvisorsPerformanceRoute
   '/project/$ref/advisors/rules': typeof ProjectRefAdvisorsRulesRouteWithChildren
@@ -2937,6 +2955,7 @@ export interface FileRoutesById {
   '/api/platform/integrations/github/authorization': typeof ApiPlatformIntegrationsGithubAuthorizationRoute
   '/api/platform/integrations/github/connections': typeof ApiPlatformIntegrationsGithubConnectionsRoute
   '/api/platform/integrations/github/repositories': typeof ApiPlatformIntegrationsGithubRepositoriesRoute
+  '/api/platform/mcp/approvals/$approvalId': typeof ApiPlatformMcpApprovalsApprovalIdRoute
   '/api/platform/pg-meta/$ref/column-privileges': typeof ApiPlatformPgMetaRefColumnPrivilegesRoute
   '/api/platform/pg-meta/$ref/extensions': typeof ApiPlatformPgMetaRefExtensionsRoute
   '/api/platform/pg-meta/$ref/foreign-tables': typeof ApiPlatformPgMetaRefForeignTablesRoute
@@ -3155,6 +3174,7 @@ export interface FileRouteTypes {
     | '/api/ai/sql/policy'
     | '/api/ai/sql/title-v2'
     | '/api/platform/integrations/$slug'
+    | '/api/platform/mcp/approvals'
     | '/api/platform/telemetry/event'
     | '/project/$ref/advisors/performance'
     | '/project/$ref/advisors/rules'
@@ -3257,6 +3277,7 @@ export interface FileRouteTypes {
     | '/api/platform/integrations/github/authorization'
     | '/api/platform/integrations/github/connections'
     | '/api/platform/integrations/github/repositories'
+    | '/api/platform/mcp/approvals/$approvalId'
     | '/api/platform/pg-meta/$ref/column-privileges'
     | '/api/platform/pg-meta/$ref/extensions'
     | '/api/platform/pg-meta/$ref/foreign-tables'
@@ -3464,6 +3485,7 @@ export interface FileRouteTypes {
     | '/api/ai/sql/policy'
     | '/api/ai/sql/title-v2'
     | '/api/platform/integrations/$slug'
+    | '/api/platform/mcp/approvals'
     | '/api/platform/telemetry/event'
     | '/project/$ref/advisors/performance'
     | '/project/$ref/advisors/rules'
@@ -3563,6 +3585,7 @@ export interface FileRouteTypes {
     | '/api/platform/integrations/github/authorization'
     | '/api/platform/integrations/github/connections'
     | '/api/platform/integrations/github/repositories'
+    | '/api/platform/mcp/approvals/$approvalId'
     | '/api/platform/pg-meta/$ref/column-privileges'
     | '/api/platform/pg-meta/$ref/extensions'
     | '/api/platform/pg-meta/$ref/foreign-tables'
@@ -3781,6 +3804,7 @@ export interface FileRouteTypes {
     | '/api/ai/sql/policy'
     | '/api/ai/sql/title-v2'
     | '/api/platform/integrations/$slug'
+    | '/api/platform/mcp/approvals'
     | '/api/platform/telemetry/event'
     | '/project/$ref/advisors/performance'
     | '/project/$ref/advisors/rules'
@@ -3883,6 +3907,7 @@ export interface FileRouteTypes {
     | '/api/platform/integrations/github/authorization'
     | '/api/platform/integrations/github/connections'
     | '/api/platform/integrations/github/repositories'
+    | '/api/platform/mcp/approvals/$approvalId'
     | '/api/platform/pg-meta/$ref/column-privileges'
     | '/api/platform/pg-meta/$ref/extensions'
     | '/api/platform/pg-meta/$ref/foreign-tables'
@@ -4053,6 +4078,7 @@ export interface RootRouteChildren {
   ApiAiSqlPolicyRoute: typeof ApiAiSqlPolicyRoute
   ApiAiSqlTitleV2Route: typeof ApiAiSqlTitleV2Route
   ApiPlatformIntegrationsSlugRoute: typeof ApiPlatformIntegrationsSlugRoute
+  ApiPlatformMcpApprovalsRoute: typeof ApiPlatformMcpApprovalsRouteWithChildren
   ApiPlatformTelemetryEventRoute: typeof ApiPlatformTelemetryEventRoute
   ApiPlatformOrganizationsIndexRoute: typeof ApiPlatformOrganizationsIndexRoute
   ApiPlatformProfileIndexRoute: typeof ApiPlatformProfileIndexRoute
@@ -5323,6 +5349,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPlatformTelemetryEventRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/platform/mcp/approvals': {
+      id: '/api/platform/mcp/approvals'
+      path: '/api/platform/mcp/approvals'
+      fullPath: '/api/platform/mcp/approvals'
+      preLoaderRoute: typeof ApiPlatformMcpApprovalsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/platform/integrations/$slug': {
       id: '/api/platform/integrations/$slug'
       path: '/api/platform/integrations/$slug'
@@ -5931,6 +5964,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/platform/pg-meta/$ref/column-privileges'
       preLoaderRoute: typeof ApiPlatformPgMetaRefColumnPrivilegesRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/api/platform/mcp/approvals/$approvalId': {
+      id: '/api/platform/mcp/approvals/$approvalId'
+      path: '/$approvalId'
+      fullPath: '/api/platform/mcp/approvals/$approvalId'
+      preLoaderRoute: typeof ApiPlatformMcpApprovalsApprovalIdRouteImport
+      parentRoute: typeof ApiPlatformMcpApprovalsRoute
     }
     '/api/platform/integrations/github/repositories': {
       id: '/api/platform/integrations/github/repositories'
@@ -7010,6 +7050,21 @@ const ProjectChar91_Char93RouteChildren: ProjectChar91_Char93RouteChildren = {
 const ProjectChar91_Char93RouteWithChildren =
   ProjectChar91_Char93Route._addFileChildren(ProjectChar91_Char93RouteChildren)
 
+interface ApiPlatformMcpApprovalsRouteChildren {
+  ApiPlatformMcpApprovalsApprovalIdRoute: typeof ApiPlatformMcpApprovalsApprovalIdRoute
+}
+
+const ApiPlatformMcpApprovalsRouteChildren: ApiPlatformMcpApprovalsRouteChildren =
+  {
+    ApiPlatformMcpApprovalsApprovalIdRoute:
+      ApiPlatformMcpApprovalsApprovalIdRoute,
+  }
+
+const ApiPlatformMcpApprovalsRouteWithChildren =
+  ApiPlatformMcpApprovalsRoute._addFileChildren(
+    ApiPlatformMcpApprovalsRouteChildren,
+  )
+
 interface ApiV1ProjectsRefApiKeysRouteChildren {
   ApiV1ProjectsRefApiKeysIdRoute: typeof ApiV1ProjectsRefApiKeysIdRoute
 }
@@ -7095,6 +7150,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAiSqlPolicyRoute: ApiAiSqlPolicyRoute,
   ApiAiSqlTitleV2Route: ApiAiSqlTitleV2Route,
   ApiPlatformIntegrationsSlugRoute: ApiPlatformIntegrationsSlugRoute,
+  ApiPlatformMcpApprovalsRoute: ApiPlatformMcpApprovalsRouteWithChildren,
   ApiPlatformTelemetryEventRoute: ApiPlatformTelemetryEventRoute,
   ApiPlatformOrganizationsIndexRoute: ApiPlatformOrganizationsIndexRoute,
   ApiPlatformProfileIndexRoute: ApiPlatformProfileIndexRoute,

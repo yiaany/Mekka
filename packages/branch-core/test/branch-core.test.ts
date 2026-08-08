@@ -355,6 +355,53 @@ describe("preview branch lifecycle", () => {
     }
   });
 
+  test("rejects authorization expiring at the production mutation boundary", async () => {
+    const fixture = await createFixture();
+    try {
+      const created = await createBranch(fixture, "preview-expiry-boundary");
+      const branchStorage = openStorageAdapter({
+        databasePath: created.branch.databasePath,
+        databaseDirectory: join(fixture.directory, "databases"),
+      });
+      const artifact = createMigrationArtifact({
+        id: "migration-expiry-boundary",
+        actorId: "actor-admin",
+        idempotencyKey: "migration-expiry-boundary-key",
+        expectedSchemaHash: buildSchemaManifest(branchStorage).hash,
+        sql: "ALTER TABLE accounts ADD COLUMN expiry_boundary TEXT",
+      });
+      branchStorage.close();
+      await fixture.service.applyToBranch(
+        created.branch.tenant,
+        artifact,
+        "actor-admin",
+        "correlation-expiry-boundary-apply",
+      );
+
+      await expect(
+        fixture.service.promote(
+          created.branch.tenant,
+          artifact.hash,
+          "promote-expiry-boundary",
+          "actor-admin",
+          "correlation-expiry-boundary-promote",
+          1_800_000_000_000,
+        ),
+      ).rejects.toEqual(
+        new BranchError("BRANCH_FORBIDDEN", "Promotion authorization has expired."),
+      );
+      expect(
+        fixture.parentStorage.execute({
+          sql: "SELECT name FROM pragma_table_xinfo('accounts') WHERE name = ?",
+          parameters: ["expiry_boundary"],
+        }).rows,
+      ).toEqual([]);
+    } finally {
+      fixture.service.close();
+      fixture.parentStorage.close();
+    }
+  });
+
   test("rejects stale promotion targets without mutating production", async () => {
     const fixture = await createFixture();
     try {

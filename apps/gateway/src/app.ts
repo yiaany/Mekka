@@ -1,9 +1,4 @@
-import {
-  type PolicyDocument,
-  PolicyError,
-  rewritePolicyQuery,
-  simulatePolicy,
-} from "@mekka/policy-engine";
+import { createHash } from "node:crypto";
 import {
   createMcpHttpResponse,
   type McpCapabilityStore,
@@ -13,15 +8,21 @@ import {
   type McpTokenVerifier,
 } from "@mekka/mcp";
 import {
+  type PolicyDocument,
+  PolicyError,
+  rewritePolicyQuery,
+  simulatePolicy,
+} from "@mekka/policy-engine";
+import {
   createErrorEnvelope,
   type ErrorCode,
   hasCapability,
   ProtocolError,
-  tenantHeaders,
   parseTenantIdentityFromHeaders,
   resolveCorrelationId,
   type TenantContext,
   type TenantIdentity,
+  tenantHeaders,
 } from "@mekka/protocol";
 import { createMutationAst, type MutationInput, parseQuery, QueryAstError } from "@mekka/query-ast";
 import { appendChangeEvents, type ChangeRecord, type PendingChange } from "@mekka/realtime-core";
@@ -105,7 +106,7 @@ export type GatewayDependencies = Readonly<{
   consumeRateLimit(context: TenantContext): Promise<boolean> | boolean;
   consumeSignedRateLimit(request: Request): Promise<boolean> | boolean;
   storagePublicOrigin: string;
-  recordMetric(metric: GatewayMetric): void;
+  recordMetric(metric: GatewayMetric): Promise<void> | void;
   recordStorageAudit(event: StorageAuditEvent): Promise<void> | void;
   mcp?: GatewayMcpDependencies;
   supabaseData?: SupabaseDataDependencies;
@@ -116,6 +117,7 @@ export type GatewayDependencies = Readonly<{
 
 export type GatewayLimits = Readonly<{
   maxRows: number;
+  maxRequestBytes: number;
   maxResponseBytes: number;
   queryTimeoutMs: number;
   maxObjectBytes: number;
@@ -149,6 +151,7 @@ export class RestQueryTimeoutError extends Error {
 
 const defaultLimits: GatewayLimits = Object.freeze({
   maxRows: 100,
+  maxRequestBytes: 1_000_000,
   maxResponseBytes: 1_000_000,
   queryTimeoutMs: 1_000,
   maxObjectBytes: 10 * 1024 * 1024,
@@ -208,16 +211,39 @@ export function createGatewayApp(dependencies: GatewayDependencies) {
       }
       return new Response(null, {
         status: 405,
-        headers: { allow: "GET, HEAD, POST, PATCH, DELETE" },
+        headers: { allow: "GET, HEAD, POST, PATCH, DELETE", "cache-control": "no-store" },
       });
     });
   if (mcp !== null) {
-    app.all("/mcp", ({ request }) => createMcpHttpResponse(request, mcp));
+    app.all("/mcp", ({ request }) => handleMcpRequest(request, dependencies, limits, mcp));
     app.all("/.well-known/oauth-protected-resource/mcp", ({ request }) =>
       createMcpHttpResponse(request, mcp),
     );
   }
-  return app;
+  return app.onError(({ code, request }) =>
+    fallbackErrorResponse(code === "NOT_FOUND" ? 404 : 500, request.headers),
+  );
+}
+
+async function handleMcpRequest(
+  request: Request,
+  dependencies: GatewayDependencies,
+  limits: GatewayLimits,
+  mcp: NonNullable<Parameters<typeof createMcpHttpResponse>[1]>,
+): Promise<Response> {
+  try {
+    if (!(await dependencies.consumeSignedRateLimit(request))) {
+      throw new GatewayError("quota", 429, "Request rate limit exceeded.");
+    }
+    if (request.method === "GET" || request.method === "HEAD" || request.method === "DELETE") {
+      return await createMcpHttpResponse(request, mcp);
+    }
+    validateContentLength(request.headers, limits.maxRequestBytes);
+    const body = await readBoundedBody(request, limits.maxRequestBytes);
+    return await createMcpHttpResponse(new Request(request, { body }), mcp);
+  } catch (error) {
+    return toErrorResponse(error, request.headers);
+  }
 }
 
 async function handleSelect(
@@ -233,8 +259,8 @@ async function handleSelect(
 
   try {
     const compatibility = isSupabaseDataRequest(request, dependencies.supabaseData);
-    if (compatibility) validateSupabaseReadRequest(request);
     const context = await authenticateRestRequest(request, dependencies, compatibility);
+    if (compatibility) validateSupabaseReadRequest(request);
     if (!(await dependencies.consumeRateLimit(context))) {
       throw new GatewayError("quota", 429, "Request rate limit exceeded.");
     }
@@ -281,7 +307,7 @@ async function handleSelect(
         : countRequested
           ? 206
           : 200;
-    dependencies.recordMetric({
+    recordMetricSafely(dependencies, {
       outcome: "success",
       status,
       durationMs: now() - startedAt,
@@ -294,7 +320,7 @@ async function handleSelect(
       request.headers,
       isSupabaseDataRequest(request, dependencies.supabaseData),
     );
-    dependencies.recordMetric({
+    recordMetricSafely(dependencies, {
       outcome: metricOutcome(response.status, error),
       status: response.status,
       durationMs: now() - startedAt,
@@ -321,6 +347,7 @@ async function handleMutation(
     if (!(await dependencies.consumeRateLimit(context))) {
       throw new GatewayError("quota", 429, "Request rate limit exceeded.");
     }
+    if (action !== "delete") validateContentLength(request.headers, limits.maxRequestBytes);
     const project = await dependencies.resolveProject(context);
     if (!sameTenant(project.tenant, context.tenant)) {
       throw new GatewayError("forbidden", 403, "Resolved project does not match request tenant.");
@@ -341,10 +368,13 @@ async function handleMutation(
       now,
       preference,
       compatibility,
+      limits.maxRequestBytes,
     );
     const fingerprint = JSON.stringify({
       action,
       table: tableName,
+      schemaHash: createHash("sha256").update(JSON.stringify(manifest.tables)).digest("hex"),
+      policyHash: createHash("sha256").update(JSON.stringify(project.policies)).digest("hex"),
       query: requestData.filterQuery,
       body: requestData.values,
       upsert: requestData.upsert,
@@ -399,7 +429,7 @@ async function handleMutation(
     const { response } = transactionResult;
     rowCount = transactionResult.rowCount;
     const headers = new Headers({ ...response.headers, "x-correlation-id": context.correlationId });
-    dependencies.recordMetric({
+    recordMetricSafely(dependencies, {
       outcome: "success",
       status: response.status,
       durationMs: now() - startedAt,
@@ -412,7 +442,7 @@ async function handleMutation(
       request.headers,
       isSupabaseDataRequest(request, dependencies.supabaseData),
     );
-    dependencies.recordMetric({
+    recordMetricSafely(dependencies, {
       outcome: metricOutcome(response.status, error),
       status: response.status,
       durationMs: now() - startedAt,
@@ -508,6 +538,7 @@ async function parseMutationRequest(
   now: () => number,
   preference: MutationPreference,
   compatibility: boolean,
+  maxRequestBytes: number,
 ): Promise<ParsedMutationRequest> {
   const url = new URL(request.url);
   const returnColumns = preference.returnRepresentation
@@ -551,8 +582,8 @@ async function parseMutationRequest(
   ) {
     throw new GatewayError("validation", 400, "Mutations require Content-Type: application/json.");
   }
-  const text = await request.text();
-  if (text.length === 0 || new TextEncoder().encode(text).byteLength > 1_000_000) {
+  const body = await readBoundedBody(request, maxRequestBytes);
+  if (body.byteLength === 0) {
     throw new GatewayError(
       "validation",
       400,
@@ -561,7 +592,7 @@ async function parseMutationRequest(
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body));
   } catch {
     throw new GatewayError("validation", 400, "Mutation payload must be valid JSON.");
   }
@@ -1214,9 +1245,76 @@ function toErrorResponse(error: unknown, headers: Headers, compatibility = false
       : createErrorEnvelope(gatewayError.code, correlationId),
     {
       status: gatewayError.status,
-      headers: { "x-correlation-id": correlationId },
+      headers: { "cache-control": "no-store", "x-correlation-id": correlationId },
     },
   );
+}
+
+function fallbackErrorResponse(status: 404 | 500, headers: Headers): Response {
+  const correlationId = safeCorrelationId(headers);
+  return Response.json(
+    createErrorEnvelope(status === 404 ? "validation" : "infrastructure", correlationId),
+    {
+      status,
+      headers: { "cache-control": "no-store", "x-correlation-id": correlationId },
+    },
+  );
+}
+
+function validateContentLength(headers: Headers, maxBytes: number): number | null {
+  const value = headers.get("content-length");
+  if (value === null) return null;
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) {
+    throw new GatewayError("validation", 400, "Content-Length is invalid.");
+  }
+  const length = Number(value);
+  if (!Number.isSafeInteger(length)) {
+    throw new GatewayError("validation", 400, "Content-Length is invalid.");
+  }
+  if (length > maxBytes) {
+    throw new GatewayError("quota", 413, "Request payload size limit exceeded.");
+  }
+  return length;
+}
+
+async function readBoundedBody(request: Request, maxBytes: number): Promise<Uint8Array> {
+  const declaredLength = validateContentLength(request.headers, maxBytes);
+  if (request.body === null) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new GatewayError("quota", 413, "Request payload size limit exceeded.");
+      }
+      chunks.push(Uint8Array.from(next.value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (declaredLength !== null && declaredLength !== total) {
+    throw new GatewayError("validation", 400, "Content-Length does not match the request body.");
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
+
+function recordMetricSafely(dependencies: GatewayDependencies, metric: GatewayMetric): void {
+  try {
+    void Promise.resolve(dependencies.recordMetric(metric)).catch(() => undefined);
+  } catch {
+    // Telemetry failures must not alter the client response.
+  }
 }
 
 function safeCorrelationId(headers: Headers): TenantContext["correlationId"] {

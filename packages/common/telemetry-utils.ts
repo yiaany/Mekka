@@ -1,6 +1,62 @@
 import { IS_PROD } from './constants'
 import { isBrowser } from './helpers'
 
+const SAFE_ATTRIBUTION_QUERY_KEYS = new Set([
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+  'utm_term',
+  'gclid',
+  'gbraid',
+  'wbraid',
+  'msclkid',
+  'fbclid',
+  'rdt_cid',
+  'ttclid',
+  'twclid',
+  'li_fat_id',
+])
+
+export function isSafeTelemetryAttributionKey(key: string): boolean {
+  return SAFE_ATTRIBUTION_QUERY_KEYS.has(key.toLowerCase())
+}
+
+export function sanitizeTelemetrySearch(search: string): string {
+  const safeParams = new URLSearchParams()
+
+  for (const [key, value] of new URLSearchParams(search)) {
+    const normalizedKey = key.toLowerCase()
+    if (isSafeTelemetryAttributionKey(normalizedKey) && isSafeTelemetryAttributionValue(value)) {
+      safeParams.append(normalizedKey, value)
+    }
+  }
+
+  const value = safeParams.toString()
+  return value ? `?${value}` : ''
+}
+
+function isSafeTelemetryAttributionValue(value: string): boolean {
+  if (value.length === 0 || value.length > 256) return false
+  if (/\bBearer\s+/i.test(value)) return false
+  if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(value)) return false
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(value)) return false
+  return !/\b[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/.test(value)
+}
+
+export function sanitizeTelemetryUrl(value: string): string {
+  try {
+    const url = new URL(value)
+    url.hash = ''
+    url.username = ''
+    url.password = ''
+    url.search = sanitizeTelemetrySearch(url.search)
+    return url.href
+  } catch {
+    return value.split(/[?#]/, 1)[0]
+  }
+}
+
 export function getTelemetryCookieOptions() {
   if (typeof window === 'undefined') return 'path=/; SameSite=Lax'
   if (!IS_PROD) return 'path=/; SameSite=Lax'
@@ -39,11 +95,9 @@ export function getSharedTelemetryData(pathname?: string) {
     if (!isBrowser) return ''
 
     try {
-      const url = new URL(window.location.href)
-      url.hash = ''
-      return url.href
+      return sanitizeTelemetryUrl(window.location.href)
     } catch {
-      return window.location.href.split('#')[0]
+      return sanitizeTelemetryUrl(window.location.href)
     }
   })()
 
@@ -53,10 +107,10 @@ export function getSharedTelemetryData(pathname?: string) {
     pathname: pathname ? pathname : isBrowser ? window.location.pathname : '',
     session_id: sessionId,
     ph: {
-      referrer: isBrowser ? document?.referrer : '',
+      referrer: isBrowser ? sanitizeTelemetryUrl(document?.referrer) : '',
       language: navigator.language ?? 'en-US',
       user_agent: navigator.userAgent,
-      search: isBrowser ? window.location.search : '',
+      search: isBrowser ? sanitizeTelemetrySearch(window.location.search) : '',
       viewport_height: isBrowser ? window.innerHeight : 0,
       viewport_width: isBrowser ? window.innerWidth : 0,
     },

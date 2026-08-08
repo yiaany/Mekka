@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,7 +27,6 @@ import {
   mcpPreviewCreateAction,
   mcpPreviewProposeAction,
   mcpPreviewValidateAction,
-  mcpPromotionExecuteAction,
   mcpPromotionRequestAction,
   openMcpMutationWorkflow,
 } from "../src/index";
@@ -299,6 +299,56 @@ describe("read-only MCP", () => {
       testFixture.adapter.close();
     }
   });
+
+  test("clamps capabilities to the verified access-token expiry boundary", async () => {
+    const testFixture = await fixture();
+    try {
+      const response = await createMcpHttpResponse(
+        new Request("https://mcp.example.test/mcp", {
+          method: "POST",
+          headers: { authorization: "Bearer valid-token" },
+        }),
+        {
+          ...httpDependencies(
+            { ...testFixture.dependencies, now: () => now + 60_000 },
+            testFixture.project.tenant,
+            "valid-token",
+          ),
+          capabilityStore: {
+            async listCapabilities() {
+              return [readCapability(testFixture.project.tenant, now + 10 * 60_000)];
+            },
+          },
+        },
+      );
+      expect(response.status).toBe(403);
+    } finally {
+      testFixture.adapter.close();
+    }
+  });
+
+  test("sanitizes secret-bearing dependency errors returned by tools", async () => {
+    const testFixture = await fixture();
+    try {
+      const client = await clientFor(
+        context(testFixture.project.tenant, [readCapability(testFixture.project.tenant)]),
+        {
+          ...testFixture.dependencies,
+          resolveProject() {
+            throw new Error("database failed authorization=Bearer top-secret-password");
+          },
+        },
+      );
+      const result = await client.callTool({ name: "inspect_schema", arguments: {} });
+      const output = JSON.stringify(result);
+      expect(result.isError).toBeTrue();
+      expect(output).not.toContain("top-secret-password");
+      expect(output).not.toContain("authorization=Bearer");
+      expect(output).toContain("temporarily unavailable");
+    } finally {
+      testFixture.adapter.close();
+    }
+  });
 });
 
 describe("MCP mutation workflow", () => {
@@ -354,6 +404,13 @@ describe("MCP mutation workflow", () => {
           if (!decision) throw new Error("missing approval");
           return decision;
         },
+        async consume(approvalId, executionToken) {
+          if (executionToken !== "execution-alpha-token-that-is-long-enough")
+            throw new Error("bad token");
+          const decision = approvals.get(approvalId);
+          if (!decision) throw new Error("missing approval");
+          return decision;
+        },
       },
       audit: {
         record(event) {
@@ -374,7 +431,6 @@ describe("MCP mutation workflow", () => {
         mutationCapability(preview, mcpPreviewApplyAction),
         mutationCapability(preview, mcpPreviewValidateAction),
         mutationCapability(preview, mcpPromotionRequestAction),
-        mutationCapability(preview, mcpPromotionExecuteAction),
       ];
       const previewContext = context(preview, allCapabilities);
       const previewProject = { ...testFixture.project, tenant: preview };
@@ -399,6 +455,13 @@ describe("MCP mutation workflow", () => {
         idempotencyKey: "preview-create-alpha",
       });
       expect(replayed).toEqual(created);
+      await expect(
+        workflow.createPreview(parentContext, {
+          tenant: preview,
+          ttlSeconds: 600,
+          idempotencyKey: "preview-create-alpha",
+        }),
+      ).rejects.toThrow();
 
       const proposal = await workflow.propose(previewContext, previewProject, {
         migrationId: "add-preview-title",
@@ -407,6 +470,13 @@ describe("MCP mutation workflow", () => {
       });
       expect(proposal.state).toBe("proposed");
       expect(proposal.artifact.sql).not.toContain("Ignore previous instructions");
+      await expect(
+        workflow.propose(previewContext, previewProject, {
+          migrationId: "add-preview-title",
+          idempotencyKey: "proposal-alpha",
+          sql: "ALTER TABLE notes ADD COLUMN different_title TEXT",
+        }),
+      ).rejects.toThrow();
 
       const applied = await workflow.apply(previewContext, proposal.id);
       expect(applied.state).toBe("applied");
@@ -419,7 +489,11 @@ describe("MCP mutation workflow", () => {
       const approved = approvals.get("approval-alpha");
       if (!approved) throw new Error("approval was not created");
       approvals.set("approval-alpha", { ...approved, state: "approved" });
-      const promoted = await workflow.requestPromotion(previewContext, proposal.id);
+      const promoted = await workflow.requestPromotion(
+        previewContext,
+        proposal.id,
+        "execution-alpha-token-that-is-long-enough",
+      );
       expect(promoted.promotion).toBe("applied");
       expect(promotionCalls).toBe(1);
       const promotionRetry = await workflow.requestPromotion(previewContext, proposal.id);
@@ -474,6 +548,9 @@ describe("MCP mutation workflow", () => {
         async get() {
           throw new Error("not reached");
         },
+        async consume() {
+          throw new Error("not reached");
+        },
       },
       audit: { record() {} },
       now: () => now,
@@ -503,9 +580,18 @@ describe("MCP mutation workflow", () => {
         mutationCapability(preview, mcpPreviewApplyAction),
         mutationCapability(preview, mcpPreviewValidateAction),
         mutationCapability(preview, mcpPromotionRequestAction),
-        mutationCapability(preview, mcpPromotionExecuteAction),
       ]);
       const previewProject = { ...testFixture.project, tenant: preview };
+      await workflow.createPreview(
+        context(testFixture.project.tenant, [
+          mutationCapability(testFixture.project.tenant, mcpPreviewCreateAction),
+        ]),
+        {
+          tenant: preview,
+          ttlSeconds: 300,
+          idempotencyKey: "preview-negative-create",
+        },
+      );
       const proposal = await workflow.propose(scoped, previewProject, {
         migrationId: "stale-preview",
         idempotencyKey: "stale-preview-key",
@@ -514,6 +600,228 @@ describe("MCP mutation workflow", () => {
       await workflow.apply(scoped, proposal.id);
       testFixture.adapter.execute({ sql: "CREATE INDEX notes_body_idx ON notes (body)" });
       await expect(workflow.validate(scoped, previewProject, proposal.id)).rejects.toThrow();
+    } finally {
+      workflow.close();
+      testFixture.adapter.close();
+    }
+  });
+
+  test("is replay-safe for concurrent identical proposals and promotions", async () => {
+    const testFixture = await fixture();
+    const catalogDirectory = await mkdtemp(join(tmpdir(), "mekka-mcp-concurrency-"));
+    temporaryDirectories.push(catalogDirectory);
+    const preview = tenant("project-alpha", "preview-race");
+    const approvals = new Map<string, McpApprovalDecision>();
+    let promotionCalls = 0;
+    const workflow = await openMcpMutationWorkflow({
+      catalogDirectory,
+      catalogPath: join(catalogDirectory, "mutations.sqlite"),
+      branches: {
+        async createBranch(input) {
+          return { branch: { tenant: input.tenant, expiresAt: now + 300_000 } } as never;
+        },
+        async applyToBranch(_tenant, artifact) {
+          return { schemaHash: artifact.expectedSchemaHash } as never;
+        },
+        async promote() {
+          promotionCalls += 1;
+          await new Promise<void>((resolve) => setTimeout(resolve, 50));
+          return { status: "applied" } as never;
+        },
+      },
+      approvals: {
+        async request(input) {
+          const approval: McpApprovalDecision = {
+            approvalId: "approval-race",
+            state: "approved",
+            expiresAt: now + 60_000,
+            tenant: input.tenant,
+            proposalId: input.proposalId,
+            artifactHash: input.artifactHash,
+            parentSchemaHash: input.parentSchemaHash,
+            previewSchemaHash: input.previewSchemaHash,
+          };
+          approvals.set(approval.approvalId, approval);
+          return approval;
+        },
+        async get(approvalId) {
+          const approval = approvals.get(approvalId);
+          if (!approval) throw new Error("missing approval secret=approval-secret");
+          return approval;
+        },
+        async consume(approvalId, executionToken) {
+          if (executionToken !== "execution-race-token-that-is-long-enough")
+            throw new Error("bad token");
+          const approval = approvals.get(approvalId);
+          if (!approval) throw new Error("missing approval");
+          return approval;
+        },
+      },
+      audit: { record() {} },
+      now: () => now,
+    });
+    try {
+      await workflow.createPreview(
+        context(testFixture.project.tenant, [
+          mutationCapability(testFixture.project.tenant, mcpPreviewCreateAction),
+        ]),
+        { tenant: preview, ttlSeconds: 300, idempotencyKey: "preview-race-create" },
+      );
+      const previewContext = context(preview, [
+        mutationCapability(preview, mcpPreviewProposeAction),
+        mutationCapability(preview, mcpPreviewApplyAction),
+        mutationCapability(preview, mcpPreviewValidateAction),
+        mutationCapability(preview, mcpPromotionRequestAction),
+      ]);
+      const previewProject = { ...testFixture.project, tenant: preview };
+      const [left, right] = await Promise.all([
+        workflow.propose(previewContext, previewProject, {
+          migrationId: "proposal-race",
+          idempotencyKey: "proposal-race-key",
+          sql: "ALTER TABLE notes ADD COLUMN race_value TEXT",
+        }),
+        workflow.propose(previewContext, previewProject, {
+          migrationId: "proposal-race",
+          idempotencyKey: "proposal-race-key",
+          sql: "ALTER TABLE notes ADD COLUMN race_value TEXT",
+        }),
+      ]);
+      expect(right.id).toBe(left.id);
+      await workflow.apply(previewContext, left.id);
+      await workflow.validate(previewContext, previewProject, left.id);
+      const [firstPromotion, secondPromotion] = await Promise.all([
+        workflow.requestPromotion(
+          previewContext,
+          left.id,
+          "execution-race-token-that-is-long-enough",
+        ),
+        workflow.requestPromotion(
+          previewContext,
+          left.id,
+          "execution-race-token-that-is-long-enough",
+        ),
+      ]);
+      expect([firstPromotion.promotion, secondPromotion.promotion].sort()).toEqual([
+        "applied",
+        "replayed",
+      ]);
+      expect(promotionCalls).toBe(1);
+    } finally {
+      workflow.close();
+      testFixture.adapter.close();
+    }
+  });
+
+  test("rechecks approval and capability expiry at the production boundary but replays promoted work", async () => {
+    const testFixture = await fixture();
+    const catalogDirectory = await mkdtemp(join(tmpdir(), "mekka-mcp-expiry-"));
+    temporaryDirectories.push(catalogDirectory);
+    const preview = tenant("project-alpha", "preview-expiry");
+    const catalogPath = join(catalogDirectory, "mutations.sqlite");
+    let clock = now;
+    let approval: McpApprovalDecision | undefined;
+    let promotionCalls = 0;
+    let productionApplied = false;
+    const workflow = await openMcpMutationWorkflow({
+      catalogDirectory,
+      catalogPath,
+      branches: {
+        async createBranch(input) {
+          return { branch: { tenant: input.tenant, expiresAt: now + 300_000 } } as never;
+        },
+        async applyToBranch(_tenant, artifact) {
+          return { schemaHash: artifact.expectedSchemaHash } as never;
+        },
+        async promote(_tenant, _hash, _key, _actor, _correlation, authorizationExpiresAt) {
+          if (productionApplied) return { status: "replayed" } as never;
+          if (!authorizationExpiresAt || authorizationExpiresAt <= clock)
+            throw new Error("expired boundary secret=production-secret");
+          promotionCalls += 1;
+          productionApplied = true;
+          return { status: "applied" } as never;
+        },
+      },
+      approvals: {
+        async request(input) {
+          approval = {
+            approvalId: "approval-expiry",
+            state: "approved",
+            expiresAt: now + 1_000,
+            tenant: input.tenant,
+            proposalId: input.proposalId,
+            artifactHash: input.artifactHash,
+            parentSchemaHash: input.parentSchemaHash,
+            previewSchemaHash: input.previewSchemaHash,
+          };
+          return approval;
+        },
+        async get() {
+          if (!approval) throw new Error("missing approval");
+          return approval;
+        },
+        async consume(_approvalId, executionToken) {
+          if (executionToken !== "execution-expiry-token-that-is-long-enough" || !approval) {
+            throw new Error("invalid execution token");
+          }
+          return approval;
+        },
+      },
+      audit: { record() {} },
+      now: () => clock,
+    });
+    try {
+      await workflow.createPreview(
+        context(testFixture.project.tenant, [
+          mutationCapability(testFixture.project.tenant, mcpPreviewCreateAction),
+        ]),
+        { tenant: preview, ttlSeconds: 300, idempotencyKey: "preview-expiry-create" },
+      );
+      const previewContext = context(preview, [
+        mutationCapability(preview, mcpPreviewProposeAction),
+        mutationCapability(preview, mcpPreviewApplyAction),
+        mutationCapability(preview, mcpPreviewValidateAction),
+        mutationCapability(preview, mcpPromotionRequestAction),
+      ]);
+      const previewProject = { ...testFixture.project, tenant: preview };
+      const proposal = await workflow.propose(previewContext, previewProject, {
+        migrationId: "proposal-expiry",
+        idempotencyKey: "proposal-expiry-key",
+        sql: "ALTER TABLE notes ADD COLUMN expiry_value TEXT",
+      });
+      await workflow.apply(previewContext, proposal.id);
+      await workflow.validate(previewContext, previewProject, proposal.id);
+      clock = now + 1_000;
+      await expect(
+        workflow.requestPromotion(
+          previewContext,
+          proposal.id,
+          "execution-expiry-token-that-is-long-enough",
+        ),
+      ).rejects.toThrow();
+      expect(promotionCalls).toBe(0);
+
+      clock = now;
+      const promoted = await workflow.requestPromotion(
+        previewContext,
+        proposal.id,
+        "execution-expiry-token-that-is-long-enough",
+      );
+      expect(promoted.promotion).toBe("applied");
+      const catalog = new Database(catalogPath, { strict: true });
+      try {
+        catalog.run("UPDATE mcp_mutation_proposal SET state = 'promotion_pending'");
+        catalog
+          .query<never, [number]>(
+            "UPDATE mcp_promotion_claim SET state = 'claimed', updated_at = ?",
+          )
+          .run(now);
+      } finally {
+        catalog.close(false);
+      }
+      clock = now + 6 * 60_000;
+      const replay = await workflow.requestPromotion(previewContext, proposal.id);
+      expect(replay.promotion).toBe("replayed");
+      expect(promotionCalls).toBe(1);
     } finally {
       workflow.close();
       testFixture.adapter.close();

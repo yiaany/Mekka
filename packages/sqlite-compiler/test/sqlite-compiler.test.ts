@@ -2,14 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createMutationAst, parseQuery, type QueryAst } from "@mekka/query-ast";
+import { createMutationAst, type MutationAst, parseQuery, type QueryAst } from "@mekka/query-ast";
 import { buildSchemaManifest, type SchemaManifest } from "@mekka/schema-manifest";
 import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
 import {
-  SQLiteCompilerError,
   compileMutation,
   compileSelect,
   compileSelectCount,
+  SQLiteCompilerError,
   sqliteCompilerFormatVersion,
 } from "../src/index";
 
@@ -119,6 +119,19 @@ describe("SQLite SELECT compiler", () => {
       sql: expect.stringContaining('ON CONFLICT ("id") DO UPDATE SET "id" = excluded."id"'),
       parameters: [1],
     });
+  });
+
+  test("fails closed on forged empty mutation values", () => {
+    const table = 'people"; DROP TABLE people; --';
+    const update = createMutationAst(manifest, "update", table, { name: "Ada" }, { id: 1 });
+    const insert = createMutationAst(manifest, "insert", table, { id: 1 });
+
+    expect(() => compileMutation(manifest, { ...update, values: {} } as MutationAst)).toThrow(
+      new SQLiteCompilerError("SQLITE_COMPILER_MALFORMED", "Mutation values must not be empty."),
+    );
+    expect(() => compileMutation(manifest, { ...insert, values: {} } as MutationAst)).toThrow(
+      new SQLiteCompilerError("SQLITE_COMPILER_MALFORMED", "Mutation values must not be empty."),
+    );
   });
 
   test("compiles the golden AST into quoted SQL and positional parameters", () => {

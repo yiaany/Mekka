@@ -73,7 +73,7 @@ describe('HelpOptionsList', () => {
 
     const docsOption = screen.getByRole('link', { name: /docs/i })
 
-    expect(docsOption).toHaveAttribute('href', `${DOCS_URL}/`)
+    expect(docsOption).toHaveAttribute('href', DOCS_URL)
     expect(docsOption).toHaveAttribute('target', '_blank')
     expect(docsOption).toHaveAttribute('rel', 'noreferrer noopener')
   })

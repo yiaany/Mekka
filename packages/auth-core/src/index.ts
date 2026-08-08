@@ -127,6 +127,7 @@ export type ProjectAuthService = Readonly<{
   handleRequest(request: Request): Promise<Response>;
   handleAdminRequest(request: Request, context: AuthAdminContext): Promise<Response>;
   verifyAccessToken(token: string): Promise<VerifiedAuthAccessToken>;
+  isSessionActive(sessionId: string, userId: string): boolean;
   close(): void;
 }>;
 
@@ -328,9 +329,9 @@ export async function openProjectAuthService(
           }
         }
 
-        const sessionBeforeSignOut =
+        const sessionIdBeforeSignOut =
           path === "/sign-out" && request.method === "POST"
-            ? ((await auth.api.getSession({ headers: request.headers }))?.session.token ?? null)
+            ? ((await auth.api.getSession({ headers: request.headers }))?.session.id ?? null)
             : null;
         const emailBeforePasswordReset =
           path === "/email-otp/reset-password" && request.method === "POST"
@@ -342,8 +343,8 @@ export async function openProjectAuthService(
           revokeUserSessionsAndRefreshTokens(database, emailBeforePasswordReset);
         }
 
-        if (response.ok && path === "/sign-out" && sessionBeforeSignOut) {
-          revokeRefreshTokensForSession(database, sessionBeforeSignOut);
+        if (response.ok && path === "/sign-out" && sessionIdBeforeSignOut) {
+          revokeRefreshTokensForSession(database, sessionIdBeforeSignOut);
         }
 
         if (
@@ -371,6 +372,14 @@ export async function openProjectAuthService(
           }
           throw error;
         }
+      },
+      isSessionActive(sessionId: string, userId: string): boolean {
+        const session = database
+          .query<{ expiresAt: Date | number | string }, [string, string]>(
+            "SELECT expiresAt FROM session WHERE id = ? AND userId = ?",
+          )
+          .get(sessionId, userId);
+        return session !== null && toMilliseconds(session.expiresAt) > now();
       },
       close(): void {
         database.close(false);
@@ -757,14 +766,14 @@ function initializeRefreshTokens(database: Database): void {
   );
 }
 
-function revokeRefreshTokensForSession(database: Database, sessionToken: string): void {
+function revokeRefreshTokensForSession(database: Database, sessionId: string): void {
   database
     .query<never, [string]>(`
       UPDATE _mekka_auth_refresh_token
       SET status = 'revoked'
-      WHERE session_id = (SELECT id FROM session WHERE token = ?)
+      WHERE session_id = ?
     `)
-    .run(sessionToken);
+    .run(sessionId);
 }
 
 function revokeUserSessionsAndRefreshTokens(database: Database, email: string): void {

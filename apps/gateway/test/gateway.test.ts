@@ -236,6 +236,33 @@ describe("REST SELECT gateway", () => {
       fixture.adapter.close();
     }
   });
+
+  test("isolates metric failures and sanitizes default-router responses", async () => {
+    const fixture = await createGatewayFixture({ throwMetric: true });
+    try {
+      const success = await fixture.app.handle(request("/rest/v1/notes?select=id"));
+      const missing = await fixture.app.handle(
+        new Request("http://gateway.local/not-a-route", {
+          headers: {
+            "x-forwarded-uri": "/rest/v1/notes",
+            "x-forwarded-method": "GET",
+          },
+        }),
+      );
+      fixture.projectFailure = true;
+      const failed = await fixture.app.handle(request("/rest/v1/notes?select=id"));
+
+      expect(success.status).toBe(200);
+      expect(missing.status).toBe(404);
+      expect(missing.headers.get("cache-control")).toBe("no-store");
+      expect(await missing.json()).toMatchObject({ error: { code: "validation" } });
+      expect(failed.status).toBe(503);
+      expect(failed.headers.get("cache-control")).toBe("no-store");
+      expect(await failed.text()).not.toContain("external callback secret");
+    } finally {
+      fixture.adapter.close();
+    }
+  });
 });
 
 describe("MCP gateway", () => {
@@ -297,6 +324,76 @@ describe("MCP gateway", () => {
           tools: expect.arrayContaining([expect.objectContaining({ name: "inspect_schema" })]),
         },
       });
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
+  test("rate limits and bounds POST bodies before SDK processing without method-header bypasses", async () => {
+    const fixture = await createGatewayFixture({ enableMcp: true, maxRequestBytes: 64 });
+    try {
+      fixture.rateLimitAllowed = false;
+      const limited = await fixture.app.handle(
+        new Request("http://localhost/mcp", {
+          method: "POST",
+          headers: { authorization: "Bearer mcp-token", "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+      expect(limited.status).toBe(429);
+      expect(fixture.mcpTokenVerifications).toBe(0);
+
+      fixture.rateLimitAllowed = true;
+      const oversized = await fixture.app.handle(
+        new Request("http://localhost/mcp", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer mcp-token",
+            "content-type": "application/json",
+            "content-length": "65",
+            "x-forwarded-method": "GET",
+            "x-http-method-override": "GET",
+          },
+          body: "{}",
+        }),
+      );
+      expect(oversized.status).toBe(413);
+      expect(fixture.mcpTokenVerifications).toBe(0);
+
+      const streamed = await fixture.app.handle(
+        new Request("http://localhost/mcp", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer mcp-token",
+            "content-type": "application/json",
+            "x-forwarded-method": "GET",
+          },
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(65));
+              controller.close();
+            },
+          }),
+        }),
+      );
+      expect(streamed.status).toBe(413);
+      expect(fixture.mcpTokenVerifications).toBe(0);
+
+      const get = await fixture.app.handle(
+        new Request("http://localhost/mcp", {
+          method: "GET",
+          headers: { authorization: "Bearer mcp-token", accept: "text/event-stream" },
+        }),
+      );
+      const deleted = await fixture.app.handle(
+        new Request("http://localhost/mcp", {
+          method: "DELETE",
+          headers: { authorization: "Bearer mcp-token" },
+        }),
+      );
+      expect(get.status).not.toBe(413);
+      expect(deleted.status).not.toBe(413);
+      expect(fixture.mcpTokenVerifications).toBe(2);
     } finally {
       fixture.adapter.close();
     }
@@ -505,6 +602,53 @@ describe("REST mutation gateway", () => {
       fixture.adapter.close();
     }
   });
+
+  test("rejects declared and streamed oversized bodies before project work", async () => {
+    const fixture = await createGatewayFixture({ maxRequestBytes: 32 });
+    try {
+      const declared = await fixture.app.handle(
+        request(
+          "/rest/v1/notes",
+          {
+            "Content-Type": "application/json",
+            "Content-Length": "33",
+            "Idempotency-Key": "declared-limit-0001",
+          },
+          {},
+          "POST",
+          {},
+        ),
+      );
+      expect(declared.status).toBe(413);
+      expect(fixture.projectResolutions).toBe(0);
+
+      const streamed = await fixture.app.handle(
+        new Request("http://gateway.local/rest/v1/notes", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer test-token",
+            [tenantHeaders.organizationId]: "org-main",
+            [tenantHeaders.projectId]: "project-main",
+            [tenantHeaders.environmentId]: "environment-main",
+            [tenantHeaders.branchId]: "branch-main",
+            [tenantHeaders.generation]: "1",
+            "Content-Type": "application/json",
+            "Idempotency-Key": "streaming-limit-0001",
+            "X-HTTP-Method-Override": "DELETE",
+          },
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(new Uint8Array(33));
+              controller.close();
+            },
+          }),
+        }),
+      );
+      expect(streamed.status).toBe(413);
+    } finally {
+      fixture.adapter.close();
+    }
+  });
 });
 
 const correlationId = "018e6c28-0000-7000-8000-000000000001";
@@ -515,8 +659,10 @@ async function createGatewayFixture(
       maxRows: number;
       maxResponseBytes: number;
       queryTimeoutMs: number;
+      maxRequestBytes: number;
       bulkCapability: boolean;
       enableMcp: boolean;
+      throwMetric: boolean;
     }>
   > = {},
 ): Promise<{
@@ -525,8 +671,16 @@ async function createGatewayFixture(
   metrics: GatewayMetric[];
   rateLimitAllowed: boolean;
   shouldTimeout: boolean;
+  projectResolutions: number;
+  mcpTokenVerifications: number;
+  projectFailure: boolean;
 }> {
-  const { bulkCapability = false, enableMcp = false, ...gatewayLimits } = limits;
+  const {
+    bulkCapability = false,
+    enableMcp = false,
+    throwMetric = false,
+    ...gatewayLimits
+  } = limits;
   const adapter = await createTemporaryAdapter();
   adapter.execute({
     sql: "CREATE TABLE notes (id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL, body TEXT NOT NULL, private_note TEXT)",
@@ -545,6 +699,9 @@ async function createGatewayFixture(
     metrics: [] as GatewayMetric[],
     rateLimitAllowed: true,
     shouldTimeout: false,
+    projectResolutions: 0,
+    mcpTokenVerifications: 0,
+    projectFailure: false,
   };
   const executor: RestQueryExecutor = {
     execute<Row extends Record<string, StorageValue>>(
@@ -591,7 +748,11 @@ async function createGatewayFixture(
       }
       return tenantContext;
     },
-    resolveProject: () => project,
+    resolveProject: () => {
+      fixture.projectResolutions += 1;
+      if (fixture.projectFailure) throw new Error("external callback secret");
+      return project;
+    },
     resolveProjectByTenant: () => project,
     authenticateRealtimeToken: (token) => {
       if (token !== "gateway-realtime-token") {
@@ -603,13 +764,17 @@ async function createGatewayFixture(
     consumeRateLimit: () => fixture.rateLimitAllowed,
     consumeSignedRateLimit: () => fixture.rateLimitAllowed,
     storagePublicOrigin: "https://storage.example.test",
-    recordMetric: (metric) => fixture.metrics.push(metric),
+    recordMetric: (metric) => {
+      if (throwMetric) throw new Error("metric callback secret");
+      fixture.metrics.push(metric);
+    },
     recordStorageAudit: () => undefined,
     ...(enableMcp
       ? {
           mcp: {
             tokenVerifier: {
               async verifyAccessToken(token) {
+                fixture.mcpTokenVerifications += 1;
                 if (token !== "mcp-token") throw new Error("invalid token");
                 return {
                   userId: "alice",

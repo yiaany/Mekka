@@ -105,6 +105,7 @@ export type BranchServiceOptions = Readonly<{
   credentials: BranchCredentialIssuer;
   auth: PreviewAuthStore;
   audit: BranchAuditSink;
+  beforeDelete?(tenant: TenantIdentity): void | Promise<void>;
   now?: () => number;
 }>;
 
@@ -210,6 +211,7 @@ export type BranchService = Readonly<{
     idempotencyKey: string,
     actorId: string,
     correlationId: string,
+    authorizationExpiresAt?: number,
   ): Promise<PromotionResult>;
   deleteBranch(tenant: TenantIdentity, actorId: string, correlationId: string): Promise<void>;
   cleanupExpired(): Promise<readonly TenantIdentity[]>;
@@ -568,7 +570,14 @@ export async function openBranchService(options: BranchServiceOptions): Promise<
       }
     },
 
-    async promote(tenantInput, migrationHash, idempotencyKey, actorId, correlationId) {
+    async promote(
+      tenantInput,
+      migrationHash,
+      idempotencyKey,
+      actorId,
+      correlationId,
+      authorizationExpiresAt,
+    ) {
       validateOperationIdentity(actorId, correlationId, idempotencyKey);
       if (!hashPattern.test(migrationHash)) {
         throw new BranchError("BRANCH_VALIDATION", "Migration hash is invalid.");
@@ -600,6 +609,7 @@ export async function openBranchService(options: BranchServiceOptions): Promise<
           throw new BranchError("BRANCH_CONFLICT", "Promotion state is inconsistent.");
         }
       }
+      if (!existingPromotion) requireUnexpiredAuthorization(authorizationExpiresAt, now());
 
       const sourceArtifact = readBranchMigration(catalog, tenant, migrationHash);
       const parent = options.resolveParent(branch.parentTenant);
@@ -657,6 +667,9 @@ export async function openBranchService(options: BranchServiceOptions): Promise<
 
       try {
         const operation = parent.withMutationLock(() => {
+          if (!isMigrationApplied(parent.storage, targetArtifact)) {
+            requireUnexpiredAuthorization(authorizationExpiresAt, now());
+          }
           const currentPromotion = readPromotion(catalog, tenant, idempotencyKey);
           let restorePoint = currentPromotion?.restorePointJson
             ? parseBackup(currentPromotion.restorePointJson)
@@ -1640,6 +1653,7 @@ async function deleteClaimedBranch(
     .run(...tenantParameters(branch.tenant));
   if (claimed.changes !== 1) return false;
   try {
+    await options.beforeDelete?.(branch.tenant);
     await options.credentials.revoke({
       tenant: branch.tenant,
       credentialId: branch.credentialId,
@@ -1802,6 +1816,12 @@ function validateOperationIdentity(
   }
   if (idempotencyKey !== undefined && !idempotencyPattern.test(idempotencyKey)) {
     throw new BranchError("BRANCH_VALIDATION", "Idempotency key is invalid.");
+  }
+}
+
+function requireUnexpiredAuthorization(expiresAt: number | undefined, timestamp: number): void {
+  if (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || expiresAt <= timestamp)) {
+    throw new BranchError("BRANCH_FORBIDDEN", "Promotion authorization has expired.");
   }
 }
 

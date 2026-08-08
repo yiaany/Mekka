@@ -1,17 +1,19 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { Elysia } from "elysia";
 import {
-  MigrationError,
   applyMigration,
   createCheckpoint,
   createMigrationArtifact,
+  discardCheckpoint,
+  MigrationError,
+  preflightMigration,
 } from "@mekka/migration-engine";
 import {
-  type ErrorCode,
-  ProtocolError,
   createErrorEnvelope,
+  type ErrorCode,
   hasCapability,
+  ProtocolError,
   parseTenantIdentityFromHeaders,
   resolveCorrelationId,
   type TenantContext,
@@ -19,11 +21,18 @@ import {
 } from "@mekka/protocol";
 import {
   buildSchemaManifest,
+  isReservedSchemaIdentifier,
   type SchemaManifest,
   type SchemaManifestCache,
   type SchemaTable,
 } from "@mekka/schema-manifest";
-import type { StorageAdapter, StorageExecutor, StorageValue } from "@mekka/storage-core";
+import {
+  openStorageAdapter,
+  type StorageAdapter,
+  type StorageExecutor,
+  type StorageValue,
+} from "@mekka/storage-core";
+import { Elysia } from "elysia";
 
 export type SqliteMetaColumn = Readonly<{
   name: string;
@@ -105,6 +114,11 @@ type RowValue = string | number | null;
 type RowInput = Readonly<Record<string, RowValue>>;
 type SqlOperation = "read" | "write";
 type RowMutationResponse = Readonly<{ changes: number; idempotencyKey: string }>;
+type SqlWriteResponse = Readonly<{
+  rows: readonly Readonly<Record<string, StorageValue>>[];
+  changes: number;
+  idempotencyKey: string;
+}>;
 type IdempotencyLedgerRow = Readonly<{ request_hash: string; response_payload: string }>;
 type AuditOutboxRow = Readonly<{ id: number; payload: string }>;
 
@@ -292,7 +306,6 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
       handle(request, dependencies, now, "schema:manage", async (context, project) => {
         const table = readRouteIdentifier(params.table, "table");
         const expectedSchemaHash = readExpectedSchemaQuery(request);
-        requireTable(manifest(project), table);
         return mutate(
           context,
           project,
@@ -475,14 +488,18 @@ async function handleSql(
       throw new MetaError("forbidden", "Resolved project does not match request tenant.");
     }
     assertSqlTables(sql, manifest(project));
+    if (operation === "write") {
+      const result = executeSqlWriteIdempotently(
+        project,
+        context,
+        dependencies,
+        readIdempotencyKey(request.headers),
+        sql,
+      );
+      return Response.json(result, { headers: { "x-correlation-id": context.correlationId } });
+    }
     const result = project.storage.execute<Record<string, StorageValue>>({ sql });
-    recordDataAudit(
-      dependencies,
-      context,
-      operation === "read" ? "run_sql_read" : "run_sql_write",
-      sql,
-      result.changes,
-    );
+    recordDataAudit(dependencies, context, "run_sql_read", sql, result.changes);
     return Response.json(
       Object.freeze({ rows: Object.freeze(result.rows.map(rowDto)), changes: result.changes }),
       { headers: { "x-correlation-id": context.correlationId } },
@@ -495,6 +512,74 @@ async function handleSql(
       headers: { "x-correlation-id": correlationId },
     });
   }
+}
+
+function executeSqlWriteIdempotently(
+  project: SqliteMetaProject,
+  context: TenantContext,
+  dependencies: SqliteMetaDependencies,
+  idempotencyKey: string,
+  sql: string,
+): SqlWriteResponse {
+  const requestHash = createHash("sha256")
+    .update(stableJson({ operation: "run_sql_write", sql }))
+    .digest("hex");
+  const response = project.storage.transaction((transaction) => {
+    initializeRowMutationTables(transaction);
+    const tenant = tenantParameters(context.tenant);
+    const existing = transaction.execute<IdempotencyLedgerRow>({
+      sql: `SELECT request_hash, response_payload FROM _mekka_idempotency_ledger
+        WHERE organization_id = ? AND project_id = ? AND environment_id = ?
+          AND branch_id = ? AND generation = ? AND actor_kind = ? AND actor_id = ?
+          AND idempotency_key = ?`,
+      parameters: [...tenant, context.actor.kind, context.actor.id, idempotencyKey],
+    }).rows[0];
+    if (existing !== undefined) {
+      if (existing.request_hash !== requestHash) {
+        throw new MetaError("conflict", "Idempotency key was reused with a different request.");
+      }
+      return parseSqlWriteResponse(existing.response_payload);
+    }
+
+    const executed = transaction.execute<Record<string, StorageValue>>({ sql });
+    if (executed.rows.length > maxRowPageSize) {
+      throw new MetaError("quota", `SQL writes may return at most ${maxRowPageSize} rows.`);
+    }
+    const result = Object.freeze({
+      rows: Object.freeze(executed.rows.map(rowDto)),
+      changes: executed.changes,
+      idempotencyKey,
+    });
+    const audit = Object.freeze({
+      action: "run_sql_write" as const,
+      actorId: context.actor.id,
+      statementHash: createHash("sha256").update(sql).digest("hex"),
+      rowCount: executed.changes,
+    });
+    transaction.execute({
+      sql: `INSERT INTO _mekka_idempotency_ledger (
+          organization_id, project_id, environment_id, branch_id, generation,
+          actor_kind, actor_id, idempotency_key, request_hash, status, response_payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'committed', ?)`,
+      parameters: [
+        ...tenant,
+        context.actor.kind,
+        context.actor.id,
+        idempotencyKey,
+        requestHash,
+        JSON.stringify(result),
+      ],
+    });
+    transaction.execute({
+      sql: `INSERT INTO _mekka_audit_outbox (
+          organization_id, project_id, environment_id, branch_id, generation, payload
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      parameters: [...tenant, JSON.stringify(audit)],
+    });
+    return result;
+  });
+  flushAuditOutbox(project.storage, dependencies, context.tenant);
+  return response;
 }
 
 function readSql(body: Record<string, unknown>): string {
@@ -527,12 +612,74 @@ function sqlOperation(sql: string): SqlOperation {
     return "read";
   }
   if (/^(?:insert|update|delete)\b/i.test(sql)) {
-    if (/^(?:update|delete)\b/i.test(sql) && !/\bwhere\b/i.test(sql)) {
+    if (/^(?:update|delete)\b/i.test(sql) && !hasTopLevelKeyword(sql, "where")) {
       throw new MetaError("validation", "UPDATE and DELETE statements require WHERE.");
     }
     return "write";
   }
   throw new MetaError("unsupported", "Only SELECT, INSERT, UPDATE and DELETE are supported.");
+}
+
+function hasTopLevelKeyword(sql: string, keyword: string): boolean {
+  let quote: "'" | '"' | "`" | "]" | null = null;
+  let lineComment = false;
+  let blockComment = false;
+  let depth = 0;
+  for (let index = 0; index < sql.length; index += 1) {
+    const character = sql.charAt(index);
+    const nextCharacter = sql.charAt(index + 1);
+    if (lineComment) {
+      if (character === "\n" || character === "\r") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (character === "*" && nextCharacter === "/") {
+        blockComment = false;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote !== null) {
+      if (character === quote) {
+        if (quote !== "]" && nextCharacter === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (character === "-" && nextCharacter === "-") {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "/" && nextCharacter === "*") {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      continue;
+    }
+    if (character === "[") {
+      quote = "]";
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+      continue;
+    }
+    if (character === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth === 0 && /[A-Za-z_]/.test(character)) {
+      let end = index + 1;
+      while (/[A-Za-z0-9_]/.test(sql.charAt(end))) end += 1;
+      if (sql.slice(index, end).toLowerCase() === keyword) return true;
+      index = end - 1;
+    }
+  }
+  return false;
 }
 
 function assertSqlTables(sql: string, schema: SchemaManifest): void {
@@ -818,6 +965,34 @@ function parseRowMutationResponse(payload: string): RowMutationResponse {
   }
 }
 
+function parseSqlWriteResponse(payload: string): SqlWriteResponse {
+  try {
+    const value = readRecord(JSON.parse(payload), "SQL idempotency response");
+    if (
+      !Array.isArray(value.rows) ||
+      value.rows.length > maxRowPageSize ||
+      typeof value.changes !== "number" ||
+      !Number.isSafeInteger(value.changes) ||
+      value.changes < 0 ||
+      typeof value.idempotencyKey !== "string" ||
+      !idempotencyKeyPattern.test(value.idempotencyKey)
+    ) {
+      throw new Error("invalid SQL idempotency response");
+    }
+    const rows = value.rows.map((row) => {
+      const record = readRecord(row, "SQL idempotency row");
+      return rowDto(record as Record<string, StorageValue>);
+    });
+    return Object.freeze({
+      rows: Object.freeze(rows),
+      changes: value.changes,
+      idempotencyKey: value.idempotencyKey,
+    });
+  } catch {
+    throw new MetaError("infrastructure", "SQL idempotency record is invalid.");
+  }
+}
+
 function parseAuditEvent(payload: string): SqliteMetaAuditEvent {
   const value = readRecord(JSON.parse(payload), "audit outbox");
   if (
@@ -868,8 +1043,6 @@ function mutate(
   destructive: boolean,
 ): MutationResult<SqliteMetaTable | SqliteMetaIndex> {
   const idempotencyKey = readIdempotencyKey(headers);
-  const deletedTable =
-    action === "delete_table" ? tableDto(requireTable(manifest(project), table)) : undefined;
   const artifact = createMigrationArtifact({
     id: migrationId(context, action, table, idempotencyKey),
     actorId: context.actor.id,
@@ -877,18 +1050,45 @@ function mutate(
     expectedSchemaHash,
     sql,
   });
+  const preflight = preflightMigration(project.storage, artifact);
+  const checkpointPath = join(dependencies.checkpointDirectory, `${artifact.id}.sqlite`);
+  const deletedTable =
+    action === "delete_table"
+      ? preflight === null
+        ? tableDto(requireTable(manifest(project), table))
+        : readCheckpointTable(checkpointPath, dependencies.checkpointDirectory, table)
+      : undefined;
+  if (preflight !== null) {
+    dependencies.recordAudit({
+      action,
+      actorId: context.actor.id,
+      migrationHash: preflight.migrationHash,
+      checkpointId: destructive ? `checkpoint-${artifact.id}` : null,
+    });
+    return mutationResult(
+      deletedTable ?? replayedResource(project, action, table, sql),
+      sql,
+      destructive ? `checkpoint-${artifact.id}` : null,
+    );
+  }
   const checkpoint = destructive
     ? createCheckpoint(project.storage, {
         id: `checkpoint-${artifact.id}`,
-        checkpointPath: join(dependencies.checkpointDirectory, `${artifact.id}.sqlite`),
+        checkpointPath,
         checkpointDirectory: dependencies.checkpointDirectory,
       })
     : undefined;
-  const result = applyMigration(
-    project.storage,
-    artifact,
-    checkpoint === undefined ? {} : { checkpoint },
-  );
+  let result: ReturnType<typeof applyMigration>;
+  try {
+    result = applyMigration(
+      project.storage,
+      artifact,
+      checkpoint === undefined ? {} : { checkpoint },
+    );
+  } catch (error) {
+    if (checkpoint !== undefined) discardCheckpoint(checkpoint);
+    throw error;
+  }
   project.schemaCache?.invalidate();
   dependencies.recordAudit({
     action,
@@ -913,6 +1113,35 @@ function mutate(
     sql,
     checkpoint?.id ?? null,
   );
+}
+
+function replayedResource(
+  project: SqliteMetaProject,
+  action: SqliteMetaAuditEvent["action"],
+  table: string,
+  sql: string,
+): SqliteMetaTable | SqliteMetaIndex {
+  const current = manifest(project);
+  if (action === "create_index") {
+    const index = tableDto(requireTable(current, table)).indexes.find((candidate) =>
+      sql.includes(quote(candidate.name)),
+    );
+    if (index !== undefined) return index;
+  }
+  const targetName = action === "rename_table" ? sql.match(/TO "([^"]+)"$/)?.[1] : table;
+  return tableDto(requireTable(current, targetName ?? table));
+}
+
+function readCheckpointTable(path: string, directory: string, table: string): SqliteMetaTable {
+  if (!existsSync(path)) {
+    return Object.freeze({ name: table, columns: [], primaryKey: [], indexes: [] });
+  }
+  const checkpoint = openStorageAdapter({ databasePath: path, databaseDirectory: directory });
+  try {
+    return tableDto(requireTable(buildSchemaManifest(checkpoint), table));
+  } finally {
+    checkpoint.close();
+  }
 }
 
 function mutationResult<T>(
@@ -1046,6 +1275,9 @@ function readIdentifier(body: Record<string, unknown>, name: string): string {
   const value = body[name];
   if (typeof value !== "string" || !identifierPattern.test(value)) {
     throw new MetaError("validation", `${name} must be a SQLite identifier.`);
+  }
+  if (isReservedSchemaIdentifier(value)) {
+    throw new MetaError("validation", `${name} uses a reserved schema identifier.`);
   }
   return value;
 }

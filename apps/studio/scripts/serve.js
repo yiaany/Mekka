@@ -42,6 +42,7 @@ for (const [k, v] of Object.entries(parsed)) {
 
 const accessToken = process.env.MEKKA_STUDIO_ACCESS_TOKEN
 const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN
+const maxMcpRequestBytes = 1_000_000
 if (process.env.NODE_ENV === 'production') {
   if (!accessToken || accessToken.length < 24) {
     throw new Error('MEKKA_STUDIO_ACCESS_TOKEN must contain at least 24 characters in production')
@@ -242,6 +243,27 @@ createServer(async (req, res) => {
     const pathname = rawPathname.length > 1 ? rawPathname.replace(/\/$/, '') : rawPathname
     const isAgentAccessRequest =
       pathname === '/mcp' || pathname === '/.well-known/oauth-protected-resource/mcp'
+    if (pathname === '/mcp') {
+      if (!/^Bearer [A-Za-z0-9._~-]+$/.test(req.headers.authorization ?? '')) {
+        const protocol = req.socket.encrypted ? 'https' : 'http'
+        const metadataUrl = new URL(
+          '/.well-known/oauth-protected-resource/mcp',
+          `${protocol}://${req.headers.host ?? 'localhost'}`
+        )
+        res.statusCode = 401
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('www-authenticate', `Bearer resource_metadata="${metadataUrl.href}"`)
+        res.end(JSON.stringify({ error: 'auth' }))
+        return
+      }
+      const contentLength = Number(req.headers['content-length'] ?? '0')
+      if (Number.isFinite(contentLength) && contentLength > maxMcpRequestBytes) {
+        res.statusCode = 413
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.end(JSON.stringify({ error: 'payload_too_large' }))
+        return
+      }
+    }
     if (!isHealthRequest(req) && !isAgentAccessRequest && !isAuthorized(req)) {
       res.statusCode = 401
       res.setHeader('www-authenticate', 'Basic realm="Mekka Studio", charset="UTF-8"')

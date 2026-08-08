@@ -438,7 +438,7 @@ function requestSignal(signal: AbortSignal | undefined): RequestInit {
 
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
-  if (text.length > 2 * 1024 * 1024) throw malformedResponse();
+  if (new TextEncoder().encode(text).byteLength > 2 * 1024 * 1024) throw malformedResponse();
   try {
     return JSON.parse(text) as unknown;
   } catch {

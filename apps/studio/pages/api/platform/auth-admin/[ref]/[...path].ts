@@ -26,7 +26,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const isTrustedProductionRequest =
     internalProxyToken !== undefined &&
     req.headers['x-mekka-internal-proxy'] === internalProxyToken
-  const isLoopbackDevelopment = process.env.NODE_ENV !== 'production'
+  const isLoopbackDevelopment =
+    process.env.NODE_ENV !== 'production' &&
+    (req.socket === undefined || isLoopback(req.socket.remoteAddress))
   if (!path || projectRef !== 'local' || (!isTrustedProductionRequest && !isLoopbackDevelopment)) {
     return res.status(401).json({ error: { code: 'auth' } })
   }
@@ -67,6 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const backendUrl = process.env.STUDIO_BACKEND_API_URL
   if (!backendUrl) return res.status(503).json({ error: { code: 'infrastructure' } })
   const headers = new Headers({ accept: 'application/json' })
+  if (internalProxyToken) headers.set('x-mekka-internal-proxy', internalProxyToken)
   for (const name of forwardedHeaders) {
     const value = req.headers[name]
     if (typeof value === 'string') headers.set(name, value)
@@ -121,6 +124,14 @@ function hasValidCsrf(req: NextApiRequest): boolean {
   const left = Buffer.from(header)
   const right = Buffer.from(cookie)
   return left.length === right.length && timingSafeEqual(left, right)
+}
+
+function isLoopback(address: string | undefined): boolean {
+  return (
+    address === '127.0.0.1' ||
+    address === '::1' ||
+    address === '::ffff:127.0.0.1'
+  )
 }
 
 function isSecureStudioOrigin(): boolean {

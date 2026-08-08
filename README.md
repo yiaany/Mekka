@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/assets/mekka-readme-logo.jpg" alt="Mekka" width="112" />
+  <img src="docs/assets/mekka-readme-logo.png" alt="Mekka" width="112" />
 
   # MEKKA
 
@@ -10,7 +10,7 @@
   `DATABASE` · `AUTH` · `STORAGE` · `REALTIME` · `STUDIO` · `SAFE AGENTS`
 
   [![CI](https://github.com/yiaany/mekka/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yiaany/mekka/actions/workflows/ci.yml)
-  ![Bun](https://img.shields.io/badge/Bun-1.3.14-d7ff3f?style=flat-square&logo=bun&logoColor=090909)
+  ![Bun](https://img.shields.io/badge/Bun-1.3.14-242424?style=flat-square&logo=bun&logoColor=fff)
   ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=fff)
   ![SQLite](https://img.shields.io/badge/data-SQLite--compatible-0f80cc?style=flat-square&logo=sqlite&logoColor=fff)
   ![MCP](https://img.shields.io/badge/MCP-scoped-090909?style=flat-square)
@@ -21,7 +21,44 @@
 
 <br />
 
-![Mekka architecture hero](docs/assets/mekka-hero.svg)
+<table>
+  <thead>
+    <tr>
+      <th align="left">MEKKA / STUDIO</th>
+      <th align="left">Agent workspace</th>
+      <th align="right"><code>main</code></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td width="190" valign="top">
+        <sub>PROJECT</sub><br />
+        <strong>mekka-production</strong><br /><br />
+        <strong>Table Editor</strong><br />
+        <span>SQL Editor</span><br />
+        <span>Auth</span><br />
+        <span>Storage</span><br />
+        <span>Realtime</span><br />
+        <span>Agent Access</span>
+      </td>
+      <td colspan="2" valign="top">
+        <sub>AGENT REQUEST</sub><br />
+        <strong>Add a status field to tasks and make status filters fast.</strong><br /><br />
+        <sub>Validated in an isolated preview. Production is unchanged.</sub><br /><br />
+        <pre><code>ALTER TABLE tasks
+ADD COLUMN status TEXT NOT NULL DEFAULT 'todo';
+
+CREATE INDEX tasks_status_idx ON tasks (status);</code></pre>
+        <kbd>Preview ready</kbd>&nbsp; <kbd>Exact SQL</kbd>&nbsp; <kbd>Approval required</kbd>
+      </td>
+    </tr>
+    <tr>
+      <td><sub>DATA PLANE</sub><br /><strong>SQLite-compatible</strong></td>
+      <td><sub>AGENT SCOPE</sub><br /><strong>Preview only</strong></td>
+      <td><sub>PRODUCTION</sub><br /><strong>Protected</strong></td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 

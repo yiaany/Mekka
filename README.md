@@ -7,6 +7,8 @@
 
   SQLite data plane. Embedded Studio. Scoped Agent Access. No mystery meat control plane.
 
+  `DATABASE` · `AUTH` · `STORAGE` · `REALTIME` · `STUDIO` · `SAFE AGENTS`
+
   [![CI](https://github.com/yiaany/mekka/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yiaany/mekka/actions/workflows/ci.yml)
   ![Bun](https://img.shields.io/badge/Bun-1.3.14-d7ff3f?style=flat-square&logo=bun&logoColor=090909)
   ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=fff)
@@ -14,7 +16,7 @@
   ![MCP](https://img.shields.io/badge/MCP-scoped-090909?style=flat-square)
   ![License](https://img.shields.io/badge/license-Mekka%20Business%202.0-090909?style=flat-square)
 
-  [Quick start](#run-it) · [Architecture](#architecture) · [Agent Access](#agent-access) · [Security](#security) · [Commands](#commands)
+  [See it work](#see-it-work) · [Run it](#run-it) · [Architecture](#architecture) · [Agent Access](#agent-access) · [Security](#security)
 </div>
 
 <br />
@@ -23,14 +25,29 @@
 
 ---
 
-## The Pitch
+## The Short Version
 
-Mekka is a compact backend platform for teams that want the control surface of a modern BaaS
-without assigning a dedicated PostgreSQL cluster to every project.
+Modern backend platforms are powerful. They are also becoming platforms you need another platform
+team to understand.
 
-It bundles a SQLite-compatible data plane, Auth, Storage, Realtime, a private Studio fork,
-Supabase-compatible Data API behavior, and an MCP surface designed for agents that should be
-useful without being trusted blindly.
+**Mekka takes the opposite position.**
+
+It is a direct Supabase alternative with a different center of gravity: less platform, more
+product. Less operational theater, more backend you can actually hold in your head.
+
+Keep the database, Auth, Storage, Realtime, Studio, and agent workflows. Cut the machinery most
+projects never touch. Put the result into a compact SQLite-native stack that is lighter to run,
+easier to reason about, and faster to move from an idea to a working backend.
+
+**One runtime shape.** Bun/Node services backed by SQLite-compatible state.
+
+**One control surface.** A private Studio fork for data, users, files, branches, and approvals.
+
+**One guarded path for agents.** Plain-language intent becomes an isolated preview, exact SQL, an
+explicit approval, and only then a production change.
+
+Mekka is not trying to win by having the longest feature list. It is trying to make the useful part
+of the backend stack feel obvious again.
 
 ```text
 organization / project / environment / branch / generation
@@ -39,7 +56,54 @@ organization / project / environment / branch / generation
 That tuple follows every request, capability, cache key, branch, audit event, and authorization
 decision. If identity or routing is ambiguous, Mekka rejects the operation.
 
+## See It Work
+
+> **You**
+>
+> Add a status field to tasks, default existing rows to `todo`, and make status filters fast.
+
+> **Agent**
+>
+> Preview created. Migration applied and validated against an isolated database. Production is
+> unchanged.
+
+```sql
+ALTER TABLE tasks
+ADD COLUMN status TEXT NOT NULL DEFAULT 'todo';
+
+CREATE INDEX tasks_status_idx ON tasks (status);
+```
+
+```text
+PROMPT
+  -> TENANT-BOUND TOKEN
+  -> ISOLATED PREVIEW
+  -> VALIDATION
+  -> EXACT SQL REVIEW
+  -> ONE-TIME APPROVAL
+  -> PRODUCTION
+```
+
+The agent can explore, propose, apply, and test inside its preview. It cannot silently cross the
+last boundary.
+
+<details>
+<summary><strong>Open the trust chain</strong></summary>
+
+1. Studio issues an opaque Agent Access token with a maximum five-minute lifetime.
+2. The token is bound to the complete tenant identity and defaults to read-only access.
+3. Write access creates a disposable preview branch instead of granting production execution.
+4. Mekka stores the exact migration artifact, SQL, schema hashes, and destructive-operation flag.
+5. Studio approval issues a short-lived, one-time execution secret bound to that exact artifact.
+6. Production promotion atomically consumes the secret and rechecks authorization and schema CAS.
+
+</details>
+
 ## Why Mekka
+
+Supabase is broad by design. Mekka is opinionated by design. If the full PostgreSQL ecosystem is
+the requirement, use it. If the goal is a compact backend with a smaller operational footprint and
+an agent model built around verification instead of blind trust, that is Mekka's lane.
 
 | | **Mekka** | **Supabase** | **Plain SQLite** |
 | --- | --- | --- | --- |
@@ -53,9 +117,9 @@ decision. If identity or routing is ambiguous, Mekka rejects the operation.
 | API compatibility | Native typed API plus tested Supabase subset | Native Supabase APIs | None built in |
 | Self-host shape | Bun/Node services plus SQLite state | Multi-service Postgres stack | Single embedded database |
 
-> This is a product-shape comparison, not a benchmark or a parity claim. Mekka intentionally
-> supports a narrower SQLite-native model. Supabase remains the reference for the compatible
-> client subset and provides substantially broader PostgreSQL semantics.
+> Supabase is broader. Mekka is deliberately sharper. If you need the full PostgreSQL ecosystem,
+> use Supabase. If you want a compact self-hosted backend with less machinery, a smaller operational
+> footprint, and guarded AI-agent workflows, Mekka removes the weight instead of hiding it.
 
 Supabase comparison references: [Database](https://supabase.com/docs/guides/database/overview),
 [MCP Server](https://supabase.com/docs/guides/ai-tools/mcp), and
@@ -117,7 +181,10 @@ Client / Studio / MCP
   -> response, metrics, and audit
 ```
 
-## What Ships
+## Built In. Not Bolted On.
+
+The core backend surface ships together and follows the same identity, authorization, audit, and
+failure contracts.
 
 | Surface | Current capability |
 | --- | --- |
@@ -131,6 +198,8 @@ Client / Studio / MCP
 | **MCP** | Read tools by default; opt-in preview mutations with exact-SQL Studio approval before production promotion. |
 
 ## Agent Access
+
+> Agents get room to work, not room to improvise in production.
 
 Agent access is deliberately split into two modes.
 
@@ -185,6 +254,8 @@ Universal MCP configuration:
 
 ## Run It
 
+Four commands. Two local services. No external database to provision.
+
 ### Requirements
 
 - Bun `1.3.14`
@@ -208,6 +279,9 @@ Open `http://127.0.0.1:8082`.
 Local runtime state lives under `apps/studio/.local/` and is ignored by Git and Docker contexts.
 
 ## Production
+
+The production shape stays intentionally boring: one public Studio endpoint, one loopback backend,
+and one persistent data directory.
 
 Required server-side configuration:
 
@@ -247,6 +321,8 @@ docker build \
 
 ## Security
 
+Self-hosted is a deployment model, not a security model. Mekka keeps the trust boundaries explicit.
+
 - Authentication happens before authorization.
 - Authorization compares the full tenant tuple, including generation.
 - Read-write Agent Access is opt-in and preview-bound; read is the default.
@@ -281,6 +357,9 @@ See [`SECURITY.md`](SECURITY.md) for private vulnerability reporting and
 
 ## Repository Map
 
+<details>
+<summary><strong>Explore the workspace</strong></summary>
+
 ```text
 apps/
   gateway/             REST, Storage, Realtime, Supabase compatibility, MCP mount
@@ -302,6 +381,8 @@ packages/
   storage-core/        SQLite adapter and object storage
   studio-domain-sdk/   Typed Studio/backend boundary
 ```
+
+</details>
 
 ## Compatibility
 

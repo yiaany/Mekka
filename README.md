@@ -16,7 +16,7 @@
   ![MCP](https://img.shields.io/badge/MCP-scoped-090909?style=flat-square)
   ![License](https://img.shields.io/badge/license-Mekka%20Business%202.0-090909?style=flat-square)
 
-  [Why Mekka](#why-mekka) · [Architecture](#architecture) · [Studio](#studio) · [Run it](#run-it) · [Security](#security)
+  [Why Mekka](#why-mekka) · [Architecture](#architecture) · [Studio](#studio) · [Roadmap](#ecosystem-roadmap) · [Run it](#run-it) · [Security](#security)
 </div>
 
 <br />
@@ -297,6 +297,135 @@ See [`SECURITY.md`](SECURITY.md) for private vulnerability reporting and
 - Identifiers resolve through the schema manifest instead of user-provided SQL fragments.
 
 </details>
+
+## Ecosystem Roadmap
+
+<div align="center">
+
+### The local engine was the opening move.
+
+**The target is the fastest agent-native database platform from laptop to global edge.**
+
+Mekka is not building a smaller Supabase clone. We are making heavyweight database infrastructure
+optional, then taking the control plane, the agent workflow, and the developer experience further.
+
+</div>
+
+<table>
+  <tr>
+    <td width="25%" valign="top">
+      <sub>PHASE 1.0</sub><br />
+      <kbd>SHIPPED</kbd><br /><br />
+      <strong>LOCAL CORE</strong><br /><br />
+      Bun + SQLite<br />
+      Embedded Studio<br />
+      Scoped MCP<br />
+      Guarded promotion
+    </td>
+    <td width="25%" valign="top">
+      <sub>PHASE 1.5</sub><br />
+      <kbd>COMING NEXT</kbd><br /><br />
+      <strong>PGLITE TRACK</strong><br /><br />
+      In-process Postgres<br />
+      WASM portability<br />
+      JSONB workflows<br />
+      pgvector target
+    </td>
+    <td width="25%" valign="top">
+      <sub>PHASE 2.0</sub><br />
+      <kbd>ADAPTER TRACK</kbd><br /><br />
+      <strong>LIBSQL PLANE</strong><br /><br />
+      Remote adapter<br />
+      Replicated reads<br />
+      Primary write routing<br />
+      Managed clones
+    </td>
+    <td width="25%" valign="top">
+      <sub>PHASE 3.0</sub><br />
+      <kbd>PLANNED</kbd><br /><br />
+      <strong>MEKKA CLOUD</strong><br /><br />
+      Serverless orchestration<br />
+      Autosuspend<br />
+      PR databases<br />
+      Multi-region control
+    </td>
+  </tr>
+  <tr>
+    <td align="center"><strong>PROVE IT</strong></td>
+    <td align="center"><strong>EXPAND IT</strong></td>
+    <td align="center"><strong>DISTRIBUTE IT</strong></td>
+    <td align="center"><strong>OWN THE CATEGORY</strong></td>
+  </tr>
+</table>
+
+> **Supabase made backend platforms accessible. Mekka is making the old platform weight obsolete.**
+
+### Where The Platform Goes
+
+| **Engine layer** | **Control layer** | **Execution layer** | **Developer layer** |
+| --- | --- | --- | --- |
+| Bun SQLite today | Tenant-aware orchestration | Isolated TypeScript functions | Studio and CLI workflows |
+| PGlite compatibility track | Branch and replica topology | Realtime mutation streams | PR preview databases |
+| libSQL/Turso adapter track | Autosuspend and placement | Agent-safe plugin runtime | Engine choice per project |
+
+<details>
+<summary><strong>libSQL distributed data plane</strong></summary>
+
+The next SQLite-shaped engine track is a real remote adapter for libSQL and Turso, not a renamed
+HTTP client. The adapter must pass Mekka's storage, migration, branching, credential, and failure
+conformance contracts before it can carry production traffic.
+
+Targets:
+
+- Read replicas close to applications and agents, with writes routed to the primary.
+- Managed database clones and scoped credentials through verified Turso platform primitives.
+- The same typed API, Studio, MCP scopes, audit trail, and promotion workflow across local and remote projects.
+- Dense tenant isolation without keeping every inactive database hot in memory.
+
+Upstream replication and managed-clone primitives are verified. The product adapter and its
+credentials are not implemented yet. See
+[`docs/engine-capabilities/branching.md`](docs/engine-capabilities/branching.md).
+
+</details>
+
+<details>
+<summary><strong>PGlite compatibility engine</strong></summary>
+
+Some teams need PostgreSQL semantics without volunteering to operate PostgreSQL servers. The PGlite
+track targets a WASM-backed, in-process engine option with the same Mekka control surface.
+
+Targets:
+
+- PostgreSQL-compatible local and preview workflows without Docker as a baseline requirement.
+- `JSONB` and `pgvector`-compatible workflows for memory, embeddings, retrieval, and agent workloads.
+- Engine capability negotiation instead of pretending SQLite and PostgreSQL have identical semantics.
+- One Studio and one agent protocol across both engine families.
+
+PGlite support is roadmap work. No production adapter is claimed today.
+
+</details>
+
+<details>
+<summary><strong>Mekka Cloud, previews, and plugin runtime</strong></summary>
+
+The hosted product is designed around databases that wake when needed, disappear from memory when
+idle, and become disposable infrastructure whenever a pull request or agent task needs isolation.
+
+Targets:
+
+- Autosuspend with a single-digit-millisecond resume target for warm platform paths.
+- Disposable PR and CI databases with a sub-200ms orchestration target where the engine permits it.
+- Bun-isolated TypeScript functions executing beside the selected data plane.
+- Plugins for engine adapters, object stores, Auth providers, agent tools, and deployment hooks.
+- Realtime mutation broadcasting without forcing every engine through heavyweight WAL parsing.
+
+These numbers are engineering targets, not current service guarantees. Hosted Cloud, edge execution,
+and the general plugin SDK are planned rather than released.
+
+</details>
+
+**The strategy is simple:** win local development, expand engine choice, distribute the data plane,
+then ship the cloud platform built for software teams where agents are first-class operators.
 
 ## Developer Reference
 

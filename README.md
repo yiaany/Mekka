@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="apps/studio/public/img/mekka-logo.svg" alt="Mekka" width="96" />
+  <img src="docs/assets/mekka-readme-logo.jpg" alt="Mekka" width="112" />
 
   # MEKKA
 

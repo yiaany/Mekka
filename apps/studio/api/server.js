@@ -2,8 +2,8 @@
 // SSR handler. Vercel auto-detects every file under /api as a Function
 // regardless of the framework preset (vercel.com/docs/functions), so we
 // can't keep this file from being deployed in the Next.js prod build — we
-// just make it inert when the env var is unset.
-const isTanstack = process.env.STUDIO_FRAMEWORK === 'tanstack'
+// just make it inert for the explicit Next.js rollback deployment.
+const isTanstack = process.env.STUDIO_FRAMEWORK !== 'next'
 
 // Computed path keeps `dist/server/server.js` out of Vercel's function
 // bundler's static analysis. In the Next.js prod deploy the `dist/` tree

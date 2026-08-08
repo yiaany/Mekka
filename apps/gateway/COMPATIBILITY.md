@@ -1,5 +1,7 @@
 # REST Data API Compatibility Matrix
 
+The versioned `supabase-js` compatibility tuple and measured client contract are documented in `SUPABASE_DATA_COMPATIBILITY.md`.
+
 | Behavior | Status | Notes |
 | --- | --- | --- |
 | `GET /rest/v1/{table}` JSON array | Supported | Requires authenticated tenant context and matching full tenant headers. |
@@ -10,13 +12,13 @@
 | `Prefer: count=exact` | Supported | Performs a second policy-rewritten count query and returns HTTP 206. |
 | `count=planned`, `count=estimated` | Unsupported | SQLite statistics semantics are not claimed. |
 | CSV, singular object, null stripping | Unsupported | JSON array only. |
-| `POST /rest/v1/{table}` insert | Supported | JSON object only by default; idempotency key is mandatory. |
+| `POST /rest/v1/{table}` insert | Supported | Native requests require caller idempotency. Configured `supabase-js` compatibility requests receive a per-request internal key. |
 | `PATCH /rest/v1/{table}` and `DELETE /rest/v1/{table}` | Supported | Query filters select affected rows; unbounded writes require `data:bulk`. |
 | `Prefer: return=minimal` | Supported | Default write mode; returns `204` and `Preference-Applied`. |
 | `Prefer: return=representation` | Supported | Returns policy-filtered JSON array; requires a permitted `select` policy. |
-| `Prefer: resolution=merge-duplicates` | Supported | Single-row `POST` primary-key upsert only. Conflict targets other than the primary key are unsupported. |
+| `Prefer: resolution=merge-duplicates` | Supported | Primary-key upsert. Conflict targets other than the complete primary key are rejected explicitly. |
 | JSON array writes | Supported with capability | Explicit `data:bulk` capability, bounded by the server mutation row cap and executed atomically. |
-| `on_conflict`, `resolution=ignore-duplicates`, `return=headers-only`, `missing=default` | Unsupported | Explicit product error; no alternate semantics. |
+| Non-primary `on_conflict`, `resolution=ignore-duplicates`, `return=headers-only`, `missing=default` | Unsupported | Explicit product error; no alternate semantics. |
 | Embedding and RPC | Unsupported | Deferred to later sessions. |
 
 ## Object Storage HTTP Subset

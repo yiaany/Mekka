@@ -20,11 +20,11 @@ report.
 
 Reports are triaged privately. The project will acknowledge receipt, assess impact, prepare a
 fix, and coordinate disclosure where appropriate. No response-time or bounty commitment is made
-at the current pre-alpha stage.
+at the current development stage.
 
 ## Security Boundaries
 
 The project is designed around tenant-scoped authorization, deny-by-default routing, short-lived
 capabilities, prepared SQL statements, schema identifier allowlists, and audit events for
-privileged actions. These are design goals, not a claim that the pre-alpha implementation is safe
-for production use.
+privileged actions. These controls are not a claim that the implementation is safe for production
+use without deployment hardening and an independent review.

@@ -11,10 +11,10 @@ function getEnvFile(
       name: '.env.local',
       language: 'bash',
       code: [
-        `NEXT_PUBLIC_SUPABASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
+        `NEXT_PUBLIC_LITEBASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
         projectKeys.publishableKey
-          ? `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
-          : `NEXT_PUBLIC_SUPABASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
+          ? `NEXT_PUBLIC_LITEBASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
+          : `LITEBASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
         '',
       ].join('\n'),
     }
@@ -29,10 +29,10 @@ function getEnvFile(
       name: envFileName,
       language: 'bash',
       code: [
-        `${keyPrefix}_SUPABASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
+        `${keyPrefix}_LITEBASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
         projectKeys.publishableKey
-          ? `${keyPrefix}_SUPABASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
-          : `${keyPrefix}_SUPABASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
+          ? `${keyPrefix}_LITEBASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
+          : `${keyPrefix}_LITEBASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
         '',
       ].join('\n'),
     }

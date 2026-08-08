@@ -8,6 +8,7 @@
   },
   "include": ["src/**/*.ts"],
   "references": [
+    { "path": "../mcp" },
     { "path": "../../packages/policy-engine" },
     { "path": "../../packages/protocol" },
     { "path": "../../packages/query-ast" },

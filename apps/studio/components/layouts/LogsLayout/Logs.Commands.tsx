@@ -25,12 +25,6 @@ export function useLogsGotoCommands(options?: CommandOptions) {
           ...(logsCollections
             ? ([
                 {
-                  id: 'nav-logs-postgres',
-                  name: 'Postgres Logs',
-                  route: `/project/${ref}/logs/postgres-logs`,
-                  defaultHidden: true,
-                },
-                {
                   id: 'nav-logs-postgrest',
                   name: 'PostgREST Logs',
                   route: `/project/${ref}/logs/postgrest-logs`,

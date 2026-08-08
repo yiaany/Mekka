@@ -113,6 +113,12 @@ describe("SQLite SELECT compiler", () => {
       sql: expect.stringContaining('ON CONFLICT ("id") DO UPDATE SET "name" = excluded."name"'),
       parameters: [1, "Ada"],
     });
+    expect(
+      compileMutation(manifest, createMutationAst(manifest, "upsert", table, { id: 1 }, { id: 1 })),
+    ).toMatchObject({
+      sql: expect.stringContaining('ON CONFLICT ("id") DO UPDATE SET "id" = excluded."id"'),
+      parameters: [1],
+    });
   });
 
   test("compiles the golden AST into quoted SQL and positional parameters", () => {

@@ -1,60 +1,54 @@
-import { components } from 'api-types'
+import { components } from "api-types";
 
-import { AUTH_JWT_SECRET, POSTGRES_PORT, requireEnvironmentVariable } from './constants'
-import { assertSelfHosted } from './util'
-import { PROJECT_DB_HOST, PROJECT_ENDPOINT, PROJECT_ENDPOINT_PROTOCOL } from '@/lib/constants/api'
+import { assertSelfHosted } from "./util";
+import {
+  PROJECT_DB_HOST,
+  PROJECT_ENDPOINT,
+  PROJECT_ENDPOINT_PROTOCOL,
+} from "@/lib/constants/api";
 
-type ProjectAppConfig = components['schemas']['ProjectSettingsResponse']['app_config'] & {
-  protocol?: string
-}
+type ProjectAppConfig =
+  components["schemas"]["ProjectSettingsResponse"]["app_config"] & {
+    protocol?: string;
+  };
 
-export type ProjectSettings = components['schemas']['ProjectSettingsResponse'] & {
-  app_config?: ProjectAppConfig
-}
+export type ProjectSettings =
+  components["schemas"]["ProjectSettingsResponse"] & {
+    app_config?: ProjectAppConfig;
+  };
 
 /**
  * Gets self-hosted project settings
  *
  * _Only call this from server-side self-hosted code._
  */
-export function getProjectSettings() {
-  assertSelfHosted()
+export function getProjectSettings(): ProjectSettings {
+  assertSelfHosted();
 
-  const response = {
+  const response: ProjectSettings = {
     app_config: {
-      db_schema: 'public',
+      db_schema: "main",
       endpoint: PROJECT_ENDPOINT,
       storage_endpoint: PROJECT_ENDPOINT,
       // manually added to force the frontend to use the correct URL
       protocol: PROJECT_ENDPOINT_PROTOCOL,
     },
-    cloud_provider: 'AWS',
-    db_dns_name: '-',
+    cloud_provider: "AWS",
+    db_dns_name: "-",
     db_host: PROJECT_DB_HOST,
-    db_ip_addr_config: 'legacy' as const,
-    db_name: 'postgres',
-    db_port: POSTGRES_PORT,
-    db_user: 'postgres',
-    inserted_at: '2021-08-02T06:40:40.646Z',
-    jwt_secret: requireEnvironmentVariable('AUTH_JWT_SECRET', AUTH_JWT_SECRET),
-    name: process.env.DEFAULT_PROJECT_NAME || 'Default Project',
-    ref: 'default',
-    region: 'local',
-    service_api_keys: [
-      {
-        api_key: process.env.SUPABASE_ANON_KEY ?? '',
-        name: 'anon key',
-        tags: 'anon',
-      },
-      {
-        api_key: process.env.SUPABASE_SERVICE_KEY ?? '',
-        name: 'service_role key',
-        tags: 'service_role',
-      },
-    ],
+    db_ip_addr_config: "legacy" as const,
+    db_name: "sqlite",
+    db_port: 0,
+    db_user: "local",
+    inserted_at: "2021-08-02T06:40:40.646Z",
+    jwt_secret: "",
+    name: process.env.DEFAULT_PROJECT_NAME || "Local Project",
+    ref: "local",
+    region: "local",
+    service_api_keys: [],
     ssl_enforced: false,
-    status: 'ACTIVE_HEALTHY',
-  } satisfies ProjectSettings
+    status: "ACTIVE_HEALTHY",
+  };
 
-  return response
+  return response;
 }

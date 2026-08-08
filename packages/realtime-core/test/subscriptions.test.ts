@@ -208,6 +208,42 @@ describe("Realtime subscriptions", () => {
       storage.close();
     }
   });
+
+  test("rejects concurrent joins for the same topic before authentication resolves", async () => {
+    const storage = openStorageAdapter({ databasePath: ":memory:" });
+    let resolveAuthentication:
+      | ((value: { context: TenantContext; expiresAt: number }) => void)
+      | null = null;
+    const authentication = new Promise<{ context: TenantContext; expiresAt: number }>((resolve) => {
+      resolveAuthentication = resolve;
+    });
+    const gateway = createRealtimeSubscriptionGateway({
+      authenticate: () => authentication,
+      resolveSource: (selectedContext) => createSource(storage, selectedContext.tenant),
+    });
+    const socket = createSocket();
+
+    try {
+      gateway.open("connection-race-001", socket);
+      const firstJoin = gateway.receive(
+        "connection-race-001",
+        joinMessage("alice-access-token", 0),
+      );
+      await Promise.resolve();
+      const secondJoin = gateway.receive(
+        "connection-race-001",
+        joinMessage("alice-access-token", 0),
+      );
+      resolveAuthentication?.({ context: context(tenant, "alice"), expiresAt: 4_000_000_000 });
+      await Promise.all([firstJoin, secondJoin]);
+
+      expect(socket.closed).toEqual({ code: 1008, reason: "invalid_channel" });
+      expect(decodedEvents(socket).filter((message) => message[3] === "phx_reply")).toEqual([]);
+    } finally {
+      gateway.dispose();
+      storage.close();
+    }
+  });
 });
 
 function createGatewayFixture(

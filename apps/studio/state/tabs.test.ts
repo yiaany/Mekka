@@ -171,6 +171,21 @@ describe('tabs close handlers', () => {
     expect(store.openTabs).toHaveLength(0)
   })
 
+  it('runs every independently registered handler for the same tab type', () => {
+    const store = createTabsState('default')
+    store.addTab(sqlTab('a'))
+
+    const firstOnClose = vi.fn()
+    const secondOnClose = vi.fn()
+    store.registerTabTypeHandler('sql', { onClose: firstOnClose })
+    store.registerTabTypeHandler('sql', { onClose: secondOnClose })
+
+    store.closeTabs(['sql-a'])
+
+    expect(firstOnClose).toHaveBeenCalledTimes(1)
+    expect(secondOnClose).toHaveBeenCalledTimes(1)
+  })
+
   it('does not run close handlers for the low-level removeTab / removeTabs (re-keying, cleanup)', () => {
     const store = createTabsState('default')
     store.addTab(sqlTab('a'))

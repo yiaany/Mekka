@@ -62,11 +62,10 @@ async function requestProjectCsrfToken(
   }>
 ): Promise<string> {
   const token = await getAccessToken()
-  if (!token) throw new Error('Studio session is required')
   const response = await fetch(`/api/platform/auth-admin/${encodeURIComponent(projectRef)}/csrf`, {
     credentials: 'include',
     headers: {
-      authorization: `Bearer ${token}`,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       'x-mekka-project-id': projectRef,
       'x-mekka-organization-id': tenant.organizationId,
       'x-mekka-environment-id': tenant.environmentId,

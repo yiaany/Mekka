@@ -276,6 +276,9 @@ describe("read-only MCP", () => {
         httpDependencies(testFixture.dependencies, testFixture.project.tenant, "valid-token"),
       );
       expect(missing.status).toBe(401);
+      expect(missing.headers.get("www-authenticate")).toBe(
+        'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp"',
+      );
 
       const wrongAudience = await createMcpHttpResponse(
         new Request("https://mcp.example.test/mcp", {

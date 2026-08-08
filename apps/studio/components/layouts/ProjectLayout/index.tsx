@@ -1,8 +1,8 @@
-import { IS_PLATFORM, LOCAL_STORAGE_KEYS, mergeRefs, useParams } from 'common'
-import { AnimatePresence, motion } from 'framer-motion'
-import { XIcon } from 'lucide-react'
-import Head from 'next/head'
-import { useRouter } from 'next/router'
+import { IS_PLATFORM, LOCAL_STORAGE_KEYS, mergeRefs, useParams } from "common";
+import { AnimatePresence, motion } from "framer-motion";
+import { XIcon } from "lucide-react";
+import Head from "next/head";
+import { useRouter } from "next/router";
 import {
   forwardRef,
   Fragment,
@@ -10,121 +10,136 @@ import {
   useLayoutEffect,
   type PropsWithChildren,
   type ReactNode,
-} from 'react'
+} from "react";
 import {
   Alert,
   AlertDescription,
   AlertTitle,
   cn,
-  LogoLoader,
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
   useIsMobile,
   usePanelRef,
-} from 'ui'
+} from "ui";
 
-import { useEditorType } from '../editors/EditorsLayout.hooks'
-import { useMainScrollContainer, useSetMainScrollContainer } from '../MainScrollContainerContext'
-import { useMobileSheet } from '../Navigation/NavigationBar/MobileSheetContext'
-import ProductMenuBar from '../Navigation/ProductMenuBar'
-import BuildingState from './BuildingState'
-import ConnectingState from './ConnectingState'
-import { getSectionKeyFromPathname, MobileMenuContent } from './LayoutHeader/MobileMenuContent'
-import { ProjectPausedState } from './PausedState/ProjectPausedState'
-import { PauseFailedState } from './PauseFailedState'
-import { PausingState } from './PausingState'
-import { ResizingState } from './ResizingState'
-import RestartingState from './RestartingState'
-import { RestoreFailedState } from './RestoreFailedState'
-import { RestoringState } from './RestoringState'
-import { UnhealthyState } from './UnhealthyState'
-import { UpgradingState } from './UpgradingState'
-import { CreateBranchModal } from '@/components/interfaces/BranchManagement/CreateBranchModal'
-import { ProjectAPIDocs } from '@/components/interfaces/ProjectAPIDocs/ProjectAPIDocs'
-import { BannerFreeMicroUpgrade } from '@/components/ui/BannerStack/Banners/BannerFreeMicroUpgrade'
-import { BannerUnifiedLogs } from '@/components/ui/BannerStack/Banners/BannerUnifiedLogs'
-import { BANNER_ID, useBannerStack } from '@/components/ui/BannerStack/BannerStackProvider'
-import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
-import PartnerIcon from '@/components/ui/PartnerIcon'
-import { ResourceExhaustionWarningBanner } from '@/components/ui/ResourceExhaustionWarningBanner/ResourceExhaustionWarningBanner'
-import { useResourceWarningsQuery } from '@/data/usage/resource-warnings-query'
-import { useCustomContent } from '@/hooks/custom-content/useCustomContent'
-import { useLocalStorageQuery } from '@/hooks/misc/useLocalStorage'
-import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
-import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
-import { withAuth } from '@/hooks/misc/withAuth'
-import { PROJECT_STATUS } from '@/lib/constants'
-import { MANAGED_BY } from '@/lib/constants/infrastructure'
-import { STUDIO_BRAND } from '@/lib/fork-config'
-import { buildStudioPageTitle } from '@/lib/page-title'
-import { getPathnameWithoutQuery } from '@/lib/pathname.utils'
-import { useAppStateSnapshot } from '@/state/app-state'
-import { useDatabaseSelectorStateSnapshot } from '@/state/database-selector'
+import { useEditorType } from "../editors/EditorsLayout.hooks";
+import {
+  useMainScrollContainer,
+  useSetMainScrollContainer,
+} from "../MainScrollContainerContext";
+import { useMobileSheet } from "../Navigation/NavigationBar/MobileSheetContext";
+import ProductMenuBar from "../Navigation/ProductMenuBar";
+import BuildingState from "./BuildingState";
+import ConnectingState from "./ConnectingState";
+import {
+  getSectionKeyFromPathname,
+  MobileMenuContent,
+} from "./LayoutHeader/MobileMenuContent";
+import { ProjectPausedState } from "./PausedState/ProjectPausedState";
+import { PauseFailedState } from "./PauseFailedState";
+import { PausingState } from "./PausingState";
+import { ResizingState } from "./ResizingState";
+import RestartingState from "./RestartingState";
+import { RestoreFailedState } from "./RestoreFailedState";
+import { RestoringState } from "./RestoringState";
+import { UnhealthyState } from "./UnhealthyState";
+import { UpgradingState } from "./UpgradingState";
+import { CreateBranchModal } from "@/components/interfaces/BranchManagement/CreateBranchModal";
+import { ProjectAPIDocs } from "@/components/interfaces/ProjectAPIDocs/ProjectAPIDocs";
+import { BannerFreeMicroUpgrade } from "@/components/ui/BannerStack/Banners/BannerFreeMicroUpgrade";
+import { BannerUnifiedLogs } from "@/components/ui/BannerStack/Banners/BannerUnifiedLogs";
+import {
+  BANNER_ID,
+  useBannerStack,
+} from "@/components/ui/BannerStack/BannerStackProvider";
+import { ButtonTooltip } from "@/components/ui/ButtonTooltip";
+import PartnerIcon from "@/components/ui/PartnerIcon";
+import { ResourceExhaustionWarningBanner } from "@/components/ui/ResourceExhaustionWarningBanner/ResourceExhaustionWarningBanner";
+import { useResourceWarningsQuery } from "@/data/usage/resource-warnings-query";
+import { useCustomContent } from "@/hooks/custom-content/useCustomContent";
+import { useLocalStorageQuery } from "@/hooks/misc/useLocalStorage";
+import { useSelectedOrganizationQuery } from "@/hooks/misc/useSelectedOrganization";
+import { useSelectedProjectQuery } from "@/hooks/misc/useSelectedProject";
+import { withAuth } from "@/hooks/misc/withAuth";
+import { PROJECT_STATUS } from "@/lib/constants";
+import { MANAGED_BY } from "@/lib/constants/infrastructure";
+import { STUDIO_BRAND } from "@/lib/fork-config";
+import { buildStudioPageTitle } from "@/lib/page-title";
+import { getPathnameWithoutQuery } from "@/lib/pathname.utils";
+import { useAppStateSnapshot } from "@/state/app-state";
+import { useDatabaseSelectorStateSnapshot } from "@/state/database-selector";
 
 // [Joshen] This is temporary while we unblock users from managing their project
 // if their project is not responding well for any reason. Eventually needs a bit of an overhaul
 const routesToIgnoreProjectDetailsRequest = [
-  '/project/[ref]/settings/infrastructure',
-  '/project/[ref]/settings/addons',
-  '/project/[ref]/settings/general',
-  '/project/[ref]/database/settings',
-  '/project/[ref]/storage/settings',
-]
+  "/project/[ref]/settings/infrastructure",
+  "/project/[ref]/settings/addons",
+  "/project/[ref]/settings/general",
+  "/project/[ref]/database/settings",
+  "/project/[ref]/storage/settings",
+];
 
 const routesToIgnoreDBConnection = [
-  '/project/[ref]/branches',
-  '/project/[ref]/database/backups',
-  '/project/[ref]/settings',
-  '/project/[ref]/functions',
-  '/project/[ref]/logs',
-]
+  "/project/[ref]/branches",
+  "/project/[ref]/database/backups",
+  "/project/[ref]/settings",
+  "/project/[ref]/functions",
+  "/project/[ref]/logs",
+];
 
 const routesToIgnorePostgrestConnection = [
-  '/project/[ref]/settings/general',
-  '/project/[ref]/settings/infrastructure',
-  '/project/[ref]/settings/addons',
-  '/project/[ref]/database/settings',
-  '/project/[ref]/reports',
-]
+  "/project/[ref]/settings/general",
+  "/project/[ref]/settings/infrastructure",
+  "/project/[ref]/settings/addons",
+  "/project/[ref]/database/settings",
+  "/project/[ref]/reports",
+];
 
 const DEFAULT_PROJECT_INTEGRATION_BANNER_DISMISS_KEY =
-  LOCAL_STORAGE_KEYS.PROJECT_INTEGRATION_BANNER_DISMISSED('unknown', 'unknown')
+  LOCAL_STORAGE_KEYS.PROJECT_INTEGRATION_BANNER_DISMISSED("unknown", "unknown");
 
 function getProjectIntegrationBannerDismissKey({
   projectRef,
   integrationSource,
 }: {
-  projectRef?: string
-  integrationSource?: string | null
+  projectRef?: string;
+  integrationSource?: string | null;
 }) {
-  if (!projectRef || !integrationSource) return DEFAULT_PROJECT_INTEGRATION_BANNER_DISMISS_KEY
+  if (!projectRef || !integrationSource)
+    return DEFAULT_PROJECT_INTEGRATION_BANNER_DISMISS_KEY;
 
-  return LOCAL_STORAGE_KEYS.PROJECT_INTEGRATION_BANNER_DISMISSED(projectRef, integrationSource)
+  return LOCAL_STORAGE_KEYS.PROJECT_INTEGRATION_BANNER_DISMISSED(
+    projectRef,
+    integrationSource,
+  );
 }
 
 export interface ProjectLayoutProps {
-  isLoading?: boolean
-  isBlocking?: boolean
-  product?: string
-  productMenu?: ReactNode
+  isLoading?: boolean;
+  isBlocking?: boolean;
+  product?: string;
+  productMenu?: ReactNode;
   browserTitle?: {
-    entity?: string
-    section?: string
-    override?: string
-  }
+    entity?: string;
+    section?: string;
+    override?: string;
+  };
   // Deprecated: use browserTitle.entity instead. Kept for backwards compatibility.
-  selectedTable?: string
-  resizableSidebar?: boolean
-  productMenuClassName?: string
+  selectedTable?: string;
+  resizableSidebar?: boolean;
+  productMenuClassName?: string;
 }
 
-export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<ProjectLayoutProps>>(
+export const ProjectLayout = forwardRef<
+  HTMLDivElement,
+  PropsWithChildren<ProjectLayoutProps>
+>(
   (
     {
       isLoading = false,
       isBlocking = true,
-      product = '',
+      product = "",
       productMenu,
       browserTitle,
       children,
@@ -133,64 +148,69 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
 
       productMenuClassName,
     },
-    ref
+    ref,
   ) => {
-    const router = useRouter()
-    const { data: selectedOrganization } = useSelectedOrganizationQuery()
-    const { data: selectedProject } = useSelectedProjectQuery()
-    const { addBanner, dismissBanner } = useBannerStack()
+    const router = useRouter();
+    const { data: selectedOrganization } = useSelectedOrganizationQuery();
+    const { data: selectedProject } = useSelectedProjectQuery();
+    const { addBanner, dismissBanner } = useBannerStack();
     const { data: resourceWarnings } = useResourceWarningsQuery({
       slug: selectedOrganization?.slug,
-    })
-    const projectResourceWarnings = (Array.isArray(resourceWarnings) ? resourceWarnings : []).find(
-      (w) => w.project === selectedProject?.ref
-    )
+    });
+    const projectResourceWarnings = (
+      Array.isArray(resourceWarnings) ? resourceWarnings : []
+    ).find((w) => w.project === selectedProject?.ref);
     const isComputeNearExhaustion =
       !!projectResourceWarnings?.cpu_exhaustion ||
       !!projectResourceWarnings?.memory_and_swap_exhaustion ||
       !!projectResourceWarnings?.disk_space_exhaustion ||
-      !!projectResourceWarnings?.disk_io_exhaustion
-    const isNanoCompute = selectedProject?.infra_compute_size === 'nano'
-    const showUpgradeBanner = isNanoCompute && isComputeNearExhaustion
+      !!projectResourceWarnings?.disk_io_exhaustion;
+    const isNanoCompute = selectedProject?.infra_compute_size === "nano";
+    const showUpgradeBanner = isNanoCompute && isComputeNearExhaustion;
     const [isFreeMicroUpgradeBannerDismissed] = useLocalStorageQuery(
-      LOCAL_STORAGE_KEYS.FREE_MICRO_UPGRADE_BANNER_DISMISSED(selectedProject?.ref ?? ''),
-      false
-    )
+      LOCAL_STORAGE_KEYS.FREE_MICRO_UPGRADE_BANNER_DISMISSED(
+        selectedProject?.ref ?? "",
+      ),
+      false,
+    );
     const [isUnifiedLogsBannerDismissed] = useLocalStorageQuery(
       LOCAL_STORAGE_KEYS.UNIFIED_LOGS_BANNER_DISMISSED,
-      false
-    )
-    const [isProjectIntegrationBannerDismissed, setIsProjectIntegrationBannerDismissed] =
-      useLocalStorageQuery(
-        getProjectIntegrationBannerDismissKey({
-          projectRef: selectedProject?.ref,
-          integrationSource: selectedProject?.integration_source,
-        }),
-        false
-      )
-    const { showSidebar } = useAppStateSnapshot()
-    const { setContent: setMobileSheetContent, registerOpenMenu } = useMobileSheet()
+      false,
+    );
+    const [
+      isProjectIntegrationBannerDismissed,
+      setIsProjectIntegrationBannerDismissed,
+    ] = useLocalStorageQuery(
+      getProjectIntegrationBannerDismissKey({
+        projectRef: selectedProject?.ref,
+        integrationSource: selectedProject?.integration_source,
+      }),
+      false,
+    );
+    const { showSidebar } = useAppStateSnapshot();
+    const { setContent: setMobileSheetContent, registerOpenMenu } =
+      useMobileSheet();
 
-    const pathname = getPathnameWithoutQuery(router.asPath, router.pathname)
-    const currentSectionKey = getSectionKeyFromPathname(pathname)
+    const pathname = getPathnameWithoutQuery(router.asPath, router.pathname);
+    const currentSectionKey = getSectionKeyFromPathname(pathname);
 
-    const mainScrollContainer = useMainScrollContainer()
-    const setMainScrollContainer = useSetMainScrollContainer()
-    const combinedRef = mergeRefs(ref, setMainScrollContainer)
+    const mainScrollContainer = useMainScrollContainer();
+    const setMainScrollContainer = useSetMainScrollContainer();
+    const combinedRef = mergeRefs(ref, setMainScrollContainer);
 
-    const { appTitle } = useCustomContent(['app:title'])
-    const brandTitle = appTitle || STUDIO_BRAND.name
+    const { appTitle } = useCustomContent(["app:title"]);
+    const brandTitle = appTitle || STUDIO_BRAND.name;
 
-    const isMobile = useIsMobile()
+    const isMobile = useIsMobile();
 
-    const editor = useEditorType()
-    const forceShowProductMenu = editor === undefined
-    const sideBarIsOpen = (forceShowProductMenu || showSidebar) && !isMobile
+    const editor = useEditorType();
+    const forceShowProductMenu = editor === undefined;
+    const sideBarIsOpen = (forceShowProductMenu || showSidebar) && !isMobile;
 
-    const panelRef = usePanelRef()
+    const panelRef = usePanelRef();
 
-    const projectName = selectedProject?.name
-    const organizationName = selectedOrganization?.name
+    const projectName = selectedProject?.name;
+    const organizationName = selectedOrganization?.name;
     const pageTitle =
       browserTitle?.override ||
       buildStudioPageTitle({
@@ -201,32 +221,36 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
         org: organizationName,
         brand: brandTitle,
       }) ||
-      brandTitle
+      brandTitle;
 
-    const isPaused = selectedProject?.status === PROJECT_STATUS.INACTIVE
+    const isPaused = selectedProject?.status === PROJECT_STATUS.INACTIVE;
 
     const ignorePausedState =
-      router.pathname === '/project/[ref]' ||
-      router.pathname.includes('/project/[ref]/settings') ||
-      router.pathname.includes('/project/[ref]/functions') ||
-      router.pathname.includes('/project/[ref]/logs')
-    const showPausedState = isPaused && !ignorePausedState
+      router.pathname === "/project/[ref]" ||
+      router.pathname.includes("/project/[ref]/settings") ||
+      router.pathname.includes("/project/[ref]/functions") ||
+      router.pathname.includes("/project/[ref]/logs");
+    const showPausedState = isPaused && !ignorePausedState;
     const showStripeProjectBanner =
-      selectedProject?.integration_source === 'stripe_projects' &&
-      !isProjectIntegrationBannerDismissed
+      selectedProject?.integration_source === "stripe_projects" &&
+      !isProjectIntegrationBannerDismissed;
 
     useEffect(() => {
-      if (!selectedProject?.ref) return
-      const isProjectHomepage = router.pathname === '/project/[ref]'
-      if (isProjectHomepage && showUpgradeBanner && !isFreeMicroUpgradeBannerDismissed) {
+      if (!selectedProject?.ref) return;
+      const isProjectHomepage = router.pathname === "/project/[ref]";
+      if (
+        isProjectHomepage &&
+        showUpgradeBanner &&
+        !isFreeMicroUpgradeBannerDismissed
+      ) {
         addBanner({
           id: BANNER_ID.FREE_MICRO_UPGRADE,
           isDismissed: false,
           content: <BannerFreeMicroUpgrade />,
           priority: 2,
-        })
+        });
       } else {
-        dismissBanner(BANNER_ID.FREE_MICRO_UPGRADE)
+        dismissBanner(BANNER_ID.FREE_MICRO_UPGRADE);
       }
     }, [
       router.pathname,
@@ -235,21 +259,26 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
       isFreeMicroUpgradeBannerDismissed,
       addBanner,
       dismissBanner,
-    ])
+    ]);
 
     useEffect(() => {
-      if (!selectedProject?.ref) return
+      if (!selectedProject?.ref) return;
       if (IS_PLATFORM && !isUnifiedLogsBannerDismissed) {
         addBanner({
           id: BANNER_ID.UNIFIED_LOGS,
           isDismissed: false,
           content: <BannerUnifiedLogs />,
           priority: 1,
-        })
+        });
       } else {
-        dismissBanner(BANNER_ID.UNIFIED_LOGS)
+        dismissBanner(BANNER_ID.UNIFIED_LOGS);
       }
-    }, [selectedProject?.ref, isUnifiedLogsBannerDismissed, addBanner, dismissBanner])
+    }, [
+      selectedProject?.ref,
+      isUnifiedLogsBannerDismissed,
+      addBanner,
+      dismissBanner,
+    ]);
 
     useLayoutEffect(() => {
       const unregister = registerOpenMenu(() => {
@@ -259,15 +288,21 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
             currentProduct={product}
             currentSectionKey={currentSectionKey}
             onCloseSheet={() => setMobileSheetContent(null)}
-          />
-        )
-      })
-      return unregister
-    }, [registerOpenMenu, productMenu, product, currentSectionKey, setMobileSheetContent])
+          />,
+        );
+      });
+      return unregister;
+    }, [
+      registerOpenMenu,
+      productMenu,
+      product,
+      currentSectionKey,
+      setMobileSheetContent,
+    ]);
 
     useLayoutEffect(() => {
-      mainScrollContainer?.scrollTo({ top: 0, left: 0 })
-    }, [pathname, mainScrollContainer])
+      mainScrollContainer?.scrollTo({ top: 0, left: 0 });
+    }, [pathname, mainScrollContainer]);
 
     return (
       <>
@@ -288,9 +323,9 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
               >
                 <AnimatePresence initial={false}>
                   <motion.div
-                    initial={{ width: 0, opacity: 0, height: '100%' }}
-                    animate={{ width: 'auto', opacity: 1, height: '100%' }}
-                    exit={{ width: 0, opacity: 0, height: '100%' }}
+                    initial={{ width: 0, opacity: 0, height: "100%" }}
+                    animate={{ width: "auto", opacity: 1, height: "100%" }}
+                    exit={{ width: 0, opacity: 0, height: "100%" }}
                     className="h-full"
                     transition={{ duration: 0.12 }}
                   >
@@ -299,7 +334,10 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
                       isBlocking={isBlocking}
                       productMenu={productMenu}
                     >
-                      <ProductMenuBar title={product} className={productMenuClassName}>
+                      <ProductMenuBar
+                        title={product}
+                        className={productMenuClassName}
+                      >
                         {productMenu}
                       </ProductMenuBar>
                     </MenuBarWrapper>
@@ -315,7 +353,9 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
               />
             )}
             <ResizablePanel
-              className={cn('h-full flex flex-col w-full xl:min-w-[600px] bg-dash-sidebar')}
+              className={cn(
+                "h-full flex flex-col w-full xl:min-w-[600px] bg-dash-sidebar",
+              )}
               id="panel-project-content"
             >
               <main
@@ -333,18 +373,23 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
                       size="medium"
                     />
                     <div className="flex-1">
-                      <AlertTitle>This project is connected to Stripe</AlertTitle>
+                      <AlertTitle>
+                        This project is connected to Stripe
+                      </AlertTitle>
                       <AlertDescription>
-                        Changes made here may affect your connected Stripe project.
+                        Changes made here may affect your connected Stripe
+                        project.
                       </AlertDescription>
                     </div>
                     <ButtonTooltip
                       variant="text"
                       icon={<XIcon size={14} />}
                       className="h-7 w-7 p-0"
-                      onClick={() => setIsProjectIntegrationBannerDismissed(true)}
+                      onClick={() =>
+                        setIsProjectIntegrationBannerDismissed(true)
+                      }
                       aria-label="Dismiss project integration banner"
-                      tooltip={{ content: { text: 'Dismiss' } }}
+                      tooltip={{ content: { text: "Dismiss" } }}
                     />
                   </Alert>
                 )}
@@ -367,19 +412,19 @@ export const ProjectLayout = forwardRef<HTMLDivElement, PropsWithChildren<Projec
         <CreateBranchModal />
         <ProjectAPIDocs />
       </>
-    )
-  }
-)
+    );
+  },
+);
 
-ProjectLayout.displayName = 'ProjectLayout'
+ProjectLayout.displayName = "ProjectLayout";
 
-export const ProjectLayoutWithAuth = withAuth(ProjectLayout)
+export const ProjectLayoutWithAuth = withAuth(ProjectLayout);
 
 interface MenuBarWrapperProps {
-  isLoading: boolean
-  isBlocking?: boolean
-  productMenu?: ReactNode
-  children: ReactNode
+  isLoading: boolean;
+  isBlocking?: boolean;
+  productMenu?: ReactNode;
+  children: ReactNode;
 }
 
 const MenuBarWrapper = ({
@@ -388,22 +433,25 @@ const MenuBarWrapper = ({
   productMenu,
   children,
 }: MenuBarWrapperProps) => {
-  const router = useRouter()
-  const { data: selectedProject } = useSelectedProjectQuery()
-  const requiresProjectDetails = !routesToIgnoreProjectDetailsRequest.includes(router.pathname)
+  const router = useRouter();
+  const { data: selectedProject } = useSelectedProjectQuery();
+  const requiresProjectDetails = !routesToIgnoreProjectDetailsRequest.includes(
+    router.pathname,
+  );
 
   if (!isBlocking) {
-    return children
+    return children;
   }
 
   const showMenuBar =
-    !requiresProjectDetails || (requiresProjectDetails && selectedProject !== undefined)
+    !requiresProjectDetails ||
+    (requiresProjectDetails && selectedProject !== undefined);
 
-  return !isLoading && productMenu && showMenuBar ? children : null
-}
+  return !isLoading && productMenu && showMenuBar ? children : null;
+};
 
 interface ContentWrapperProps {
-  children: ReactNode
+  children: ReactNode;
 }
 
 /**
@@ -419,92 +467,91 @@ interface ContentWrapperProps {
  * [TODO] Next iteration should scrape long polling and just listen to the project's status
  */
 const ContentWrapper = ({ children }: ContentWrapperProps) => {
-  const router = useRouter()
-  const { ref } = useParams()
-  const state = useDatabaseSelectorStateSnapshot()
-  const { data: selectedProject } = useSelectedProjectQuery()
-  const isBackupsPage = router.pathname.includes('/project/[ref]/database/backups')
-  const isHomePage = router.pathname === '/project/[ref]'
+  const router = useRouter();
+  const { ref } = useParams();
+  const state = useDatabaseSelectorStateSnapshot();
+  const { data: selectedProject } = useSelectedProjectQuery();
+  const isBackupsPage = router.pathname.includes(
+    "/project/[ref]/database/backups",
+  );
+  const isHomePage = router.pathname === "/project/[ref]";
 
-  const requiresDbConnection = !routesToIgnoreDBConnection.some((x) => router.pathname.includes(x))
-  const requiresPostgrestConnection = !routesToIgnorePostgrestConnection.includes(router.pathname)
+  const requiresDbConnection = !routesToIgnoreDBConnection.some((x) =>
+    router.pathname.includes(x),
+  );
+  const requiresPostgrestConnection =
+    !routesToIgnorePostgrestConnection.includes(router.pathname);
 
-  const isRestarting = selectedProject?.status === PROJECT_STATUS.RESTARTING
-  const isResizing = selectedProject?.status === PROJECT_STATUS.RESIZING
-  const isProjectUpgrading = selectedProject?.status === PROJECT_STATUS.UPGRADING
-  const isProjectRestoring = selectedProject?.status === PROJECT_STATUS.RESTORING
-  const isProjectRestoreFailed = selectedProject?.status === PROJECT_STATUS.RESTORE_FAILED
+  const isRestarting = selectedProject?.status === PROJECT_STATUS.RESTARTING;
+  const isResizing = selectedProject?.status === PROJECT_STATUS.RESIZING;
+  const isProjectUpgrading =
+    selectedProject?.status === PROJECT_STATUS.UPGRADING;
+  const isProjectRestoring =
+    selectedProject?.status === PROJECT_STATUS.RESTORING;
+  const isProjectRestoreFailed =
+    selectedProject?.status === PROJECT_STATUS.RESTORE_FAILED;
   const isProjectBuilding =
     selectedProject?.status === PROJECT_STATUS.COMING_UP ||
-    selectedProject?.status === PROJECT_STATUS.UNKNOWN
-  const isProjectPausing = selectedProject?.status === PROJECT_STATUS.PAUSING
-  const isProjectPauseFailed = selectedProject?.status === PROJECT_STATUS.PAUSE_FAILED
-  const isProjectUnhealthy = selectedProject?.status === PROJECT_STATUS.ACTIVE_UNHEALTHY
-  const isProjectOffline = selectedProject?.postgrestStatus === 'OFFLINE'
+    selectedProject?.status === PROJECT_STATUS.UNKNOWN;
+  const isProjectPausing = selectedProject?.status === PROJECT_STATUS.PAUSING;
+  const isProjectPauseFailed =
+    selectedProject?.status === PROJECT_STATUS.PAUSE_FAILED;
+  const isProjectUnhealthy =
+    selectedProject?.status === PROJECT_STATUS.ACTIVE_UNHEALTHY;
+  const isProjectOffline = selectedProject?.postgrestStatus === "OFFLINE";
 
   const ignoreUnhealthyState =
     isHomePage ||
-    router.pathname.includes('/project/[ref]/settings') ||
-    router.pathname.includes('/project/[ref]/logs')
-
-  const shouldRedirectToHomeForBuilding = isProjectBuilding && requiresDbConnection && !isHomePage
+    router.pathname.includes("/project/[ref]/settings") ||
+    router.pathname.includes("/project/[ref]/logs");
 
   // Don't show building state on the home page — it handles building state inline
-  const shouldShowBuildingState = isProjectBuilding && requiresDbConnection && !isHomePage
+  const shouldShowBuildingState =
+    isProjectBuilding && requiresDbConnection && !isHomePage;
 
   useEffect(() => {
-    if (shouldRedirectToHomeForBuilding && ref) {
-      router.replace(`/project/${ref}`)
-    }
-  }, [shouldRedirectToHomeForBuilding, ref, router])
-
-  useEffect(() => {
-    if (ref) state.setSelectedDatabaseId(ref)
-  }, [ref])
+    if (ref) state.setSelectedDatabaseId(ref);
+  }, [ref, state]);
 
   if (isRestarting && !isBackupsPage) {
-    return <RestartingState />
+    return <RestartingState />;
   }
 
   if (isResizing && !isBackupsPage) {
-    return <ResizingState />
+    return <ResizingState />;
   }
 
   if (isProjectUpgrading && !isBackupsPage) {
-    return <UpgradingState />
+    return <UpgradingState />;
   }
 
   if (isProjectPausing) {
-    return <PausingState project={selectedProject} />
+    return <PausingState project={selectedProject} />;
   }
 
   if (isProjectPauseFailed) {
-    return <PauseFailedState />
+    return <PauseFailedState />;
   }
 
   if (isProjectUnhealthy && !ignoreUnhealthyState) {
-    return <UnhealthyState />
+    return <UnhealthyState />;
   }
 
   if (requiresPostgrestConnection && isProjectOffline) {
-    return <ConnectingState project={selectedProject} />
+    return <ConnectingState project={selectedProject} />;
   }
 
   if (requiresDbConnection && isProjectRestoring) {
-    return <RestoringState />
+    return <RestoringState />;
   }
 
   if (requiresDbConnection && isProjectRestoreFailed) {
-    return <RestoreFailedState />
-  }
-
-  if (shouldRedirectToHomeForBuilding) {
-    return <LogoLoader />
+    return <RestoreFailedState />;
   }
 
   if (shouldShowBuildingState) {
-    return <BuildingState />
+    return <BuildingState />;
   }
 
-  return <Fragment key={selectedProject?.ref}>{children}</Fragment>
-}
+  return <Fragment key={selectedProject?.ref}>{children}</Fragment>;
+};

@@ -244,6 +244,7 @@ export function createStorageRoutes(
       if (contentType !== "application/octet-stream") {
         throw new StorageHttpError("validation", 400);
       }
+      await project.objectStorage.reconcileExpiredResumableUploadLeases();
       project.objectStorage.cleanupExpiredResumableUploads();
       const upload = await project.objectStorage.createResumableUpload(context, {
         bucketName: params.bucket,

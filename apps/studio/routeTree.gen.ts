@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as RedeemRouteImport } from './routes/redeem'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as McpRouteImport } from './routes/mcp'
 import { Route as MaintenanceRouteImport } from './routes/maintenance'
 import { Route as LogoutRouteImport } from './routes/logout'
 import { Route as JoinRouteImport } from './routes/join'
@@ -26,6 +27,7 @@ import { Route as ProjectRefRouteImport } from './routes/project/$ref'
 import { Route as OrgChar91_Char93RouteImport } from './routes/org.[_]'
 import { Route as NewSlugRouteImport } from './routes/new/$slug'
 import { Route as IntegrationsVercelRouteImport } from './routes/integrations/vercel'
+import { Route as AuthSplatRouteImport } from './routes/auth/$'
 import { Route as ApiStatusOverrideRouteImport } from './routes/api/status-override'
 import { Route as ApiParseQueryRouteImport } from './routes/api/parse-query'
 import { Route as ApiIncidentStatusRouteImport } from './routes/api/incident-status'
@@ -74,6 +76,8 @@ import { Route as IntegrationsVercelInstallRouteImport } from './routes/integrat
 import { Route as IntegrationsGithubAuthorizeRouteImport } from './routes/integrations/github/authorize'
 import { Route as ApiPlatformDeploymentModeRouteImport } from './routes/api/platform/deployment-mode'
 import { Route as ApiIntegrationsStripeSyncRouteImport } from './routes/api/integrations/stripe-sync'
+import { Route as ApiHealthReadyRouteImport } from './routes/api/health/ready'
+import { Route as ApiHealthLiveRouteImport } from './routes/api/health/live'
 import { Route as ApiEdgeFunctionsTestRouteImport } from './routes/api/edge-functions/test'
 import { Route as ApiContentGraphqlRouteImport } from './routes/api/content/graphql'
 import { Route as ApiAiDocsRouteImport } from './routes/api/ai/docs'
@@ -83,6 +87,7 @@ import { Route as AppSupportLinkRouteImport } from './routes/_app/support/link'
 import { Route as AppAccountSecurityRouteImport } from './routes/_app/account/security'
 import { Route as AppAccountMeRouteImport } from './routes/_app/account/me'
 import { Route as AppAccountAuditRouteImport } from './routes/_app/account/audit'
+import { Route as DotwellKnownOauthProtectedResourceMcpRouteImport } from './routes/[.]well-known/oauth-protected-resource/mcp'
 import { Route as ProjectRefSqlIndexRouteImport } from './routes/project/$ref/sql/index'
 import { Route as ProjectRefObservabilityIndexRouteImport } from './routes/project/$ref/observability/index'
 import { Route as ProjectRefLogsIndexRouteImport } from './routes/project/$ref/logs/index'
@@ -158,6 +163,7 @@ import { Route as ProjectRefAuthUrlConfigurationRouteImport } from './routes/pro
 import { Route as ProjectRefAuthThirdPartyRouteImport } from './routes/project/$ref/auth/third-party'
 import { Route as ProjectRefAuthSmtpRouteImport } from './routes/project/$ref/auth/smtp'
 import { Route as ProjectRefAuthSessionsRouteImport } from './routes/project/$ref/auth/sessions'
+import { Route as ProjectRefAuthRegisterRouteImport } from './routes/project/$ref/auth/register'
 import { Route as ProjectRefAuthRateLimitsRouteImport } from './routes/project/$ref/auth/rate-limits'
 import { Route as ProjectRefAuthProvidersRouteImport } from './routes/project/$ref/auth/providers'
 import { Route as ProjectRefAuthProtectionRouteImport } from './routes/project/$ref/auth/protection'
@@ -242,11 +248,14 @@ import { Route as IntegrationsVercelSlugMarketplaceChooseProjectRouteImport } fr
 import { Route as IntegrationsVercelSlugDeployButtonNewProjectRouteImport } from './routes/integrations/vercel/$slug/deploy-button/new-project'
 import { Route as ApiV1ProjectsRefApiKeysRouteImport } from './routes/api/v1/projects/$ref/api-keys'
 import { Route as ApiPlatformStorageAdminRefSplatRouteImport } from './routes/api/platform/storage-admin/$ref/$'
+import { Route as ApiPlatformSqliteMetaRefSplatRouteImport } from './routes/api/platform/sqlite-meta/$ref/$'
 import { Route as ApiPlatformPropsOrgSlugRouteImport } from './routes/api/platform/props/org/$slug'
 import { Route as ApiPlatformProjectsRefSettingsRouteImport } from './routes/api/platform/projects/$ref/settings'
 import { Route as ApiPlatformProjectsRefRunLintsRouteImport } from './routes/api/platform/projects/$ref/run-lints'
 import { Route as ApiPlatformProjectsRefInfraMonitoringRouteImport } from './routes/api/platform/projects/$ref/infra-monitoring'
 import { Route as ApiPlatformProjectsRefDatabasesRouteImport } from './routes/api/platform/projects/$ref/databases'
+import { Route as ApiPlatformProjectAuthRefVerificationCodeRouteImport } from './routes/api/platform/project-auth/$ref/verification-code'
+import { Route as ApiPlatformProjectAuthRefAgentTokenRouteImport } from './routes/api/platform/project-auth/$ref/agent-token'
 import { Route as ApiPlatformPgMetaRefViewsRouteImport } from './routes/api/platform/pg-meta/$ref/views'
 import { Route as ApiPlatformPgMetaRefTypesRouteImport } from './routes/api/platform/pg-meta/$ref/types'
 import { Route as ApiPlatformPgMetaRefTriggersRouteImport } from './routes/api/platform/pg-meta/$ref/triggers'
@@ -334,6 +343,11 @@ const OnboardingRoute = OnboardingRouteImport.update({
   path: '/onboarding',
   getParentRoute: () => rootRouteImport,
 } as any)
+const McpRoute = McpRouteImport.update({
+  id: '/mcp',
+  path: '/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MaintenanceRoute = MaintenanceRouteImport.update({
   id: '/maintenance',
   path: '/maintenance',
@@ -401,6 +415,11 @@ const NewSlugRoute = NewSlugRouteImport.update({
 const IntegrationsVercelRoute = IntegrationsVercelRouteImport.update({
   id: '/integrations/vercel',
   path: '/integrations/vercel',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthSplatRoute = AuthSplatRouteImport.update({
+  id: '/auth/$',
+  path: '/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiStatusOverrideRoute = ApiStatusOverrideRouteImport.update({
@@ -650,6 +669,16 @@ const ApiIntegrationsStripeSyncRoute =
     path: '/api/integrations/stripe-sync',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiHealthReadyRoute = ApiHealthReadyRouteImport.update({
+  id: '/api/health/ready',
+  path: '/api/health/ready',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiHealthLiveRoute = ApiHealthLiveRouteImport.update({
+  id: '/api/health/live',
+  path: '/api/health/live',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiEdgeFunctionsTestRoute = ApiEdgeFunctionsTestRouteImport.update({
   id: '/api/edge-functions/test',
   path: '/api/edge-functions/test',
@@ -695,6 +724,12 @@ const AppAccountAuditRoute = AppAccountAuditRouteImport.update({
   path: '/audit',
   getParentRoute: () => AppAccountRoute,
 } as any)
+const DotwellKnownOauthProtectedResourceMcpRoute =
+  DotwellKnownOauthProtectedResourceMcpRouteImport.update({
+    id: '/.well-known/oauth-protected-resource/mcp',
+    path: '/.well-known/oauth-protected-resource/mcp',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectRefSqlIndexRoute = ProjectRefSqlIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -1119,6 +1154,11 @@ const ProjectRefAuthSmtpRoute = ProjectRefAuthSmtpRouteImport.update({
 const ProjectRefAuthSessionsRoute = ProjectRefAuthSessionsRouteImport.update({
   id: '/sessions',
   path: '/sessions',
+  getParentRoute: () => ProjectRefAuthRoute,
+} as any)
+const ProjectRefAuthRegisterRoute = ProjectRefAuthRegisterRouteImport.update({
+  id: '/register',
+  path: '/register',
   getParentRoute: () => ProjectRefAuthRoute,
 } as any)
 const ProjectRefAuthRateLimitsRoute =
@@ -1593,6 +1633,12 @@ const ApiPlatformStorageAdminRefSplatRoute =
     path: '/api/platform/storage-admin/$ref/$',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPlatformSqliteMetaRefSplatRoute =
+  ApiPlatformSqliteMetaRefSplatRouteImport.update({
+    id: '/api/platform/sqlite-meta/$ref/$',
+    path: '/api/platform/sqlite-meta/$ref/$',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPlatformPropsOrgSlugRoute = ApiPlatformPropsOrgSlugRouteImport.update({
   id: '/api/platform/props/org/$slug',
   path: '/api/platform/props/org/$slug',
@@ -1620,6 +1666,18 @@ const ApiPlatformProjectsRefDatabasesRoute =
   ApiPlatformProjectsRefDatabasesRouteImport.update({
     id: '/api/platform/projects/$ref/databases',
     path: '/api/platform/projects/$ref/databases',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPlatformProjectAuthRefVerificationCodeRoute =
+  ApiPlatformProjectAuthRefVerificationCodeRouteImport.update({
+    id: '/api/platform/project-auth/$ref/verification-code',
+    path: '/api/platform/project-auth/$ref/verification-code',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiPlatformProjectAuthRefAgentTokenRoute =
+  ApiPlatformProjectAuthRefAgentTokenRouteImport.update({
+    id: '/api/platform/project-auth/$ref/agent-token',
+    path: '/api/platform/project-auth/$ref/agent-token',
     getParentRoute: () => rootRouteImport,
   } as any)
 const ApiPlatformPgMetaRefViewsRoute =
@@ -2056,6 +2114,7 @@ export interface FileRoutesByFullPath {
   '/join': typeof JoinRoute
   '/logout': typeof LogoutRoute
   '/maintenance': typeof MaintenanceRoute
+  '/mcp': typeof McpRoute
   '/onboarding': typeof OnboardingRoute
   '/redeem': typeof RedeemRoute
   '/verify-email': typeof VerifyEmailRoute
@@ -2082,11 +2141,13 @@ export interface FileRoutesByFullPath {
   '/api/incident-status': typeof ApiIncidentStatusRoute
   '/api/parse-query': typeof ApiParseQueryRoute
   '/api/status-override': typeof ApiStatusOverrideRoute
+  '/auth/$': typeof AuthSplatRoute
   '/integrations/vercel': typeof IntegrationsVercelRouteWithChildren
   '/new/$slug': typeof NewSlugRoute
   '/org/_': typeof OrgChar91_Char93RouteWithChildren
   '/project/$ref': typeof ProjectRefRouteWithChildren
   '/project/_': typeof ProjectChar91_Char93RouteWithChildren
+  '/.well-known/oauth-protected-resource/mcp': typeof DotwellKnownOauthProtectedResourceMcpRoute
   '/account/audit': typeof AppAccountAuditRoute
   '/account/me': typeof AppAccountMeRoute
   '/account/security': typeof AppAccountSecurityRoute
@@ -2096,6 +2157,8 @@ export interface FileRoutesByFullPath {
   '/api/ai/docs': typeof ApiAiDocsRoute
   '/api/content/graphql': typeof ApiContentGraphqlRoute
   '/api/edge-functions/test': typeof ApiEdgeFunctionsTestRoute
+  '/api/health/live': typeof ApiHealthLiveRoute
+  '/api/health/ready': typeof ApiHealthReadyRoute
   '/api/integrations/stripe-sync': typeof ApiIntegrationsStripeSyncRoute
   '/api/platform/deployment-mode': typeof ApiPlatformDeploymentModeRoute
   '/integrations/github/authorize': typeof IntegrationsGithubAuthorizeRoute
@@ -2160,6 +2223,7 @@ export interface FileRoutesByFullPath {
   '/project/$ref/auth/protection': typeof ProjectRefAuthProtectionRoute
   '/project/$ref/auth/providers': typeof ProjectRefAuthProvidersRoute
   '/project/$ref/auth/rate-limits': typeof ProjectRefAuthRateLimitsRoute
+  '/project/$ref/auth/register': typeof ProjectRefAuthRegisterRoute
   '/project/$ref/auth/sessions': typeof ProjectRefAuthSessionsRoute
   '/project/$ref/auth/smtp': typeof ProjectRefAuthSmtpRoute
   '/project/$ref/auth/third-party': typeof ProjectRefAuthThirdPartyRoute
@@ -2256,11 +2320,14 @@ export interface FileRoutesByFullPath {
   '/api/platform/pg-meta/$ref/triggers': typeof ApiPlatformPgMetaRefTriggersRoute
   '/api/platform/pg-meta/$ref/types': typeof ApiPlatformPgMetaRefTypesRoute
   '/api/platform/pg-meta/$ref/views': typeof ApiPlatformPgMetaRefViewsRoute
+  '/api/platform/project-auth/$ref/agent-token': typeof ApiPlatformProjectAuthRefAgentTokenRoute
+  '/api/platform/project-auth/$ref/verification-code': typeof ApiPlatformProjectAuthRefVerificationCodeRoute
   '/api/platform/projects/$ref/databases': typeof ApiPlatformProjectsRefDatabasesRoute
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
   '/api/platform/props/org/$slug': typeof ApiPlatformPropsOrgSlugRoute
+  '/api/platform/sqlite-meta/$ref/$': typeof ApiPlatformSqliteMetaRefSplatRoute
   '/api/platform/storage-admin/$ref/$': typeof ApiPlatformStorageAdminRefSplatRoute
   '/api/v1/projects/$ref/api-keys': typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   '/integrations/vercel/$slug/deploy-button/new-project': typeof IntegrationsVercelSlugDeployButtonNewProjectRoute
@@ -2365,6 +2432,7 @@ export interface FileRoutesByTo {
   '/join': typeof JoinRoute
   '/logout': typeof LogoutRoute
   '/maintenance': typeof MaintenanceRoute
+  '/mcp': typeof McpRoute
   '/onboarding': typeof OnboardingRoute
   '/redeem': typeof RedeemRoute
   '/verify-email': typeof VerifyEmailRoute
@@ -2390,10 +2458,12 @@ export interface FileRoutesByTo {
   '/api/incident-status': typeof ApiIncidentStatusRoute
   '/api/parse-query': typeof ApiParseQueryRoute
   '/api/status-override': typeof ApiStatusOverrideRoute
+  '/auth/$': typeof AuthSplatRoute
   '/integrations/vercel': typeof IntegrationsVercelRouteWithChildren
   '/new/$slug': typeof NewSlugRoute
   '/org/_': typeof OrgChar91_Char93RouteWithChildren
   '/project/_': typeof ProjectChar91_Char93RouteWithChildren
+  '/.well-known/oauth-protected-resource/mcp': typeof DotwellKnownOauthProtectedResourceMcpRoute
   '/account/audit': typeof AppAccountAuditRoute
   '/account/me': typeof AppAccountMeRoute
   '/account/security': typeof AppAccountSecurityRoute
@@ -2403,6 +2473,8 @@ export interface FileRoutesByTo {
   '/api/ai/docs': typeof ApiAiDocsRoute
   '/api/content/graphql': typeof ApiContentGraphqlRoute
   '/api/edge-functions/test': typeof ApiEdgeFunctionsTestRoute
+  '/api/health/live': typeof ApiHealthLiveRoute
+  '/api/health/ready': typeof ApiHealthReadyRoute
   '/api/integrations/stripe-sync': typeof ApiIntegrationsStripeSyncRoute
   '/api/platform/deployment-mode': typeof ApiPlatformDeploymentModeRoute
   '/integrations/github/authorize': typeof IntegrationsGithubAuthorizeRoute
@@ -2460,6 +2532,7 @@ export interface FileRoutesByTo {
   '/project/$ref/auth/protection': typeof ProjectRefAuthProtectionRoute
   '/project/$ref/auth/providers': typeof ProjectRefAuthProvidersRoute
   '/project/$ref/auth/rate-limits': typeof ProjectRefAuthRateLimitsRoute
+  '/project/$ref/auth/register': typeof ProjectRefAuthRegisterRoute
   '/project/$ref/auth/sessions': typeof ProjectRefAuthSessionsRoute
   '/project/$ref/auth/smtp': typeof ProjectRefAuthSmtpRoute
   '/project/$ref/auth/third-party': typeof ProjectRefAuthThirdPartyRoute
@@ -2553,11 +2626,14 @@ export interface FileRoutesByTo {
   '/api/platform/pg-meta/$ref/triggers': typeof ApiPlatformPgMetaRefTriggersRoute
   '/api/platform/pg-meta/$ref/types': typeof ApiPlatformPgMetaRefTypesRoute
   '/api/platform/pg-meta/$ref/views': typeof ApiPlatformPgMetaRefViewsRoute
+  '/api/platform/project-auth/$ref/agent-token': typeof ApiPlatformProjectAuthRefAgentTokenRoute
+  '/api/platform/project-auth/$ref/verification-code': typeof ApiPlatformProjectAuthRefVerificationCodeRoute
   '/api/platform/projects/$ref/databases': typeof ApiPlatformProjectsRefDatabasesRoute
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
   '/api/platform/props/org/$slug': typeof ApiPlatformPropsOrgSlugRoute
+  '/api/platform/sqlite-meta/$ref/$': typeof ApiPlatformSqliteMetaRefSplatRoute
   '/api/platform/storage-admin/$ref/$': typeof ApiPlatformStorageAdminRefSplatRoute
   '/api/v1/projects/$ref/api-keys': typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   '/integrations/vercel/$slug/deploy-button/new-project': typeof IntegrationsVercelSlugDeployButtonNewProjectRoute
@@ -2665,6 +2741,7 @@ export interface FileRoutesById {
   '/join': typeof JoinRoute
   '/logout': typeof LogoutRoute
   '/maintenance': typeof MaintenanceRoute
+  '/mcp': typeof McpRoute
   '/onboarding': typeof OnboardingRoute
   '/redeem': typeof RedeemRoute
   '/verify-email': typeof VerifyEmailRoute
@@ -2691,11 +2768,13 @@ export interface FileRoutesById {
   '/api/incident-status': typeof ApiIncidentStatusRoute
   '/api/parse-query': typeof ApiParseQueryRoute
   '/api/status-override': typeof ApiStatusOverrideRoute
+  '/auth/$': typeof AuthSplatRoute
   '/integrations/vercel': typeof IntegrationsVercelRouteWithChildren
   '/new/$slug': typeof NewSlugRoute
   '/org/_': typeof OrgChar91_Char93RouteWithChildren
   '/project/$ref': typeof ProjectRefRouteWithChildren
   '/project/_': typeof ProjectChar91_Char93RouteWithChildren
+  '/.well-known/oauth-protected-resource/mcp': typeof DotwellKnownOauthProtectedResourceMcpRoute
   '/_app/account/audit': typeof AppAccountAuditRoute
   '/_app/account/me': typeof AppAccountMeRoute
   '/_app/account/security': typeof AppAccountSecurityRoute
@@ -2705,6 +2784,8 @@ export interface FileRoutesById {
   '/api/ai/docs': typeof ApiAiDocsRoute
   '/api/content/graphql': typeof ApiContentGraphqlRoute
   '/api/edge-functions/test': typeof ApiEdgeFunctionsTestRoute
+  '/api/health/live': typeof ApiHealthLiveRoute
+  '/api/health/ready': typeof ApiHealthReadyRoute
   '/api/integrations/stripe-sync': typeof ApiIntegrationsStripeSyncRoute
   '/api/platform/deployment-mode': typeof ApiPlatformDeploymentModeRoute
   '/integrations/github/authorize': typeof IntegrationsGithubAuthorizeRoute
@@ -2769,6 +2850,7 @@ export interface FileRoutesById {
   '/project/$ref/auth/protection': typeof ProjectRefAuthProtectionRoute
   '/project/$ref/auth/providers': typeof ProjectRefAuthProvidersRoute
   '/project/$ref/auth/rate-limits': typeof ProjectRefAuthRateLimitsRoute
+  '/project/$ref/auth/register': typeof ProjectRefAuthRegisterRoute
   '/project/$ref/auth/sessions': typeof ProjectRefAuthSessionsRoute
   '/project/$ref/auth/smtp': typeof ProjectRefAuthSmtpRoute
   '/project/$ref/auth/third-party': typeof ProjectRefAuthThirdPartyRoute
@@ -2865,11 +2947,14 @@ export interface FileRoutesById {
   '/api/platform/pg-meta/$ref/triggers': typeof ApiPlatformPgMetaRefTriggersRoute
   '/api/platform/pg-meta/$ref/types': typeof ApiPlatformPgMetaRefTypesRoute
   '/api/platform/pg-meta/$ref/views': typeof ApiPlatformPgMetaRefViewsRoute
+  '/api/platform/project-auth/$ref/agent-token': typeof ApiPlatformProjectAuthRefAgentTokenRoute
+  '/api/platform/project-auth/$ref/verification-code': typeof ApiPlatformProjectAuthRefVerificationCodeRoute
   '/api/platform/projects/$ref/databases': typeof ApiPlatformProjectsRefDatabasesRoute
   '/api/platform/projects/$ref/infra-monitoring': typeof ApiPlatformProjectsRefInfraMonitoringRoute
   '/api/platform/projects/$ref/run-lints': typeof ApiPlatformProjectsRefRunLintsRoute
   '/api/platform/projects/$ref/settings': typeof ApiPlatformProjectsRefSettingsRoute
   '/api/platform/props/org/$slug': typeof ApiPlatformPropsOrgSlugRoute
+  '/api/platform/sqlite-meta/$ref/$': typeof ApiPlatformSqliteMetaRefSplatRoute
   '/api/platform/storage-admin/$ref/$': typeof ApiPlatformStorageAdminRefSplatRoute
   '/api/v1/projects/$ref/api-keys': typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   '/integrations/vercel/$slug/deploy-button/new-project': typeof IntegrationsVercelSlugDeployButtonNewProjectRoute
@@ -2976,6 +3061,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/logout'
     | '/maintenance'
+    | '/mcp'
     | '/onboarding'
     | '/redeem'
     | '/verify-email'
@@ -3002,11 +3088,13 @@ export interface FileRouteTypes {
     | '/api/incident-status'
     | '/api/parse-query'
     | '/api/status-override'
+    | '/auth/$'
     | '/integrations/vercel'
     | '/new/$slug'
     | '/org/_'
     | '/project/$ref'
     | '/project/_'
+    | '/.well-known/oauth-protected-resource/mcp'
     | '/account/audit'
     | '/account/me'
     | '/account/security'
@@ -3016,6 +3104,8 @@ export interface FileRouteTypes {
     | '/api/ai/docs'
     | '/api/content/graphql'
     | '/api/edge-functions/test'
+    | '/api/health/live'
+    | '/api/health/ready'
     | '/api/integrations/stripe-sync'
     | '/api/platform/deployment-mode'
     | '/integrations/github/authorize'
@@ -3080,6 +3170,7 @@ export interface FileRouteTypes {
     | '/project/$ref/auth/protection'
     | '/project/$ref/auth/providers'
     | '/project/$ref/auth/rate-limits'
+    | '/project/$ref/auth/register'
     | '/project/$ref/auth/sessions'
     | '/project/$ref/auth/smtp'
     | '/project/$ref/auth/third-party'
@@ -3176,11 +3267,14 @@ export interface FileRouteTypes {
     | '/api/platform/pg-meta/$ref/triggers'
     | '/api/platform/pg-meta/$ref/types'
     | '/api/platform/pg-meta/$ref/views'
+    | '/api/platform/project-auth/$ref/agent-token'
+    | '/api/platform/project-auth/$ref/verification-code'
     | '/api/platform/projects/$ref/databases'
     | '/api/platform/projects/$ref/infra-monitoring'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
     | '/api/platform/props/org/$slug'
+    | '/api/platform/sqlite-meta/$ref/$'
     | '/api/platform/storage-admin/$ref/$'
     | '/api/v1/projects/$ref/api-keys'
     | '/integrations/vercel/$slug/deploy-button/new-project'
@@ -3285,6 +3379,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/logout'
     | '/maintenance'
+    | '/mcp'
     | '/onboarding'
     | '/redeem'
     | '/verify-email'
@@ -3310,10 +3405,12 @@ export interface FileRouteTypes {
     | '/api/incident-status'
     | '/api/parse-query'
     | '/api/status-override'
+    | '/auth/$'
     | '/integrations/vercel'
     | '/new/$slug'
     | '/org/_'
     | '/project/_'
+    | '/.well-known/oauth-protected-resource/mcp'
     | '/account/audit'
     | '/account/me'
     | '/account/security'
@@ -3323,6 +3420,8 @@ export interface FileRouteTypes {
     | '/api/ai/docs'
     | '/api/content/graphql'
     | '/api/edge-functions/test'
+    | '/api/health/live'
+    | '/api/health/ready'
     | '/api/integrations/stripe-sync'
     | '/api/platform/deployment-mode'
     | '/integrations/github/authorize'
@@ -3380,6 +3479,7 @@ export interface FileRouteTypes {
     | '/project/$ref/auth/protection'
     | '/project/$ref/auth/providers'
     | '/project/$ref/auth/rate-limits'
+    | '/project/$ref/auth/register'
     | '/project/$ref/auth/sessions'
     | '/project/$ref/auth/smtp'
     | '/project/$ref/auth/third-party'
@@ -3473,11 +3573,14 @@ export interface FileRouteTypes {
     | '/api/platform/pg-meta/$ref/triggers'
     | '/api/platform/pg-meta/$ref/types'
     | '/api/platform/pg-meta/$ref/views'
+    | '/api/platform/project-auth/$ref/agent-token'
+    | '/api/platform/project-auth/$ref/verification-code'
     | '/api/platform/projects/$ref/databases'
     | '/api/platform/projects/$ref/infra-monitoring'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
     | '/api/platform/props/org/$slug'
+    | '/api/platform/sqlite-meta/$ref/$'
     | '/api/platform/storage-admin/$ref/$'
     | '/api/v1/projects/$ref/api-keys'
     | '/integrations/vercel/$slug/deploy-button/new-project'
@@ -3584,6 +3687,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/logout'
     | '/maintenance'
+    | '/mcp'
     | '/onboarding'
     | '/redeem'
     | '/verify-email'
@@ -3610,11 +3714,13 @@ export interface FileRouteTypes {
     | '/api/incident-status'
     | '/api/parse-query'
     | '/api/status-override'
+    | '/auth/$'
     | '/integrations/vercel'
     | '/new/$slug'
     | '/org/_'
     | '/project/$ref'
     | '/project/_'
+    | '/.well-known/oauth-protected-resource/mcp'
     | '/_app/account/audit'
     | '/_app/account/me'
     | '/_app/account/security'
@@ -3624,6 +3730,8 @@ export interface FileRouteTypes {
     | '/api/ai/docs'
     | '/api/content/graphql'
     | '/api/edge-functions/test'
+    | '/api/health/live'
+    | '/api/health/ready'
     | '/api/integrations/stripe-sync'
     | '/api/platform/deployment-mode'
     | '/integrations/github/authorize'
@@ -3688,6 +3796,7 @@ export interface FileRouteTypes {
     | '/project/$ref/auth/protection'
     | '/project/$ref/auth/providers'
     | '/project/$ref/auth/rate-limits'
+    | '/project/$ref/auth/register'
     | '/project/$ref/auth/sessions'
     | '/project/$ref/auth/smtp'
     | '/project/$ref/auth/third-party'
@@ -3784,11 +3893,14 @@ export interface FileRouteTypes {
     | '/api/platform/pg-meta/$ref/triggers'
     | '/api/platform/pg-meta/$ref/types'
     | '/api/platform/pg-meta/$ref/views'
+    | '/api/platform/project-auth/$ref/agent-token'
+    | '/api/platform/project-auth/$ref/verification-code'
     | '/api/platform/projects/$ref/databases'
     | '/api/platform/projects/$ref/infra-monitoring'
     | '/api/platform/projects/$ref/run-lints'
     | '/api/platform/projects/$ref/settings'
     | '/api/platform/props/org/$slug'
+    | '/api/platform/sqlite-meta/$ref/$'
     | '/api/platform/storage-admin/$ref/$'
     | '/api/v1/projects/$ref/api-keys'
     | '/integrations/vercel/$slug/deploy-button/new-project'
@@ -3896,6 +4008,7 @@ export interface RootRouteChildren {
   JoinRoute: typeof JoinRoute
   LogoutRoute: typeof LogoutRoute
   MaintenanceRoute: typeof MaintenanceRoute
+  McpRoute: typeof McpRoute
   OnboardingRoute: typeof OnboardingRoute
   RedeemRoute: typeof RedeemRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
@@ -3911,14 +4024,18 @@ export interface RootRouteChildren {
   ApiIncidentStatusRoute: typeof ApiIncidentStatusRoute
   ApiParseQueryRoute: typeof ApiParseQueryRoute
   ApiStatusOverrideRoute: typeof ApiStatusOverrideRoute
+  AuthSplatRoute: typeof AuthSplatRoute
   IntegrationsVercelRoute: typeof IntegrationsVercelRouteWithChildren
   NewSlugRoute: typeof NewSlugRoute
   OrgChar91_Char93Route: typeof OrgChar91_Char93RouteWithChildren
   ProjectRefRoute: typeof ProjectRefRouteWithChildren
   ProjectChar91_Char93Route: typeof ProjectChar91_Char93RouteWithChildren
+  DotwellKnownOauthProtectedResourceMcpRoute: typeof DotwellKnownOauthProtectedResourceMcpRoute
   ApiAiDocsRoute: typeof ApiAiDocsRoute
   ApiContentGraphqlRoute: typeof ApiContentGraphqlRoute
   ApiEdgeFunctionsTestRoute: typeof ApiEdgeFunctionsTestRoute
+  ApiHealthLiveRoute: typeof ApiHealthLiveRoute
+  ApiHealthReadyRoute: typeof ApiHealthReadyRoute
   ApiIntegrationsStripeSyncRoute: typeof ApiIntegrationsStripeSyncRoute
   ApiPlatformDeploymentModeRoute: typeof ApiPlatformDeploymentModeRoute
   IntegrationsGithubAuthorizeRoute: typeof IntegrationsGithubAuthorizeRoute
@@ -3959,11 +4076,14 @@ export interface RootRouteChildren {
   ApiPlatformPgMetaRefTriggersRoute: typeof ApiPlatformPgMetaRefTriggersRoute
   ApiPlatformPgMetaRefTypesRoute: typeof ApiPlatformPgMetaRefTypesRoute
   ApiPlatformPgMetaRefViewsRoute: typeof ApiPlatformPgMetaRefViewsRoute
+  ApiPlatformProjectAuthRefAgentTokenRoute: typeof ApiPlatformProjectAuthRefAgentTokenRoute
+  ApiPlatformProjectAuthRefVerificationCodeRoute: typeof ApiPlatformProjectAuthRefVerificationCodeRoute
   ApiPlatformProjectsRefDatabasesRoute: typeof ApiPlatformProjectsRefDatabasesRoute
   ApiPlatformProjectsRefInfraMonitoringRoute: typeof ApiPlatformProjectsRefInfraMonitoringRoute
   ApiPlatformProjectsRefRunLintsRoute: typeof ApiPlatformProjectsRefRunLintsRoute
   ApiPlatformProjectsRefSettingsRoute: typeof ApiPlatformProjectsRefSettingsRoute
   ApiPlatformPropsOrgSlugRoute: typeof ApiPlatformPropsOrgSlugRoute
+  ApiPlatformSqliteMetaRefSplatRoute: typeof ApiPlatformSqliteMetaRefSplatRoute
   ApiPlatformStorageAdminRefSplatRoute: typeof ApiPlatformStorageAdminRefSplatRoute
   ApiV1ProjectsRefApiKeysRoute: typeof ApiV1ProjectsRefApiKeysRouteWithChildren
   ApiPlatformProjectsRefIndexRoute: typeof ApiPlatformProjectsRefIndexRoute
@@ -4032,6 +4152,13 @@ declare module '@tanstack/react-router' {
       path: '/onboarding'
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/mcp': {
+      id: '/mcp'
+      path: '/mcp'
+      fullPath: '/mcp'
+      preLoaderRoute: typeof McpRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/maintenance': {
@@ -4130,6 +4257,13 @@ declare module '@tanstack/react-router' {
       path: '/integrations/vercel'
       fullPath: '/integrations/vercel'
       preLoaderRoute: typeof IntegrationsVercelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/$': {
+      id: '/auth/$'
+      path: '/auth/$'
+      fullPath: '/auth/$'
+      preLoaderRoute: typeof AuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/status-override': {
@@ -4468,6 +4602,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiIntegrationsStripeSyncRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/health/ready': {
+      id: '/api/health/ready'
+      path: '/api/health/ready'
+      fullPath: '/api/health/ready'
+      preLoaderRoute: typeof ApiHealthReadyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/health/live': {
+      id: '/api/health/live'
+      path: '/api/health/live'
+      fullPath: '/api/health/live'
+      preLoaderRoute: typeof ApiHealthLiveRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/edge-functions/test': {
       id: '/api/edge-functions/test'
       path: '/api/edge-functions/test'
@@ -4530,6 +4678,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/account/audit'
       preLoaderRoute: typeof AppAccountAuditRouteImport
       parentRoute: typeof AppAccountRoute
+    }
+    '/.well-known/oauth-protected-resource/mcp': {
+      id: '/.well-known/oauth-protected-resource/mcp'
+      path: '/.well-known/oauth-protected-resource/mcp'
+      fullPath: '/.well-known/oauth-protected-resource/mcp'
+      preLoaderRoute: typeof DotwellKnownOauthProtectedResourceMcpRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/project/$ref/sql/': {
       id: '/project/$ref/sql/'
@@ -5054,6 +5209,13 @@ declare module '@tanstack/react-router' {
       path: '/sessions'
       fullPath: '/project/$ref/auth/sessions'
       preLoaderRoute: typeof ProjectRefAuthSessionsRouteImport
+      parentRoute: typeof ProjectRefAuthRoute
+    }
+    '/project/$ref/auth/register': {
+      id: '/project/$ref/auth/register'
+      path: '/register'
+      fullPath: '/project/$ref/auth/register'
+      preLoaderRoute: typeof ProjectRefAuthRegisterRouteImport
       parentRoute: typeof ProjectRefAuthRoute
     }
     '/project/$ref/auth/rate-limits': {
@@ -5644,6 +5806,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPlatformStorageAdminRefSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/platform/sqlite-meta/$ref/$': {
+      id: '/api/platform/sqlite-meta/$ref/$'
+      path: '/api/platform/sqlite-meta/$ref/$'
+      fullPath: '/api/platform/sqlite-meta/$ref/$'
+      preLoaderRoute: typeof ApiPlatformSqliteMetaRefSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/platform/props/org/$slug': {
       id: '/api/platform/props/org/$slug'
       path: '/api/platform/props/org/$slug'
@@ -5677,6 +5846,20 @@ declare module '@tanstack/react-router' {
       path: '/api/platform/projects/$ref/databases'
       fullPath: '/api/platform/projects/$ref/databases'
       preLoaderRoute: typeof ApiPlatformProjectsRefDatabasesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/platform/project-auth/$ref/verification-code': {
+      id: '/api/platform/project-auth/$ref/verification-code'
+      path: '/api/platform/project-auth/$ref/verification-code'
+      fullPath: '/api/platform/project-auth/$ref/verification-code'
+      preLoaderRoute: typeof ApiPlatformProjectAuthRefVerificationCodeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/platform/project-auth/$ref/agent-token': {
+      id: '/api/platform/project-auth/$ref/agent-token'
+      path: '/api/platform/project-auth/$ref/agent-token'
+      fullPath: '/api/platform/project-auth/$ref/agent-token'
+      preLoaderRoute: typeof ApiPlatformProjectAuthRefAgentTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/platform/pg-meta/$ref/views': {
@@ -6360,6 +6543,7 @@ interface ProjectRefAuthRouteChildren {
   ProjectRefAuthProtectionRoute: typeof ProjectRefAuthProtectionRoute
   ProjectRefAuthProvidersRoute: typeof ProjectRefAuthProvidersRoute
   ProjectRefAuthRateLimitsRoute: typeof ProjectRefAuthRateLimitsRoute
+  ProjectRefAuthRegisterRoute: typeof ProjectRefAuthRegisterRoute
   ProjectRefAuthSessionsRoute: typeof ProjectRefAuthSessionsRoute
   ProjectRefAuthSmtpRoute: typeof ProjectRefAuthSmtpRoute
   ProjectRefAuthThirdPartyRoute: typeof ProjectRefAuthThirdPartyRoute
@@ -6381,6 +6565,7 @@ const ProjectRefAuthRouteChildren: ProjectRefAuthRouteChildren = {
   ProjectRefAuthProtectionRoute: ProjectRefAuthProtectionRoute,
   ProjectRefAuthProvidersRoute: ProjectRefAuthProvidersRoute,
   ProjectRefAuthRateLimitsRoute: ProjectRefAuthRateLimitsRoute,
+  ProjectRefAuthRegisterRoute: ProjectRefAuthRegisterRoute,
   ProjectRefAuthSessionsRoute: ProjectRefAuthSessionsRoute,
   ProjectRefAuthSmtpRoute: ProjectRefAuthSmtpRoute,
   ProjectRefAuthThirdPartyRoute: ProjectRefAuthThirdPartyRoute,
@@ -6864,6 +7049,7 @@ const rootRouteChildren: RootRouteChildren = {
   JoinRoute: JoinRoute,
   LogoutRoute: LogoutRoute,
   MaintenanceRoute: MaintenanceRoute,
+  McpRoute: McpRoute,
   OnboardingRoute: OnboardingRoute,
   RedeemRoute: RedeemRoute,
   VerifyEmailRoute: VerifyEmailRoute,
@@ -6879,14 +7065,19 @@ const rootRouteChildren: RootRouteChildren = {
   ApiIncidentStatusRoute: ApiIncidentStatusRoute,
   ApiParseQueryRoute: ApiParseQueryRoute,
   ApiStatusOverrideRoute: ApiStatusOverrideRoute,
+  AuthSplatRoute: AuthSplatRoute,
   IntegrationsVercelRoute: IntegrationsVercelRouteWithChildren,
   NewSlugRoute: NewSlugRoute,
   OrgChar91_Char93Route: OrgChar91_Char93RouteWithChildren,
   ProjectRefRoute: ProjectRefRouteWithChildren,
   ProjectChar91_Char93Route: ProjectChar91_Char93RouteWithChildren,
+  DotwellKnownOauthProtectedResourceMcpRoute:
+    DotwellKnownOauthProtectedResourceMcpRoute,
   ApiAiDocsRoute: ApiAiDocsRoute,
   ApiContentGraphqlRoute: ApiContentGraphqlRoute,
   ApiEdgeFunctionsTestRoute: ApiEdgeFunctionsTestRoute,
+  ApiHealthLiveRoute: ApiHealthLiveRoute,
+  ApiHealthReadyRoute: ApiHealthReadyRoute,
   ApiIntegrationsStripeSyncRoute: ApiIntegrationsStripeSyncRoute,
   ApiPlatformDeploymentModeRoute: ApiPlatformDeploymentModeRoute,
   IntegrationsGithubAuthorizeRoute: IntegrationsGithubAuthorizeRoute,
@@ -6933,12 +7124,17 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPlatformPgMetaRefTriggersRoute: ApiPlatformPgMetaRefTriggersRoute,
   ApiPlatformPgMetaRefTypesRoute: ApiPlatformPgMetaRefTypesRoute,
   ApiPlatformPgMetaRefViewsRoute: ApiPlatformPgMetaRefViewsRoute,
+  ApiPlatformProjectAuthRefAgentTokenRoute:
+    ApiPlatformProjectAuthRefAgentTokenRoute,
+  ApiPlatformProjectAuthRefVerificationCodeRoute:
+    ApiPlatformProjectAuthRefVerificationCodeRoute,
   ApiPlatformProjectsRefDatabasesRoute: ApiPlatformProjectsRefDatabasesRoute,
   ApiPlatformProjectsRefInfraMonitoringRoute:
     ApiPlatformProjectsRefInfraMonitoringRoute,
   ApiPlatformProjectsRefRunLintsRoute: ApiPlatformProjectsRefRunLintsRoute,
   ApiPlatformProjectsRefSettingsRoute: ApiPlatformProjectsRefSettingsRoute,
   ApiPlatformPropsOrgSlugRoute: ApiPlatformPropsOrgSlugRoute,
+  ApiPlatformSqliteMetaRefSplatRoute: ApiPlatformSqliteMetaRefSplatRoute,
   ApiPlatformStorageAdminRefSplatRoute: ApiPlatformStorageAdminRefSplatRoute,
   ApiV1ProjectsRefApiKeysRoute: ApiV1ProjectsRefApiKeysRouteWithChildren,
   ApiPlatformProjectsRefIndexRoute: ApiPlatformProjectsRefIndexRoute,

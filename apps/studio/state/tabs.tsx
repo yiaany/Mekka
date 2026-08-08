@@ -174,7 +174,7 @@ export function createTabsState(projectRef: string) {
   // Per-type behavior/UI, kept outside the Valtio proxy so handler closures
   // (which may capture non-serializable things like a React Query client or a
   // React component) are never proxied or persisted.
-  const tabHandlers = new Map<TabType, TabTypeHandler>()
+  const tabHandlers = new Map<TabType, TabTypeHandler[]>()
 
   const store = proxy({
     // RECENT ITEMS
@@ -388,20 +388,27 @@ export function createTabsState(projectRef: string) {
     // tabs first paint.
     handlerRegistrationVersion: 0,
     registerTabTypeHandler: (type: TabType, handler: TabTypeHandler) => {
-      tabHandlers.set(type, handler)
+      const handlers = tabHandlers.get(type) ?? []
+      tabHandlers.set(type, [...handlers, handler])
       store.handlerRegistrationVersion++
       return () => {
-        if (tabHandlers.get(type) === handler) {
-          tabHandlers.delete(type)
-          store.handlerRegistrationVersion++
-        }
+        const nextHandlers = (tabHandlers.get(type) ?? []).filter(
+          (candidate) => candidate !== handler
+        )
+        if (nextHandlers.length === 0) tabHandlers.delete(type)
+        else tabHandlers.set(type, nextHandlers)
+        store.handlerRegistrationVersion++
       }
     },
 
     // The status-indicator component registered for a tab type, if any. Read
     // `handlerRegistrationVersion` alongside this in render to stay reactive to
     // late registration.
-    getTabStatusIndicator: (type: TabType) => tabHandlers.get(type)?.StatusIndicator,
+    getTabStatusIndicator: (type: TabType) =>
+      tabHandlers
+        .get(type)
+        ?.map((handler) => handler.StatusIndicator)
+        .find((indicator) => indicator !== undefined),
 
     // The confirmation to show before closing the given tabs, or null if none
     // need confirming. Tabs are grouped by type and each type's handler is asked
@@ -419,8 +426,10 @@ export function createTabsState(projectRef: string) {
       }
 
       for (const [type, tabs] of tabsByType) {
-        const confirmation = tabHandlers.get(type)?.confirmClose?.(tabs)
-        if (confirmation) return confirmation
+        for (const handler of tabHandlers.get(type) ?? []) {
+          const confirmation = handler.confirmClose?.(tabs)
+          if (confirmation) return confirmation
+        }
       }
       return null
     },
@@ -434,7 +443,9 @@ export function createTabsState(projectRef: string) {
         .map((id) => store.tabsMap[id])
         .filter((tab): tab is Tab => tab !== undefined)
       store.removeTabs(ids)
-      closedTabs.forEach((tab) => tabHandlers.get(tab.type)?.onClose?.(tab))
+      closedTabs.forEach((tab) =>
+        tabHandlers.get(tab.type)?.forEach((handler) => handler.onClose?.(tab))
+      )
     },
 
     handleTabClose: ({
@@ -512,7 +523,9 @@ export function createTabsState(projectRef: string) {
       // Run the tab type's registered close behavior (e.g. discard a SQL
       // snippet's unsaved edits). `tabBeingClosed` is captured before removal.
       if (tabBeingClosed) {
-        tabHandlers.get(tabBeingClosed.type)?.onClose?.(tabBeingClosed)
+        tabHandlers
+          .get(tabBeingClosed.type)
+          ?.forEach((handler) => handler.onClose?.(tabBeingClosed))
       }
     },
     handleTabCloseAll: ({

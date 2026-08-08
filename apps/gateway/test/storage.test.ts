@@ -35,6 +35,7 @@ afterEach(async () => {
   for (const fixture of fixtures.splice(0)) {
     fixture.close();
   }
+  Bun.gc(true);
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => removeTemporaryDirectory(directory)),
   );

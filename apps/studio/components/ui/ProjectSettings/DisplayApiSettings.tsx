@@ -96,7 +96,7 @@ export const DisplayApiSettings = ({
             <p className="text-sm text-foreground-light">
               Your API is secured behind an API gateway which requires an API Key for every request.
               <br />
-              You can use the keys below in the Supabase client libraries.
+              Use these keys only with Mekka integrations supported by this deployment.
               <br />
             </p>
           </div>

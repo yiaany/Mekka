@@ -1,0 +1,110 @@
+import { Link, useRouter } from '@tanstack/react-router'
+import { useEffect, useState } from 'react'
+import { Button } from 'ui'
+
+import { SupportLink } from '@/components/interfaces/Support/SupportLink'
+import { useLastVisitedOrganization } from '@/hooks/misc/useLastVisitedOrganization'
+import { useSignOut } from '@/lib/auth'
+import { BASE_PATH } from '@/lib/constants'
+
+export const Error404 = () => {
+  const [show404, setShow404] = useState<boolean>(false)
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setShow404(true)
+    }, 500)
+    return () => window.clearTimeout(timeout)
+  }, [])
+
+  return (
+    <div className="relative mx-auto flex h-screen w-full flex-col items-center justify-center">
+      <div className="absolute top-0 mx-auto w-full max-w-7xl px-8 pt-6 sm:px-6 lg:px-8">
+        <nav className="relative flex items-center justify-between sm:h-10">
+          <div className="flex shrink-0 grow items-center lg:grow-0">
+            <div className="flex w-full items-center justify-between md:w-auto">
+              <Link to="/organizations">
+                <img src={`${BASE_PATH}/img/mekka-logo.svg`} alt="Mekka" className="h-6 w-6" />
+              </Link>
+            </div>
+          </div>
+        </nav>
+      </div>
+      <div
+        className={`absolute select-none opacity-5 filter transition duration-200 ${
+          show404 ? 'blur-xs' : 'blur-none'
+        }`}
+      >
+        <h1 style={{ fontSize: '28rem' }}>404</h1>
+      </div>
+      <div
+        className={`flex flex-col items-center justify-center space-y-6 transition ${
+          show404 ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        <div className="flex w-[380px] flex-col items-center justify-center space-y-3 text-center">
+          <h3 className="text-xl">Looking for something? 🔍</h3>
+          <p className="text-foreground-light">We couldn't find the page that you're looking for!</p>
+        </div>
+        <div className="flex items-center space-x-4">
+          <Button asChild size="small">
+            <Link to="/organizations">Head back</Link>
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export const Error500 = () => {
+  const router = useRouter()
+  const signOut = useSignOut()
+  const { lastVisitedOrganization } = useLastVisitedOrganization()
+  const pathname = router.state.location.pathname
+
+  const onClickLogout = async () => {
+    await signOut()
+    window.location.assign(`${BASE_PATH}/sign-in`)
+  }
+
+  return (
+    <div className="relative mx-auto flex flex-1 w-full flex-col items-center justify-center space-y-6">
+      <div className="absolute top-0 mx-auto w-full max-w-7xl px-8 pt-6 sm:px-6 lg:px-8">
+        <nav className="relative flex items-center justify-between sm:h-10">
+          <div className="flex shrink-0 grow items-center lg:grow-0">
+            <div className="flex w-full items-center justify-between md:w-auto">
+              <Link to="/organizations">
+                <img src={`${BASE_PATH}/img/mekka-logo.svg`} alt="Mekka" className="h-6 w-6" />
+              </Link>
+            </div>
+          </div>
+        </nav>
+      </div>
+      <div className="flex w-[320px] flex-col items-center justify-center space-y-3">
+        <h4 className="text-lg">Something went wrong 🤕</h4>
+        <p className="text-center">
+          Sorry about that, please try again later or feel free to reach out to us if the problem
+          persists.
+        </p>
+      </div>
+      <div className="flex items-center space-x-4">
+        {pathname !== '/organizations' ? (
+          <Button asChild>
+            {lastVisitedOrganization ? (
+              <Link to="/org/$slug" params={{ slug: lastVisitedOrganization }}>
+                Head back
+              </Link>
+            ) : (
+              <Link to="/organizations">Head back</Link>
+            )}
+          </Button>
+        ) : (
+          <Button onClick={onClickLogout}>Head back</Button>
+        )}
+        <Button variant="secondary" asChild>
+          <SupportLink>Submit a support request</SupportLink>
+        </Button>
+      </div>
+    </div>
+  )
+}

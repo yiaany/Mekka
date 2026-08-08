@@ -77,7 +77,7 @@ export const APIKeys = () => {
         <CardDescription>
           Your API is secured behind an API gateway which requires an API Key for every request.
           <br />
-          You can use the parameters below to use Supabase client libraries.
+          Use these values with Mekka-supported integrations when they are available for this deployment.
         </CardDescription>
       </CardHeader>
 

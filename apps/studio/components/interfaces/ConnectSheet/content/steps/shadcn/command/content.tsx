@@ -2,15 +2,14 @@ import { useMemo } from 'react'
 import { CodeBlock } from 'ui-patterns/CodeBlock'
 
 import type { StepContentProps } from '@/components/interfaces/ConnectSheet/Connect.types'
-import { InlineLink } from '@/components/ui/InlineLink'
 
 function getShadcnCommand(state: StepContentProps['state']): string | null {
   if (state.framework === 'nextjs') {
-    return 'npx shadcn@latest add @supabase/supabase-client-nextjs'
+    return 'npm install @supabase/supabase-js @supabase/ssr'
   }
 
   if (state.framework === 'react') {
-    return 'npx shadcn@latest add @supabase/supabase-client-react-router'
+    return 'npm install @supabase/supabase-js'
   }
 
   return null
@@ -33,8 +32,8 @@ function ShadcnCommandContent({ state }: StepContentProps) {
         {command}
       </CodeBlock>
       <p className="text-sm text-foreground-lighter">
-        Add UI components for auth, realtime, storage, and more at{' '}
-        <InlineLink href="https://supabase.com/ui">supabase.com/ui</InlineLink>.
+        Use the official Supabase SDK in Litebase compatibility mode. Litebase endpoints and keys are
+        configured in the next step.
       </p>
     </div>
   )

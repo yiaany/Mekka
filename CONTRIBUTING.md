@@ -2,7 +2,7 @@
 
 ## Before You Start
 
-- Read the product strategy and the relevant file in `session-prompts/`.
+- Read the public architecture, capability documentation, and relevant runbooks.
 - Keep one pull request focused on one complete vertical slice.
 - Do not add placeholder packages, speculative abstractions, or unrelated refactors.
 - Never commit credentials, `.env` files, generated output, or production data.
@@ -39,7 +39,7 @@ Avoid vague or repeated messages such as `update files`, `changes`, `fix`, or `w
 - Include focused tests for success and negative cases.
 - State exact verification commands and results.
 - Update contracts and documentation when public behavior changes.
-- Add a Russian session log in `docs/session-logs/` for a completed delivery session.
+- Do not commit private prompts, agent transcripts, local databases, or production logs.
 
 ## Design Principles
 

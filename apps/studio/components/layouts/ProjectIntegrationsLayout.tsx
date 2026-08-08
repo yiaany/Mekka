@@ -89,12 +89,6 @@ const IntegrationCategoriesMenu = ({ page }: { page: string }) => {
           },
         ]
       : []),
-    {
-      name: 'Postgres Modules',
-      key: 'postgres_extension',
-      url: `/project/${ref}/integrations?category=postgres_extension`,
-      items: [],
-    },
     ...nonEmptyCategories.map((category) => ({
       name: category.name ?? '',
       key: category.slug ?? '',

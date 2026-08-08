@@ -141,6 +141,7 @@ type ConnectionState = {
   openedAt: number;
   lastHeartbeatAt: number;
   channels: Map<string, ChannelState>;
+  joiningTopics: Set<string>;
   closed: boolean;
 };
 
@@ -211,6 +212,7 @@ export function createRealtimeSubscriptionGateway(
       openedAt: now(),
       lastHeartbeatAt: now(),
       channels: new Map(),
+      joiningTopics: new Set(),
       closed: false,
     });
   }
@@ -305,86 +307,100 @@ export function createRealtimeSubscriptionGateway(
   }
 
   async function joinChannel(connection: ConnectionState, message: WireMessage): Promise<void> {
-    if (!safeTopicPattern.test(message.topic) || connection.channels.has(message.topic)) {
+    if (
+      !safeTopicPattern.test(message.topic) ||
+      connection.channels.has(message.topic) ||
+      connection.joiningTopics.has(message.topic)
+    ) {
       throw protocol(1008, "invalid_channel");
     }
     if (connection.channels.size >= limits.maxChannelsPerConnection) {
       throw protocol(1013, "channel_quota");
     }
+    connection.joiningTopics.add(message.topic);
 
-    const token = readToken(message.payload.access_token);
-    const authentication = await authenticate(options, token);
-    validateAuthentication(authentication, now());
-    const source = await options.resolveSource(authentication.context);
-    const tenant = parseTenantIdentity(source.tenant);
-    if (!sameTenant(tenant, authentication.context.tenant)) {
-      throw protocol(1008, "tenant_mismatch");
-    }
-    bindConnectionAuthentication(connection, authentication, source);
+    try {
+      const token = readToken(message.payload.access_token);
+      const authentication = await authenticate(options, token);
+      validateAuthentication(authentication, now());
+      const source = await options.resolveSource(authentication.context);
+      if (connection.closed) {
+        return;
+      }
+      const tenant = parseTenantIdentity(source.tenant);
+      if (!sameTenant(tenant, authentication.context.tenant)) {
+        throw protocol(1008, "tenant_mismatch");
+      }
+      bindConnectionAuthentication(connection, authentication, source);
 
-    const config = parseChannelConfig(message.payload.config, limits.maxSubscriptionsPerChannel);
-    const subscriptions = config.subscriptions;
-    if (
-      subscriptions.some((subscription) => !source.subscribableTables.includes(subscription.table))
-    ) {
-      throw protocol(1008, "channel_forbidden");
-    }
-    const channelName = message.topic.slice("realtime:".length);
-    if (!safeChannelNamePattern.test(channelName)) {
-      throw protocol(1008, "invalid_channel");
-    }
-    const authorizedPolicy = source.authorizeChannel(authentication.context, channelName);
-    if (authorizedPolicy === null && subscriptions.length === 0) {
-      throw protocol(1008, "channel_forbidden");
-    }
-    const policy = authorizedPolicy ?? deniedChannelPolicy;
-    const presenceKey = resolvePresenceKey(config.presence.key, authentication.context.actor.id);
-    const cursor = parseCursor(message.payload.cursor ?? 0);
-    if (subscriptions.length > 0) {
-      readChangefeedForDelivery(source.storage, {
-        tenant: authentication.context.tenant,
-        afterCursor: cursor,
-        limit: 1,
-      });
-    }
-    const scope = createTenantCacheKey(authentication.context.tenant, `realtime:${channelName}`);
-    const channel: ChannelState = {
-      topic: message.topic,
-      joinRef: message.ref,
-      subscriptions,
-      channelName,
-      scope,
-      policy,
-      broadcast: config.broadcast,
-      presence: Object.freeze({ enabled: config.presence.enabled, key: presenceKey }),
-      unsubscribe: () => undefined,
-      broadcastRate: { startedAt: now(), count: 0 },
-      presenceRate: { startedAt: now(), count: 0 },
-      acknowledgedCursor: cursor,
-      sentCursor: cursor,
-      pending: [],
-      pendingBytes: 0,
-      transportBlocked: false,
-      pumping: false,
-    };
-    channel.unsubscribe = coordinator.subscribe(scope, (event) =>
-      deliverChannelEvent(connection, channel, event),
-    );
-    connection.channels.set(message.topic, channel);
-    sendReply(connection, message, "ok", {
-      postgres_changes: subscriptions.map((subscription) => ({ ...subscription })),
-      cursor,
-      presence: { key: presenceKey },
-    });
-    if (channel.presence.enabled && channel.policy.presence.read) {
-      sendChannelMessage(
-        connection,
-        channel.topic,
-        "presence_state",
-        coordinator.presenceState(scope),
+      const config = parseChannelConfig(message.payload.config, limits.maxSubscriptionsPerChannel);
+      const subscriptions = config.subscriptions;
+      if (
+        subscriptions.some(
+          (subscription) => !source.subscribableTables.includes(subscription.table),
+        )
+      ) {
+        throw protocol(1008, "channel_forbidden");
+      }
+      const channelName = message.topic.slice("realtime:".length);
+      if (!safeChannelNamePattern.test(channelName)) {
+        throw protocol(1008, "invalid_channel");
+      }
+      const authorizedPolicy = source.authorizeChannel(authentication.context, channelName);
+      if (authorizedPolicy === null && subscriptions.length === 0) {
+        throw protocol(1008, "channel_forbidden");
+      }
+      const policy = authorizedPolicy ?? deniedChannelPolicy;
+      const presenceKey = resolvePresenceKey(config.presence.key, authentication.context.actor.id);
+      const cursor = parseCursor(message.payload.cursor ?? 0);
+      if (subscriptions.length > 0) {
+        readChangefeedForDelivery(source.storage, {
+          tenant: authentication.context.tenant,
+          afterCursor: cursor,
+          limit: 1,
+        });
+      }
+      const scope = createTenantCacheKey(authentication.context.tenant, `realtime:${channelName}`);
+      const channel: ChannelState = {
+        topic: message.topic,
+        joinRef: message.ref,
+        subscriptions,
+        channelName,
+        scope,
+        policy,
+        broadcast: config.broadcast,
+        presence: Object.freeze({ enabled: config.presence.enabled, key: presenceKey }),
+        unsubscribe: () => undefined,
+        broadcastRate: { startedAt: now(), count: 0 },
+        presenceRate: { startedAt: now(), count: 0 },
+        acknowledgedCursor: cursor,
+        sentCursor: cursor,
+        pending: [],
+        pendingBytes: 0,
+        transportBlocked: false,
+        pumping: false,
+      };
+      channel.unsubscribe = coordinator.subscribe(scope, (event) =>
+        deliverChannelEvent(connection, channel, event),
       );
+      connection.channels.set(message.topic, channel);
+      sendReply(connection, message, "ok", {
+        postgres_changes: subscriptions.map((subscription) => ({ ...subscription })),
+        cursor,
+        presence: { key: presenceKey },
+      });
+      if (channel.presence.enabled && channel.policy.presence.read) {
+        sendChannelMessage(
+          connection,
+          channel.topic,
+          "presence_state",
+          coordinator.presenceState(scope),
+        );
+      }
+      await pumpChannel(connection, channel);
+    } finally {
+      connection.joiningTopics.delete(message.topic);
     }
-    await pumpChannel(connection, channel);
   }
 
   async function refreshAuthentication(
@@ -865,13 +881,11 @@ export function createRealtimeSubscriptionGateway(
     }
     connection.closed = true;
     for (const channel of connection.channels.values()) {
-      coordinator.renewPresence(
-        presenceOwnerId(connection, channel),
-        now() + limits.presenceLeaseMs,
-      );
+      coordinator.untrackPresence(presenceOwnerId(connection, channel));
       channel.unsubscribe();
     }
     connection.channels.clear();
+    connection.joiningTopics.clear();
   }
 
   return Object.freeze({ open, receive, drain, close, tick, dispose });

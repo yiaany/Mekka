@@ -3,7 +3,6 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 
 import { tenantHeaders } from '@mekka/protocol'
 
-const csrfCookieName = '__Host-mekka-studio-csrf'
 const readPaths = [/^users$/, /^users\/[A-Za-z0-9_-]{3,128}$/, /^settings$/]
 const mutationPaths = [
   /^users\/[A-Za-z0-9_-]{3,128}\/revoke$/,
@@ -12,7 +11,6 @@ const mutationPaths = [
   /^templates\/(?:email-verification|password-reset)$/,
 ]
 const forwardedHeaders = [
-  'authorization',
   tenantHeaders.organizationId,
   tenantHeaders.projectId,
   tenantHeaders.environmentId,
@@ -24,19 +22,29 @@ const forwardedHeaders = [
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const path = Array.isArray(req.query.path) ? req.query.path.join('/') : req.query.path
   const projectRef = Array.isArray(req.query.ref) ? req.query.ref[0] : req.query.ref
-  if (!path || !projectRef || typeof req.headers.authorization !== 'string') {
+  const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN
+  const isTrustedProductionRequest =
+    internalProxyToken !== undefined &&
+    req.headers['x-mekka-internal-proxy'] === internalProxyToken
+  const isLoopbackDevelopment = process.env.NODE_ENV !== 'production'
+  if (!path || projectRef !== 'local' || (!isTrustedProductionRequest && !isLoopbackDevelopment)) {
     return res.status(401).json({ error: { code: 'auth' } })
   }
-  if (req.headers[tenantHeaders.projectId] !== projectRef) {
+  if (
+    req.headers[tenantHeaders.projectId] !== undefined &&
+    req.headers[tenantHeaders.projectId] !== projectRef
+  ) {
     return res.status(403).json({ error: { code: 'forbidden' } })
   }
   if (path === 'csrf' && req.method === 'GET') {
+    const isSecure = isSecureStudioOrigin()
+    const csrfCookieName = isSecure ? '__Host-mekka-studio-csrf' : 'mekka-studio-csrf'
     const existingToken = req.cookies[csrfCookieName]
     const token =
       typeof existingToken === 'string' && /^[A-Za-z0-9_-]{43}$/.test(existingToken)
         ? existingToken
         : randomBytes(32).toString('base64url')
-    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : ''
+    const secure = isSecure ? '; Secure' : ''
     res.setHeader(
       'set-cookie',
       `${csrfCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict${secure}; Max-Age=900`
@@ -63,6 +71,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const value = req.headers[name]
     if (typeof value === 'string') headers.set(name, value)
   }
+  headers.set(tenantHeaders.organizationId, process.env.NEXT_PUBLIC_STUDIO_ORGANIZATION_ID ?? 'org-local')
+  headers.set(tenantHeaders.projectId, projectRef)
+  headers.set(tenantHeaders.environmentId, process.env.NEXT_PUBLIC_STUDIO_ENVIRONMENT_ID ?? 'env-local')
+  headers.set(tenantHeaders.branchId, process.env.NEXT_PUBLIC_STUDIO_BRANCH_ID ?? 'branch-main')
+  headers.set(tenantHeaders.generation, process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? '1')
   if (typeof req.headers.origin === 'string') headers.set('origin', req.headers.origin)
   if (typeof req.headers['x-mekka-csrf-token'] === 'string') {
     headers.set('x-mekka-csrf-token', req.headers['x-mekka-csrf-token'])
@@ -99,10 +112,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 }
 
 function hasValidCsrf(req: NextApiRequest): boolean {
+  const csrfCookieName = isSecureStudioOrigin()
+    ? '__Host-mekka-studio-csrf'
+    : 'mekka-studio-csrf'
   const header = req.headers['x-mekka-csrf-token']
   const cookie = req.cookies[csrfCookieName]
   if (typeof header !== 'string' || typeof cookie !== 'string') return false
   const left = Buffer.from(header)
   const right = Buffer.from(cookie)
   return left.length === right.length && timingSafeEqual(left, right)
+}
+
+function isSecureStudioOrigin(): boolean {
+  const configuredOrigin = process.env.AUTH_PUBLIC_ORIGIN ?? process.env.NEXT_PUBLIC_SITE_URL
+  if (!configuredOrigin) return false
+  try {
+    return new URL(configuredOrigin).protocol === 'https:'
+  } catch {
+    return false
+  }
 }

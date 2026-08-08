@@ -135,9 +135,15 @@ export function rewritePolicyQuery(
     throw forbidden(`No ${action} policy exists for table "${table.name}".`);
   }
 
-  const policyFields = allowedFieldsForRules(rules, [...visible], action);
-  const requested = ast.select.kind === "all" ? [...visible] : [...ast.select.columns];
-  if (action === "select" && requested.some((field) => !policyFields.includes(field))) {
+  const policyFields =
+    action === "select"
+      ? safeSelectFieldsForRules(rules, [...visible])
+      : allowedFieldsForRules(rules, [...visible], action);
+  if (
+    action === "select" &&
+    ast.select.kind === "columns" &&
+    ast.select.columns.some((field) => !policyFields.includes(field))
+  ) {
     throw forbidden("Selected fields are not permitted by policy.");
   }
 
@@ -309,6 +315,21 @@ function allowedFieldsForRules(
     }
   }
   return Object.freeze(requested.filter((field) => allowed.has(field) && !denied.has(field)));
+}
+
+function safeSelectFieldsForRules(
+  rules: readonly PolicyRule[],
+  requested: readonly string[],
+): readonly string[] {
+  return Object.freeze(
+    requested.filter((field) =>
+      rules.every((rule) => {
+        const fields = rule.fields;
+        if (fields === undefined) return false;
+        return fields.allow.includes(field) && !fields.deny.includes(field);
+      }),
+    ),
+  );
 }
 
 function validateDocument(document: PolicyDocument): void {

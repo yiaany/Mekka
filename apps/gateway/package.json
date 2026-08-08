@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@mekka/mcp": "workspace:*",
     "@mekka/policy-engine": "workspace:*",
     "@mekka/protocol": "workspace:*",
     "@mekka/query-ast": "workspace:*",
@@ -11,6 +12,7 @@
     "@mekka/schema-manifest": "workspace:*",
     "@mekka/sqlite-compiler": "workspace:*",
     "@mekka/storage-core": "workspace:*",
+    "@supabase/supabase-js": "2.111.0",
     "elysia": "1.4.29"
   }
 }

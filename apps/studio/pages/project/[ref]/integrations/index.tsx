@@ -74,14 +74,14 @@ const CATEGORY_PAGE_CONTENT = {
   wrapper: {
     title: 'Wrappers',
     subtitle:
-      'Connect to external data sources and services by querying APIs, databases, and files as if they were Postgres tables.',
+      'Connect to external data sources and services through explicitly supported Mekka integrations.',
     secondaryActions: (
       <DocsButton href={`${DOCS_URL}/guides/database/extensions/wrappers/overview`} />
     ),
   },
   postgres_extension: {
-    title: 'Postgres Modules',
-    subtitle: 'Extend your database with powerful Postgres extensions.',
+    title: 'Unavailable database modules',
+    subtitle: 'Database extensions are not available for SQLite-compatible Mekka projects.',
   },
 } satisfies Record<string, PageContent>
 

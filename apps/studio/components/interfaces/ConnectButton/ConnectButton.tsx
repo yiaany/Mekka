@@ -50,7 +50,7 @@ export const ConnectButton = ({
             setShowConnect(true)
           }}
         >
-          <span className={cn({ 'sr-only': iconOnly })}>Connect</span>
+           <span className={cn({ 'sr-only': iconOnly })}>Agent Access</span>
         </Button>
       </ShortcutTooltip>
     )
@@ -74,7 +74,7 @@ export const ConnectButton = ({
         },
       }}
     >
-      <span className={cn({ 'sr-only': iconOnly })}>Connect</span>
+     <span className={cn({ 'sr-only': iconOnly })}>Agent Access</span>
     </ButtonTooltip>
   )
 }

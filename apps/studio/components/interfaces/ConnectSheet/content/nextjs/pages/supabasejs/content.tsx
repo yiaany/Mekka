@@ -8,23 +8,23 @@ const ContentFile = ({ projectKeys }: StepContentProps) => {
       name: '.env.local',
       language: 'bash',
       code: [
-        `NEXT_PUBLIC_SUPABASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
+        `NEXT_PUBLIC_LITEBASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
         projectKeys?.publishableKey
-          ? `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
-          : `NEXT_PUBLIC_SUPABASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
+          ? `NEXT_PUBLIC_LITEBASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
+          : `NEXT_PUBLIC_LITEBASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
         '',
       ].join('\n'),
     },
     {
-      name: 'utils/supabase.ts',
+      name: 'utils/litebase.ts',
       language: 'ts',
       code: `
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY' : 'NEXT_PUBLIC_SUPABASE_ANON_KEY'}!;
+const litebaseUrl = process.env.NEXT_PUBLIC_LITEBASE_URL!;
+const litebaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_LITEBASE_PUBLISHABLE_KEY' : 'NEXT_PUBLIC_LITEBASE_ANON_KEY'}!;
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const litebase = createClient(litebaseUrl, litebaseKey);
 `,
     },
     {
@@ -32,14 +32,14 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
       language: 'tsx',
       code: `
 import { useState, useEffect } from 'react'
-import { supabase } from '../utils/supabase'
+ import { litebase } from '../utils/litebase'
 
 export default function Page() {
   const [todos, setTodos] = useState([])
 
   useEffect(() => {
     async function getTodos() {
-      const { data: todos } = await supabase.from('todos').select()
+      const { data: todos } = await litebase.from('todos').select()
 
       if (todos) {
         setTodos(todos)

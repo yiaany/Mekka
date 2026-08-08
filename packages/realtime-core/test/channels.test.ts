@@ -177,7 +177,7 @@ describe("Realtime Broadcast and Presence", () => {
     }
   });
 
-  test("keeps reconnected presence and removes the stale owner at the deterministic lease deadline", async () => {
+  test("removes presence immediately when a connection closes", async () => {
     let clock = 1_000;
     const coordinator = createInMemoryRealtimeChannelCoordinator();
     const storage = openStorageAdapter({ databasePath: ":memory:" });
@@ -198,35 +198,20 @@ describe("Realtime Broadcast and Presence", () => {
         presenceMessage("2", "track", { connection: "old" }),
       );
       fixture.gateway.close("connection-stale-001");
+      expect(
+        coordinator.presenceState(
+          "org-main/project-main/environment-main/branch-main/1/realtime:room",
+        ),
+      ).toEqual({});
 
       clock = 1_050;
       fixture.gateway.open("connection-fresh-001", reconnected);
       await fixture.gateway.receive("connection-fresh-001", joinMessage("alice", true));
+      expect(eventPayloads(reconnected, "presence_state").at(-1)).toEqual({});
       await fixture.gateway.receive(
         "connection-fresh-001",
         presenceMessage("2", "track", { connection: "new" }),
       );
-      expect(readPresenceMetas(eventPayloads(reconnected, "presence_diff").at(-1))).toHaveLength(1);
-
-      clock = 1_100;
-      await fixture.gateway.receive("connection-fresh-001", [
-        null,
-        "3",
-        "phoenix",
-        "heartbeat",
-        {},
-      ]);
-      clock = 1_101;
-      await fixture.gateway.tick();
-
-      const leave = eventPayloads(reconnected, "presence_diff").find((payload) => {
-        const leaves = readPresenceMetas(payload, "leaves");
-        return leaves.some((meta) => meta.connection === "old");
-      });
-      expect(leave).toBeDefined();
-      expect(readPresenceMetas(leave, "leaves")).toEqual([
-        expect.objectContaining({ actor_id: "alice", connection: "old" }),
-      ]);
       expect(reconnected.closed).toBeNull();
     } finally {
       fixture.gateway.dispose();

@@ -86,7 +86,7 @@ export const FRAMEWORKS: ConnectionType[] = [
         children: [
           {
             key: 'supabasejs',
-            label: 'supabase-js',
+            label: 'Supabase JS (Litebase compatibility)',
             icon: 'supabase',
             children: [],
           },
@@ -99,7 +99,7 @@ export const FRAMEWORKS: ConnectionType[] = [
         children: [
           {
             key: 'supabasejs',
-            label: 'Supabase-js',
+            label: 'Supabase JS (Litebase compatibility)',
             children: [],
             icon: 'supabase',
           },
@@ -115,7 +115,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -134,7 +134,7 @@ export const FRAMEWORKS: ConnectionType[] = [
         children: [
           {
             key: 'supabasejs',
-            label: 'Supabase-js',
+            label: 'Supabase JS (Litebase compatibility)',
             children: [],
             icon: 'supabase',
           },
@@ -147,7 +147,7 @@ export const FRAMEWORKS: ConnectionType[] = [
         children: [
           {
             key: 'supabasejs',
-            label: 'supabase-js',
+            label: 'Supabase JS (Litebase compatibility)',
             icon: 'supabase',
             children: [],
           },
@@ -163,7 +163,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -177,7 +177,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -192,7 +192,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -206,7 +206,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -220,7 +220,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -234,7 +234,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -248,7 +248,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -262,7 +262,7 @@ export const FRAMEWORKS: ConnectionType[] = [
     children: [
       {
         key: 'supabasepy',
-        label: 'supabase-py',
+        label: 'Supabase Python (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -279,7 +279,7 @@ export const MOBILES: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -293,7 +293,7 @@ export const MOBILES: ConnectionType[] = [
     children: [
       {
         key: 'supabaseflutter',
-        label: 'supabase-flutter',
+        label: 'Supabase Flutter (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -307,7 +307,7 @@ export const MOBILES: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -321,7 +321,7 @@ export const MOBILES: ConnectionType[] = [
     children: [
       {
         key: 'supabaseswift',
-        label: 'supabase-swift',
+        label: 'Supabase Swift (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -335,7 +335,7 @@ export const MOBILES: ConnectionType[] = [
     children: [
       {
         key: 'supabasekt',
-        label: 'supabase-kt',
+        label: 'Supabase Kotlin (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },
@@ -349,7 +349,7 @@ export const MOBILES: ConnectionType[] = [
     children: [
       {
         key: 'supabasejs',
-        label: 'Supabase-js',
+        label: 'Supabase JS (Litebase compatibility)',
         children: [],
         icon: 'supabase',
       },

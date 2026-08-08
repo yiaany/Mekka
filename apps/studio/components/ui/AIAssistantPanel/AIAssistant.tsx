@@ -654,7 +654,7 @@ export const AIAssistant = ({ className }: AIAssistantProps) => {
                   ? 'Ask a question or make a change...'
                   : isSupportChat
                     ? 'Describe your support issue...'
-                    : 'Chat to Postgres...'
+                    : 'Ask about your database...'
             }
             value={value}
             onValueChange={(e) => setValue(e.target.value)}

@@ -1,30 +1,30 @@
-import { getExposedFunctionsSql } from '@supabase/pg-meta'
-import { infiniteQueryOptions } from '@tanstack/react-query'
+import { getExposedFunctionsSql } from "@supabase/pg-meta";
+import { infiniteQueryOptions } from "@tanstack/react-query";
 
-import { privilegeKeys } from './keys'
-import { executeSql } from '@/data/sql/execute-sql-mutation'
-import { INTERNAL_SCHEMAS } from '@/hooks/useProtectedSchemas'
-import type { ResponseError } from '@/types'
+import { privilegeKeys } from "./keys";
+import { executeSql } from "@/data/sql/execute-sql-mutation";
+import { INTERNAL_SCHEMAS } from "@/hooks/useProtectedSchemas";
+import type { ResponseError } from "@/types";
 
-export const IGNORED_SCHEMAS = [...INTERNAL_SCHEMAS, 'pg_catalog']
-export const EXPOSED_FUNCTIONS_PAGE_LIMIT = 50
+export const IGNORED_SCHEMAS = [...INTERNAL_SCHEMAS, "pg_catalog"];
+export const EXPOSED_FUNCTIONS_PAGE_LIMIT = 50;
 
 export type ExposedFunctionsVariables = {
-  projectRef?: string
-  connectionString?: string | null
-  search?: string
-}
+  projectRef?: string;
+  connectionString?: string | null;
+  search?: string;
+};
 
 export type ExposedFunction = {
-  schema: string
-  name: string
-  status: 'granted' | 'revoked' | 'custom'
-}
+  schema: string;
+  name: string;
+  status: "granted" | "revoked" | "custom";
+};
 
 export type ExposedFunctionsResponse = {
-  total_count: number
-  functions: ExposedFunction[]
-}
+  total_count: number;
+  functions: ExposedFunction[];
+};
 
 export async function getExposedFunctions(
   {
@@ -34,37 +34,46 @@ export async function getExposedFunctions(
     page = 0,
     limit = EXPOSED_FUNCTIONS_PAGE_LIMIT,
   }: ExposedFunctionsVariables & { page?: number; limit?: number },
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<ExposedFunctionsResponse> {
-  if (!projectRef) throw new Error('projectRef is required')
+  if (!projectRef) throw new Error("projectRef is required");
 
-  const offset = page * limit
+  const offset = page * limit;
 
-  const sql = getExposedFunctionsSql({ search, offset, limit, ignoredSchemas: IGNORED_SCHEMAS })
+  const sql = getExposedFunctionsSql({
+    search,
+    offset,
+    limit,
+    ignoredSchemas: IGNORED_SCHEMAS,
+  });
 
   const { result } = await executeSql(
     {
       projectRef,
       connectionString,
       sql,
-      queryKey: ['exposed-functions', page],
+      queryKey: ["exposed-functions", page],
     },
-    signal
-  )
+    signal,
+  );
 
-  return result[0] as ExposedFunctionsResponse
+  return result[0] as ExposedFunctionsResponse;
 }
 
-export type ExposedFunctionsData = Awaited<ReturnType<typeof getExposedFunctions>>
-export type ExposedFunctionsError = ResponseError
+export type ExposedFunctionsData = Awaited<
+  ReturnType<typeof getExposedFunctions>
+>;
+export type ExposedFunctionsError = ResponseError;
 
 export const exposedFunctionsInfiniteQueryOptions = (
   { projectRef, connectionString, search }: ExposedFunctionsVariables,
-  { enabled = true }: { enabled?: boolean } = {}
+  { enabled = true }: { enabled?: boolean } = {},
 ) => {
   return infiniteQueryOptions({
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- connection string doesn't change the result of the query
-    queryKey: privilegeKeys.exposedFunctionsInfinite(projectRef, search),
+    queryKey: [
+      ...privilegeKeys.exposedFunctionsInfinite(projectRef, search),
+      connectionString,
+    ],
     queryFn: ({ signal, pageParam }) =>
       getExposedFunctions(
         {
@@ -73,20 +82,20 @@ export const exposedFunctionsInfiniteQueryOptions = (
           search,
           page: pageParam,
         },
-        signal
+        signal,
       ),
-    enabled: enabled && typeof projectRef !== 'undefined',
+    enabled: enabled && typeof projectRef !== "undefined",
     initialPageParam: 0,
     getNextPageParam(lastPage, pages) {
-      const page = pages.length
-      const currentTotalCount = page * EXPOSED_FUNCTIONS_PAGE_LIMIT
-      const totalCount = lastPage.total_count ?? 0
+      const page = pages.length;
+      const currentTotalCount = page * EXPOSED_FUNCTIONS_PAGE_LIMIT;
+      const totalCount = lastPage.total_count ?? 0;
 
       if (currentTotalCount >= totalCount) {
-        return undefined
+        return undefined;
       }
 
-      return page
+      return page;
     },
-  })
-}
+  });
+};

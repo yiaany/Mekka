@@ -255,6 +255,12 @@ export function generateMekkaAuthMenu(ref?: string): ProductMenuGroup[] {
       title: 'Manage',
       items: [
         {
+          name: 'Register / Sign in',
+          key: 'register',
+          url: `${baseUrl}/register`,
+          items: [],
+        },
+        {
           name: 'Users',
           key: 'users',
           url: `${baseUrl}/users`,

@@ -1,8 +1,95 @@
+# Dependencies and package-manager state
 node_modules/
+.pnp/
+.pnp.*
+
+# Build output and caches
 dist/
+build/
+out/
+.next/
+.output/
+.turbo/
+.vite/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment files and credentials
 .env
 .env.*
 !.env.example
-coverage/
+!.env.*.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+*.mobileprovision
+.sentryclirc
+credentials.json
+service-account*.json
+secrets.*
+*.secret
+
+# Local databases, object data, backups, and runtime state
+**/.local/
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+*.backup
+*.dump
+*.snapshot
+
+# Private agent prompts and session transcripts
+MASTER_PROMPT*
+**/CLAUDE.md
+.claude/
+.cursor/
+.windsurf/
+.continue/
+.aider*
+.opencode/
+session-prompts/
+docs/session-logs/
+*.prompt.md
+*.prompts.md
+*.session.md
+prompt-history/
+chat-history/
+
+# Logs, profiling, and diagnostics
 *.log
-*.tsbuildinfo
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.cpuprofile
+*.heapprofile
+
+# Test and browser artifacts
+playwright-report/
+test-results/
+blob-report/
+screenshots/
+
+# Deployment and IDE state
+.vercel/
+.netlify/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini

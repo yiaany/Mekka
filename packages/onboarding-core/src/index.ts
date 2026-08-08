@@ -9,6 +9,8 @@ import {
 } from "@mekka/protocol";
 import { Elysia } from "elysia";
 
+export * from "./connect-analyzer";
+
 export type EnabledModule = "auth" | "storage" | "realtime" | "functions";
 export type StarterTemplate = "empty" | "saas" | "marketplace" | "chat" | "mobile" | "import";
 export type ProvisioningPhase =

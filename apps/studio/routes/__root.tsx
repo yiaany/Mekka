@@ -66,6 +66,7 @@ import { FeaturePreviewContextProvider } from '@/components/interfaces/App/Featu
 import { FeaturePreviewModal } from '@/components/interfaces/App/FeaturePreview/FeaturePreviewModal'
 import { MonacoThemeProvider } from '@/components/interfaces/App/MonacoThemeProvider'
 import { RouteValidationWrapper } from '@/components/interfaces/App/RouteValidationWrapper'
+import { Error404, Error500 } from '@/components/interfaces/App/RouterErrorPages'
 import { ShellFallback } from '@/components/interfaces/App/ShellFallback'
 import { MainScrollContainerProvider } from '@/components/layouts/MainScrollContainerContext'
 import { BannerStackProvider } from '@/components/ui/BannerStack/BannerStackProvider'
@@ -86,8 +87,6 @@ import { ProfileProvider } from '@/lib/profile'
 import { Telemetry } from '@/lib/telemetry'
 import { ToastErrorTracker } from '@/lib/toast-errors'
 import { Toaster } from '@/lib/toaster'
-import Error404 from '@/pages/404'
-import Error500 from '@/pages/500'
 import { matchRedirect } from '@/redirects.shared'
 import { AiAssistantStateContextProvider } from '@/state/ai-assistant-state'
 
@@ -330,8 +329,8 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     if (forkRedirect) {
       throw redirect<AnyRouter, string>({
         to: forkRedirect,
-        search: {},
-        hash: '',
+        search: location.search,
+        hash: location.hash,
         statusCode: 307,
       })
     }

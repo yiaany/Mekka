@@ -164,18 +164,18 @@ export const ConnectSheet = () => {
         className="flex w-full min-w-0 flex-col gap-0 space-y-0 p-0 max-w-4xl"
       >
         <SheetHeader className={cn('text-left border-b shrink-0 py-6 px-8')}>
-          <SheetTitle>Connect to your project</SheetTitle>
-          <SheetDescription>Choose how you want to connect to Mekka</SheetDescription>
+          <SheetTitle>Agent Access</SheetTitle>
+          <SheetDescription>Configure the tenant-bound Mekka MCP endpoint in your client</SheetDescription>
         </SheetHeader>
 
         <div className="flex min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden divide-y">
-          <div className="p-8">
+          {availableModes.length > 1 && <div className="p-8">
             <ModeSelector
               modes={availableModes}
               selected={state.mode}
               onChange={handleModeChange}
             />
-          </div>
+          </div>}
 
           {activeFields.length > 0 && (
             <div className="p-8">

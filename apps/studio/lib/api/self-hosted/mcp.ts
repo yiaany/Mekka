@@ -7,62 +7,67 @@ import {
   DevelopmentOperations,
   ExecuteSqlOptions,
   GetLogsOptions,
-} from '@supabase/mcp-server-supabase/platform'
+} from "@supabase/mcp-server-supabase/platform";
 
-import { DEFAULT_EXPOSED_SCHEMAS } from './constants'
-import { generateTypescriptTypes } from './generate-types'
-import { getLints } from './lints'
-import { getLogQuery, retrieveAnalyticsData } from './logs'
-import { applyAndTrackMigrations, listMigrationVersions } from './migrations'
-import { executeQuery } from './query'
-import { getProjectSettings } from './settings'
-import { ResponseError } from '@/types'
+import { DEFAULT_EXPOSED_SCHEMAS } from "./constants";
+import { generateTypescriptTypes } from "./generate-types";
+import { getLints } from "./lints";
+import { getLogQuery, retrieveAnalyticsData } from "./logs";
+import { applyAndTrackMigrations, listMigrationVersions } from "./migrations";
+import { executeQuery } from "./query";
+import { getProjectSettings } from "./settings";
+import { ResponseError } from "@/types";
 
 export type GetDatabaseOperationsOptions = {
-  headers?: HeadersInit
-}
+  headers?: HeadersInit;
+};
 
 export type GetDevelopmentOperationsOptions = {
-  headers?: HeadersInit
-}
+  headers?: HeadersInit;
+};
 
 export type GetDebuggingOperationsOptions = {
-  headers?: HeadersInit
-}
+  headers?: HeadersInit;
+};
 
 export function getDatabaseOperations({
   headers,
 }: GetDatabaseOperationsOptions): DatabaseOperations {
   return {
     async executeSql<T>(_projectRef: string, options: ExecuteSqlOptions) {
-      const { query, parameters, read_only: readOnly } = options
+      const { query, parameters, read_only: readOnly } = options;
 
-      const { data, error } = await executeQuery<T>({ query, parameters, headers, readOnly })
+      const { data, error } = await executeQuery<T>({
+        query,
+        parameters,
+        headers,
+        readOnly,
+      });
 
       if (error) {
-        throw error
+        throw error;
       }
 
-      return data
+      return data;
     },
     async listMigrations() {
-      const { data, error } = await listMigrationVersions({ headers })
+      const { data, error } = await listMigrationVersions({ headers });
 
       if (error) {
-        throw error
+        throw error;
       }
 
-      return data
+      return data;
     },
     async applyMigration(_projectRef: string, options: ApplyMigrationOptions) {
-      const { query, name } = options
-      const { error } = await applyAndTrackMigrations({ query, name, headers })
+      const { query, name } = options;
+      const { error } = await applyAndTrackMigrations({ query, name, headers });
 
       if (error) {
-        throw error
+        throw error;
       }
     },
-  }
+  };
 }
 
 export function getDevelopmentOperations({
@@ -70,47 +75,37 @@ export function getDevelopmentOperations({
 }: GetDevelopmentOperationsOptions): DevelopmentOperations {
   return {
     async getProjectUrl(_projectRef) {
-      const settings = getProjectSettings()
-      return `${settings.app_config.protocol}://${settings.app_config.endpoint}`
+      const settings = getProjectSettings();
+      if (!settings.app_config?.protocol || !settings.app_config.endpoint) {
+        throw new Error("Mekka project URL is not configured");
+      }
+      return `${settings.app_config.protocol}://${settings.app_config.endpoint}`;
     },
     async getPublishableKeys(_projectRef) {
-      if (process.env.SUPABASE_PUBLISHABLE_KEY) {
+      // eslint-disable-next-line turbo/no-undeclared-env-vars -- deployment runtime configuration
+      if (process.env.MEKKA_PUBLISHABLE_KEY) {
         const publishableKeysArray: ApiKey[] = [
           {
-            api_key: process.env.SUPABASE_PUBLISHABLE_KEY,
-            name: 'publishable',
-            type: 'publishable' as ApiKeyType,
+            // eslint-disable-next-line turbo/no-undeclared-env-vars -- deployment runtime configuration
+            api_key: process.env.MEKKA_PUBLISHABLE_KEY,
+            name: "publishable",
+            type: "publishable" as ApiKeyType,
           },
-        ]
-        return publishableKeysArray
+        ];
+        return publishableKeysArray;
       }
-
-      const settings = getProjectSettings()
-      const anonKey = settings.service_api_keys.find((key) => key.name === 'anon key')
-
-      if (!anonKey) {
-        throw new Error('Anon key not found in project settings')
-      }
-
-      const publishableKeysArray: ApiKey[] = [
-        {
-          api_key: anonKey.api_key,
-          name: anonKey.name,
-          type: 'legacy' as ApiKeyType,
-        },
-      ]
-      return publishableKeysArray
+      throw new Error("MEKKA_PUBLISHABLE_KEY is not configured");
     },
     async generateTypescriptTypes(_projectRef) {
-      const response = await generateTypescriptTypes({ headers })
+      const response = await generateTypescriptTypes({ headers });
 
       if (response instanceof ResponseError) {
-        throw response
+        throw response;
       }
 
-      return response
+      return response;
     },
-  }
+  };
 }
 
 export function getDebuggingOperations({
@@ -118,47 +113,47 @@ export function getDebuggingOperations({
 }: GetDebuggingOperationsOptions): DebuggingOperations {
   return {
     async getLogs(projectRef: string, options: GetLogsOptions) {
-      const sql = getLogQuery(options.service)
+      const sql = getLogQuery(options.service);
 
       const { data, error } = await retrieveAnalyticsData({
-        name: 'logs.all',
+        name: "logs.all",
         projectRef,
         params: {
           sql,
           iso_timestamp_start: options.iso_timestamp_start,
           iso_timestamp_end: options.iso_timestamp_end,
         },
-      })
+      });
 
       if (error) {
-        throw error
+        throw error;
       }
 
-      return data
+      return data;
     },
     async getSecurityAdvisors(_projectRef) {
       const { data, error } = await getLints({
         headers,
         exposedSchemas: DEFAULT_EXPOSED_SCHEMAS,
-      })
+      });
 
       if (error) {
-        throw error
+        throw error;
       }
 
-      return data.filter((lint) => lint.categories.includes('SECURITY'))
+      return data.filter((lint) => lint.categories.includes("SECURITY"));
     },
     async getPerformanceAdvisors(_projectRef) {
       const { data, error } = await getLints({
         headers,
         exposedSchemas: DEFAULT_EXPOSED_SCHEMAS,
-      })
+      });
 
       if (error) {
-        throw error
+        throw error;
       }
 
-      return data.filter((lint) => lint.categories.includes('PERFORMANCE'))
+      return data.filter((lint) => lint.categories.includes("PERFORMANCE"));
     },
-  }
+  };
 }

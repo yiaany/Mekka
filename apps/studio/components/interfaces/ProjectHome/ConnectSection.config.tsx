@@ -1,4 +1,4 @@
-import { Box, Cable, Database, KeyRound, Server, Sparkles } from 'lucide-react'
+import { KeyRound, Sparkles } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import type { ConnectMode } from '../ConnectSheet/Connect.types'
@@ -15,38 +15,10 @@ export type ConnectAction = {
 
 export const CONNECT_ACTIONS: ConnectAction[] = [
   {
-    id: 'framework',
-    mode: 'framework',
-    heading: 'Framework',
-    subheading: 'Use a client library',
-    icon: <Box size={16} strokeWidth={1.5} />,
-  },
-  {
-    id: 'server',
-    mode: 'server',
-    heading: 'Server',
-    subheading: 'Build APIs',
-    icon: <Server size={16} strokeWidth={1.5} />,
-  },
-  {
-    id: 'direct',
-    mode: 'direct',
-    heading: 'Direct',
-    subheading: 'Connection string',
-    icon: <Database size={16} strokeWidth={1.5} />,
-  },
-  {
-    id: 'orm',
-    mode: 'orm',
-    heading: 'ORM',
-    subheading: 'Third-party library',
-    icon: <Cable size={16} strokeWidth={1.5} />,
-  },
-  {
     id: 'mcp',
     mode: 'mcp',
-    heading: 'MCP',
-    subheading: 'Connect your agent',
+    heading: 'Mekka MCP',
+    subheading: 'View agent integration status',
     icon: <Sparkles size={16} strokeWidth={1.5} />,
   },
   {

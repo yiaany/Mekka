@@ -12,17 +12,10 @@ import {
   vercelRoutes as routes,
 } from './vercel-config'
 
-// STUDIO_FRAMEWORK gates the TanStack Start deploy. When the env var is
-// unset (the default — used by the Next.js prod deploy) this file returns
-// an empty `VercelConfig` so Vercel honours the dashboard-configured
-// Next.js preset untouched. Vercel reads `vercel.ts` regardless of the
-// framework preset (per vercel.com/docs/project-configuration —
-// `vercel.ts`'s `framework` field overrides the dashboard preset), so a
-// no-op early return is the only way to keep the TanStack rewrites,
-// `framework: null`, and `outputDirectory: 'dist/client'` below from
-// clobbering the Next build. Set `STUDIO_FRAMEWORK=tanstack` on the
-// TanStack Vercel project to opt in.
-const isTanstack = process.env.STUDIO_FRAMEWORK === 'tanstack'
+// TanStack Start is the production default. STUDIO_FRAMEWORK=next keeps the
+// legacy Vercel preset available as an explicit rollback path until final
+// pages/API cleanup is complete.
+const isTanstack = process.env.STUDIO_FRAMEWORK !== 'next'
 
 // Vite's `base` bakes the prefix into asset URLs but leaves the filesystem
 // layout at `dist/client/...`. On Vercel we strip the prefix for file lookups

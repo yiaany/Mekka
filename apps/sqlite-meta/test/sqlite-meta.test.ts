@@ -36,7 +36,10 @@ async function removeTemporaryDirectory(directory: string): Promise<void> {
   }
 }
 
-async function createFixture(actions: readonly string[] = ["schema:manage"]): Promise<{
+async function createFixture(
+  actions: readonly string[] = ["schema:manage"],
+  onAudit?: (event: SqliteMetaAuditEvent) => void,
+): Promise<{
   adapter: StorageAdapter;
   app: ReturnType<typeof createSqliteMetaApp>;
   audits: SqliteMetaAuditEvent[];
@@ -62,7 +65,10 @@ async function createFixture(actions: readonly string[] = ["schema:manage"]): Pr
       storage: adapter,
       schemaCache: createSchemaManifestCache(adapter),
     }),
-    recordAudit: (event) => audits.push(event),
+    recordAudit: (event) => {
+      onAudit?.(event);
+      audits.push(event);
+    },
     checkpointDirectory: directory,
     now: () => 1,
   });
@@ -409,6 +415,66 @@ describe("sqlite-meta management API", () => {
     }
   });
 
+  test("commits row idempotency and audit intent atomically, then replays safely", async () => {
+    let auditAvailable = true;
+    const fixture = await createFixture(["schema:manage", "data:write"], () => {
+      if (!auditAvailable) throw new Error("audit sink unavailable");
+    });
+    try {
+      const table = await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "notes",
+            expectedSchemaHash: schemaHash(fixture.adapter),
+            columns: [{ name: "id", type: "INTEGER", primaryKey: true }],
+          },
+          "ledger-create-notes-001",
+        ),
+      );
+      auditAvailable = false;
+      const first = await fixture.app.handle(
+        request("/rows/notes", "POST", { values: { id: 1 } }, "ledger-row-insert-001"),
+      );
+      const replay = await fixture.app.handle(
+        request("/rows/notes", "POST", { values: { id: 1 } }, "ledger-row-insert-001"),
+      );
+      const conflict = await fixture.app.handle(
+        request("/rows/notes", "POST", { values: { id: 2 } }, "ledger-row-insert-001"),
+      );
+
+      expect(table.status).toBe(200);
+      expect(first.status).toBe(200);
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual(await first.clone().json());
+      expect(conflict.status).toBe(409);
+      expect(
+        fixture.adapter.execute<{ count: number }>({ sql: 'SELECT COUNT(*) AS count FROM "notes"' })
+          .rows,
+      ).toEqual([{ count: 1 }]);
+      expect(
+        fixture.adapter.execute<{ count: number }>({
+          sql: "SELECT COUNT(*) AS count FROM _mekka_audit_outbox",
+        }).rows,
+      ).toEqual([{ count: 1 }]);
+
+      auditAvailable = true;
+      const delivered = await fixture.app.handle(
+        request("/rows/notes", "POST", { values: { id: 1 } }, "ledger-row-insert-001"),
+      );
+      expect(delivered.status).toBe(200);
+      expect(fixture.audits).toContainEqual(expect.objectContaining({ action: "create_row" }));
+      expect(
+        fixture.adapter.execute<{ count: number }>({
+          sql: "SELECT COUNT(*) AS count FROM _mekka_audit_outbox",
+        }).rows,
+      ).toEqual([{ count: 0 }]);
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+
   test("keeps SQL read-only by default and blocks multi-statement and dangerous SQL", async () => {
     const fixture = await createFixture(["schema:manage", "data:read"]);
     try {
@@ -429,12 +495,34 @@ describe("sqlite-meta management API", () => {
           "sql-multi-notes001",
         ),
       );
+      const table = await fixture.app.handle(
+        request(
+          "/tables",
+          "POST",
+          {
+            name: "notes",
+            expectedSchemaHash: schemaHash(fixture.adapter),
+            columns: [{ name: "id", type: "INTEGER", primaryKey: true }],
+          },
+          "sql-create-notes-001",
+        ),
+      );
+      const join = await fixture.app.handle(
+        request(
+          "/sql",
+          "POST",
+          { sql: "SELECT notes.id FROM notes JOIN sqlite_sequence ON true LIMIT 1" },
+          "sql-join-notes-001",
+        ),
+      );
 
       expect(read.status).toBe(200);
+      expect(table.status).toBe(200);
       expect(await read.json()).toEqual({ rows: [{ value: 1 }], changes: 0 });
       expect(write.status).toBe(403);
       expect(dangerous.status).toBe(501);
       expect(multiStatement.status).toBe(400);
+      expect(join.status).toBe(501);
       expect(JSON.stringify(fixture.audits)).not.toContain("SELECT 1 AS value");
     } finally {
       fixture.adapter.close();

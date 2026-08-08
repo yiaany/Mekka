@@ -1,12 +1,12 @@
-import { createFileRoute, Outlet } from '@tanstack/react-router'
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 
-import { EditorBaseLayout } from '@/components/layouts/editors/EditorBaseLayout'
-import SQLEditorLayout from '@/components/layouts/SQLEditorLayout/SQLEditorLayout'
-import { SQLEditorMenu } from '@/components/layouts/SQLEditorLayout/SQLEditorMenu'
+import { EditorBaseLayout } from "@/components/layouts/editors/EditorBaseLayout";
+import SQLEditorLayout from "@/components/layouts/SQLEditorLayout/SQLEditorLayout";
+import { SQLEditorMenu } from "@/components/layouts/SQLEditorLayout/SQLEditorMenu";
 
-export const Route = createFileRoute('/project/$ref/sql')({
+export const Route = createFileRoute("/project/$ref/sql")({
   component: SQLEditorShell,
-})
+});
 
 // Twin of routes/project/$ref/editor.tsx — all four sql/* leaves share
 // identical layout wrapping (`<DefaultLayout><EditorBaseLayout productMenu>
@@ -25,5 +25,5 @@ function SQLEditorShell() {
         <Outlet />
       </SQLEditorLayout>
     </EditorBaseLayout>
-  )
+  );
 }

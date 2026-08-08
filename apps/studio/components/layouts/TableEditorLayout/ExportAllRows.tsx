@@ -1,9 +1,9 @@
-import { useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { IS_PLATFORM } from 'common'
-import saveAs from 'file-saver'
-import Papa from 'papaparse'
-import { useCallback, useState, type ReactNode } from 'react'
-import { ConfirmationModal } from 'ui-patterns/Dialogs/ConfirmationModal'
+import { useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { IS_PLATFORM } from "common";
+import saveAs from "file-saver";
+import Papa from "papaparse";
+import { useCallback, useState, type ReactNode } from "react";
+import { ConfirmationModal } from "ui-patterns/Dialogs/ConfirmationModal";
 
 import {
   BlobCreationError,
@@ -17,60 +17,69 @@ import {
   TableDetailsFetchError,
   TableTooLargeError,
   type ExportAllRowsErrorFamily,
-} from './ExportAllRows.errors'
-import { useProgressToasts } from './ExportAllRows.progress'
-import { hydrateTruncatedRows } from '@/components/grid/components/header/Header.utils'
-import { parseSupaTable } from '@/components/grid/SupabaseGrid.utils'
-import type { Filter, Sort, SupaTable } from '@/components/grid/types'
-import { formatTableRowsToSQL } from '@/components/interfaces/TableGridEditor/TableEntity.utils'
-import { InlineLink } from '@/components/ui/InlineLink'
-import { ENTITY_TYPE } from '@/data/entity-types/entity-type-constants'
-import type { Entity } from '@/data/entity-types/entity-types-infinite-query'
-import { tableEditorKeys } from '@/data/table-editor/keys'
-import { getTableEditor, type TableEditorData } from '@/data/table-editor/table-editor-query'
-import { isTableLike } from '@/data/table-editor/table-editor-types'
-import { fetchAllTableRows } from '@/data/table-rows/table-rows-query'
-import { useLatest } from '@/hooks/misc/useLatest'
-import { DOCS_URL } from '@/lib/constants'
-import type { RoleImpersonationState } from '@/lib/role-impersonation'
+} from "./ExportAllRows.errors";
+import { useProgressToasts } from "./ExportAllRows.progress";
+import { hydrateTruncatedRows } from "@/components/grid/components/header/Header.utils";
+import { parseSupaTable } from "@/components/grid/SupabaseGrid.utils";
+import type { Filter, Sort, SupaTable } from "@/components/grid/types";
+import { formatTableRowsToSQL } from "@/components/interfaces/TableGridEditor/TableEntity.utils";
+import { InlineLink } from "@/components/ui/InlineLink";
+import { ENTITY_TYPE } from "@/data/entity-types/entity-type-constants";
+import type { Entity } from "@/data/entity-types/entity-types-infinite-query";
+import { tableEditorKeys } from "@/data/table-editor/keys";
+import {
+  getTableEditor,
+  type TableEditorData,
+} from "@/data/table-editor/table-editor-query";
+import { isTableLike } from "@/data/table-editor/table-editor-types";
+import { fetchAllTableRows } from "@/data/table-rows/table-rows-query";
+import { useLatest } from "@/hooks/misc/useLatest";
+import { DOCS_URL } from "@/lib/constants";
+import type { RoleImpersonationState } from "@/lib/role-impersonation";
 
 // [Joshen] CSV exports require this guard as a fail-safe if the table is
 // just too large for a browser to keep all the rows in memory before
 // exporting. Either that or export as multiple CSV sheets with max n rows each
-const MAX_EXPORT_ROW_COUNT = 500000
+const MAX_EXPORT_ROW_COUNT = 500000;
 const MAX_EXPORT_ROW_COUNT_MESSAGE = (
   <p>
-    Sorry! We're unable to support exporting row counts larger than{' '}
-    {MAX_EXPORT_ROW_COUNT.toLocaleString('en-US')} at the moment. Alternatively, you may consider
-    using <InlineLink href={`${DOCS_URL}/reference/cli/supabase-db-dump`}>pg_dump</InlineLink> via
-    our CLI instead.
+    Sorry! We're unable to support exporting row counts larger than{" "}
+    {MAX_EXPORT_ROW_COUNT.toLocaleString("en-US")} at the moment. Alternatively,
+    you may consider using{" "}
+    <InlineLink href={`${DOCS_URL}/reference/cli/supabase-db-dump`}>
+      pg_dump
+    </InlineLink>{" "}
+    via our CLI instead.
   </p>
-)
+);
 
 type OutputCallbacks = {
-  convertToOutputFormat: (formattedRows: Record<string, unknown>[], table: SupaTable) => string
-  convertToBlob: (str: string) => Blob
-  save: (blob: Blob, table: SupaTable) => void
-}
+  convertToOutputFormat: (
+    formattedRows: Record<string, unknown>[],
+    table: SupaTable,
+  ) => string;
+  convertToBlob: (str: string) => Blob;
+  save: (blob: Blob, table: SupaTable) => void;
+};
 
 type FetchAllRowsParams = {
-  queryClient: QueryClient
-  projectRef: string
-  connectionString: string | null
-  entity: Pick<Entity, 'id' | 'name' | 'type'>
-  bypassConfirmation: boolean
-  filters?: Filter[]
-  sorts?: Sort[]
-  roleImpersonationState?: RoleImpersonationState
-  totalRows?: number
-  startCallback?: () => void
-  progressCallback?: (progress: number) => void
-} & OutputCallbacks
+  queryClient: QueryClient;
+  projectRef: string;
+  connectionString: string | null;
+  entity: Pick<Entity, "id" | "name" | "type">;
+  bypassConfirmation: boolean;
+  filters?: Filter[];
+  sorts?: Sort[];
+  roleImpersonationState?: RoleImpersonationState;
+  totalRows?: number;
+  startCallback?: () => void;
+  progressCallback?: (progress: number) => void;
+} & OutputCallbacks;
 
 type FetchAllRowsReturn =
-  | { status: 'require_confirmation'; reason: string }
-  | { status: 'error'; error: ExportAllRowsErrorFamily }
-  | { status: 'success'; rowsExported: number }
+  | { status: "require_confirmation"; reason: string }
+  | { status: "error"; error: ExportAllRowsErrorFamily }
+  | { status: "success"; rowsExported: number };
 
 const fetchAllRows = async ({
   queryClient,
@@ -89,71 +98,86 @@ const fetchAllRows = async ({
   save,
 }: FetchAllRowsParams): Promise<FetchAllRowsReturn> => {
   if (IS_PLATFORM && !connectionString) {
-    return { status: 'error', error: new NoConnectionStringError() }
+    return { status: "error", error: new NoConnectionStringError() };
   }
 
-  let table: TableEditorData | undefined
+  let table: TableEditorData | undefined;
   try {
     table = await queryClient.ensureQueryData({
-      // Query is the same even if connectionString changes
-      // eslint-disable-next-line @tanstack/query/exhaustive-deps
-      queryKey: tableEditorKeys.tableEditor(projectRef, entity.id),
+      queryKey: [
+        ...tableEditorKeys.tableEditor(projectRef, entity.id),
+        connectionString,
+      ],
       queryFn: ({ signal }) =>
         getTableEditor({ projectRef, connectionString, id: entity.id }, signal),
-    })
+    });
   } catch (error: unknown) {
-    return { status: 'error', error: new TableDetailsFetchError(entity.name, error) }
+    return {
+      status: "error",
+      error: new TableDetailsFetchError(entity.name, error),
+    };
   }
 
   if (!table) {
-    return { status: 'error', error: new NoTableError(entity.name) }
+    return { status: "error", error: new NoTableError(entity.name) };
   }
 
-  const type = table.entity_type
+  const type = table.entity_type;
   if (type === ENTITY_TYPE.VIEW && !bypassConfirmation) {
     return {
-      status: 'require_confirmation',
+      status: "require_confirmation",
       reason: `Exporting a view may cause consistency issues or performance issues on very large views. If possible, we recommend exporting the underlying table instead.`,
-    }
+    };
   } else if (type === ENTITY_TYPE.MATERIALIZED_VIEW && !bypassConfirmation) {
     return {
-      status: 'require_confirmation',
+      status: "require_confirmation",
       reason: `Exporting a materialized view may cause performance issues on very large views. If possible, we recommend exporting the underlying table instead.`,
-    }
+    };
   } else if (type === ENTITY_TYPE.FOREIGN_TABLE && !bypassConfirmation) {
     return {
-      status: 'require_confirmation',
+      status: "require_confirmation",
       reason: `Exporting a foreign table may cause consistency issues or performance issues on very large tables.`,
-    }
+    };
   }
 
   if (totalRows !== undefined) {
     if (totalRows > MAX_EXPORT_ROW_COUNT) {
       return {
-        status: 'error',
-        error: new TableTooLargeError(table.name, totalRows, MAX_EXPORT_ROW_COUNT),
-      }
+        status: "error",
+        error: new TableTooLargeError(
+          table.name,
+          totalRows,
+          MAX_EXPORT_ROW_COUNT,
+        ),
+      };
     }
-  } else if (isTableLike(table) && table.live_rows_estimate > MAX_EXPORT_ROW_COUNT) {
+  } else if (
+    isTableLike(table) &&
+    table.live_rows_estimate > MAX_EXPORT_ROW_COUNT
+  ) {
     return {
-      status: 'error',
-      error: new TableTooLargeError(table.name, table.live_rows_estimate, MAX_EXPORT_ROW_COUNT),
-    }
+      status: "error",
+      error: new TableTooLargeError(
+        table.name,
+        table.live_rows_estimate,
+        MAX_EXPORT_ROW_COUNT,
+      ),
+    };
   }
 
-  const supaTable = parseSupaTable(table)
+  const supaTable = parseSupaTable(table);
 
-  const primaryKey = supaTable.primaryKey
+  const primaryKey = supaTable.primaryKey;
   if (!primaryKey && !bypassConfirmation) {
     return {
-      status: 'require_confirmation',
+      status: "require_confirmation",
       reason: `This table does not have a primary key defined, which may cause performance issues when exporting very large tables.`,
-    }
+    };
   }
 
-  startCallback?.()
+  startCallback?.();
 
-  let rows: Record<string, unknown>[]
+  let rows: Record<string, unknown>[];
   try {
     rows = await fetchAllTableRows({
       projectRef,
@@ -163,135 +187,150 @@ const fetchAllRows = async ({
       sorts,
       roleImpersonationState,
       progressCallback,
-    })
+    });
   } catch (error: unknown) {
-    return { status: 'error', error: new FetchRowsError(supaTable.name, error) }
+    return {
+      status: "error",
+      error: new FetchRowsError(supaTable.name, error),
+    };
   }
 
   if (rows.length === 0) {
-    return { status: 'error', error: new NoRowsToExportError(entity.name) }
+    return { status: "error", error: new NoRowsToExportError(entity.name) };
   }
-  const formattedRows = formatRowsForExport(rows, supaTable)
+  const formattedRows = formatRowsForExport(rows, supaTable);
 
   return convertAndDownload(formattedRows, supaTable, {
     convertToOutputFormat,
     convertToBlob,
     save,
-  })
-}
+  });
+};
 
-const formatRowsForExport = (rows: Record<string, unknown>[], table: SupaTable) => {
+const formatRowsForExport = (
+  rows: Record<string, unknown>[],
+  table: SupaTable,
+) => {
   return rows.map((row) => {
-    const formattedRow = { ...row }
+    const formattedRow = { ...row };
     Object.keys(row).map((column) => {
-      if (column === 'idx' && !table.columns.some((col) => col.name === 'idx')) {
+      if (
+        column === "idx" &&
+        !table.columns.some((col) => col.name === "idx")
+      ) {
         // When we fetch this data from the database, we automatically add an
         // 'idx' column if none exists. We shouldn't export this column since
         // it's not actually part of the user's table.
-        delete formattedRow[column]
-        return
+        delete formattedRow[column];
+        return;
       }
 
-      if (typeof row[column] === 'object' && row[column] !== null)
-        formattedRow[column] = JSON.stringify(formattedRow[column])
-    })
-    return formattedRow
-  })
-}
+      if (typeof row[column] === "object" && row[column] !== null)
+        formattedRow[column] = JSON.stringify(formattedRow[column]);
+    });
+    return formattedRow;
+  });
+};
 
 const convertAndDownload = (
   formattedRows: Record<string, unknown>[],
   table: SupaTable,
-  callbacks: OutputCallbacks
+  callbacks: OutputCallbacks,
 ):
-  | { status: 'error'; error: ExportAllRowsErrorFamily }
-  | { status: 'success'; rowsExported: number } => {
-  let output: string
+  | { status: "error"; error: ExportAllRowsErrorFamily }
+  | { status: "success"; rowsExported: number } => {
+  let output: string;
   try {
-    output = callbacks.convertToOutputFormat(formattedRows, table)
+    output = callbacks.convertToOutputFormat(formattedRows, table);
   } catch (error: unknown) {
-    return { status: 'error', error: new OutputConversionError(error) }
+    return { status: "error", error: new OutputConversionError(error) };
   }
-  let data: Blob
+  let data: Blob;
   try {
-    data = callbacks.convertToBlob(output)
+    data = callbacks.convertToBlob(output);
   } catch (error: unknown) {
-    return { status: 'error', error: new BlobCreationError(error) }
+    return { status: "error", error: new BlobCreationError(error) };
   }
   try {
-    callbacks.save(data, table)
+    callbacks.save(data, table);
   } catch (error: unknown) {
-    return { status: 'error', error: new DownloadSaveError(error) }
+    return { status: "error", error: new DownloadSaveError(error) };
   }
 
   return {
-    status: 'success',
+    status: "success",
     rowsExported: formattedRows.length,
-  }
-}
+  };
+};
 
 type UseExportAllRowsParams =
   | { enabled: false }
   | ({
-      enabled: true
-      projectRef: string
-      connectionString: string | null
-      entity: Pick<Entity, 'id' | 'name' | 'type'>
+      enabled: true;
+      projectRef: string;
+      connectionString: string | null;
+      entity: Pick<Entity, "id" | "name" | "type">;
       /**
        * If known, the total number of rows that will be exported.
        * This is used to show progress percentage during export.
        */
-      totalRows?: number
+      totalRows?: number;
     } & (
       | {
           /**
            * Rows need to be fetched from the database.
            */
-          type: 'fetch_all'
-          filters?: Filter[]
-          sorts?: Sort[]
-          roleImpersonationState?: RoleImpersonationState
+          type: "fetch_all";
+          filters?: Filter[];
+          sorts?: Sort[];
+          roleImpersonationState?: RoleImpersonationState;
         }
       | {
           /**
            * Rows are already available and provided directly.
            */
-          type: 'provided_rows'
-          table: SupaTable
-          rows: Record<string, unknown>[]
-          roleImpersonationState?: RoleImpersonationState
+          type: "provided_rows";
+          table: SupaTable;
+          rows: Record<string, unknown>[];
+          roleImpersonationState?: RoleImpersonationState;
         }
-    ))
+    ));
 
 type UseExportAllRowsReturn = {
-  exportInDesiredFormat: () => Promise<void>
-  confirmationModal: ReactNode | null
-}
+  exportInDesiredFormat: () => Promise<void>;
+  confirmationModal: ReactNode | null;
+};
 
 export const useExportAllRowsGeneric = (
-  params: UseExportAllRowsParams & OutputCallbacks
+  params: UseExportAllRowsParams & OutputCallbacks,
 ): UseExportAllRowsReturn => {
-  const queryClient = useQueryClient()
+  const queryClient = useQueryClient();
   const {
     startProgressTracker,
     trackPercentageProgress,
     stopTrackerWithError,
     dismissTrackerSilently,
     markTrackerComplete,
-  } = useProgressToasts()
+  } = useProgressToasts();
 
-  const { convertToOutputFormat, convertToBlob, save } = params
+  const { convertToOutputFormat, convertToBlob, save } = params;
 
-  const [confirmationMessage, setConfirmationMessage] = useState<string | null>(null)
+  const [confirmationMessage, setConfirmationMessage] = useState<string | null>(
+    null,
+  );
 
   const exportInternalRef = useLatest(
-    async ({ bypassConfirmation }: { bypassConfirmation: boolean }): Promise<void> => {
-      if (!params.enabled) return
+    async ({
+      bypassConfirmation,
+    }: {
+      bypassConfirmation: boolean;
+    }): Promise<void> => {
+      if (!params.enabled) return;
 
-      const { projectRef, connectionString, entity, totalRows } = params
+      const { projectRef, connectionString, entity, totalRows } = params;
 
       const exportResult: FetchAllRowsReturn =
-        params.type === 'provided_rows'
+        params.type === "provided_rows"
           ? await (async () => {
               const hydrated = await hydrateTruncatedRows({
                 rows: params.rows,
@@ -299,18 +338,20 @@ export const useExportAllRowsGeneric = (
                 projectRef,
                 connectionString,
                 roleImpersonationState: params.roleImpersonationState,
-              })
-              if (hydrated.status === 'no_primary_key') {
+              });
+              if (hydrated.status === "no_primary_key") {
                 return {
-                  status: 'error' as const,
-                  error: new NoPrimaryKeyForTruncatedRowsError(params.table.name),
-                }
+                  status: "error" as const,
+                  error: new NoPrimaryKeyForTruncatedRowsError(
+                    params.table.name,
+                  ),
+                };
               }
-              if (hydrated.status === 'fetch_error') {
+              if (hydrated.status === "fetch_error") {
                 return {
-                  status: 'error' as const,
+                  status: "error" as const,
                   error: new FetchRowsError(params.table.name, hydrated.error),
-                }
+                };
               }
               return convertAndDownload(
                 formatRowsForExport(hydrated.rows, params.table),
@@ -319,8 +360,8 @@ export const useExportAllRowsGeneric = (
                   convertToOutputFormat,
                   convertToBlob,
                   save,
-                }
-              )
+                },
+              );
             })()
           : await fetchAllRows({
               queryClient,
@@ -337,7 +378,7 @@ export const useExportAllRowsGeneric = (
                   id: entity.id,
                   name: entity.name,
                   trackPercentage: totalRows !== undefined,
-                })
+                });
               },
               progressCallback: totalRows
                 ? (value: number) =>
@@ -351,62 +392,66 @@ export const useExportAllRowsGeneric = (
               convertToOutputFormat,
               convertToBlob,
               save,
-            })
+            });
 
-      if (exportResult.status === 'error') {
-        const error = exportResult.error
+      if (exportResult.status === "error") {
+        const error = exportResult.error;
         if (error instanceof NoRowsToExportError) {
           return stopTrackerWithError(
             entity.id,
             entity.name,
-            `The table ${entity.name} has no rows to export.`
-          )
+            `The table ${entity.name} has no rows to export.`,
+          );
         }
         if (error instanceof TableTooLargeError) {
-          return stopTrackerWithError(entity.id, entity.name, MAX_EXPORT_ROW_COUNT_MESSAGE)
+          return stopTrackerWithError(
+            entity.id,
+            entity.name,
+            MAX_EXPORT_ROW_COUNT_MESSAGE,
+          );
         }
         if (error instanceof NoPrimaryKeyForTruncatedRowsError) {
-          return stopTrackerWithError(entity.id, entity.name, error.message)
+          return stopTrackerWithError(entity.id, entity.name, error.message);
         }
         console.error(
           `Export All Rows > Error: %s%s%s`,
           error.message,
-          error.cause?.message ? `\n${error.cause.message}` : '',
-          error.cause?.stack ? `:\n${error.cause.stack}` : ''
-        )
-        return stopTrackerWithError(entity.id, entity.name)
+          error.cause?.message ? `\n${error.cause.message}` : "",
+          error.cause?.stack ? `:\n${error.cause.stack}` : "",
+        );
+        return stopTrackerWithError(entity.id, entity.name);
       }
 
-      if (exportResult.status === 'require_confirmation') {
-        return setConfirmationMessage(exportResult.reason)
+      if (exportResult.status === "require_confirmation") {
+        return setConfirmationMessage(exportResult.reason);
       }
 
-      markTrackerComplete(entity.id, exportResult.rowsExported)
-    }
-  )
+      markTrackerComplete(entity.id, exportResult.rowsExported);
+    },
+  );
 
   const exportInternal = useCallback(
     (args: { bypassConfirmation: boolean }) => exportInternalRef.current(args),
-    [exportInternalRef]
-  )
+    [exportInternalRef],
+  );
 
   const exportInDesiredFormat = useCallback(
     () => exportInternal({ bypassConfirmation: false }),
-    [exportInternal]
-  )
+    [exportInternal],
+  );
 
   const onConfirmExport = () => {
     exportInternal({
       bypassConfirmation: true,
-    })
-    setConfirmationMessage(null)
-  }
+    });
+    setConfirmationMessage(null);
+  };
   const onCancelExport = () => {
-    if (!params.enabled) return
+    if (!params.enabled) return;
 
-    dismissTrackerSilently(params.entity.id)
-    setConfirmationMessage(null)
-  }
+    dismissTrackerSilently(params.entity.id);
+    setConfirmationMessage(null);
+  };
 
   return {
     exportInDesiredFormat,
@@ -417,77 +462,86 @@ export const useExportAllRowsGeneric = (
         onCancel={onCancelExport}
         onConfirm={onConfirmExport}
         alert={{
-          base: { className: '[&>div>div>h5]:font-normal border-x-0 border-t-0 rounded-none mb-0' },
+          base: {
+            className:
+              "[&>div>div>h5]:font-normal border-x-0 border-t-0 rounded-none mb-0",
+          },
           title: confirmationMessage,
         }}
       />
     ) : null,
-  }
-}
+  };
+};
 
 type UseExportAllRowsAsCsvReturn = {
-  exportCsv: () => Promise<void>
-  confirmationModal: ReactNode | null
-}
+  exportCsv: () => Promise<void>;
+  confirmationModal: ReactNode | null;
+};
 
 export const useExportAllRowsAsCsv = (
-  params: UseExportAllRowsParams
+  params: UseExportAllRowsParams,
 ): UseExportAllRowsAsCsvReturn => {
-  const { exportInDesiredFormat: exportCsv, confirmationModal } = useExportAllRowsGeneric({
-    ...params,
-    convertToOutputFormat: (formattedRows, table) =>
-      Papa.unparse(formattedRows, {
-        columns: table.columns.map((col) => col.name),
-      }),
-    convertToBlob: (csv) => new Blob([csv], { type: 'text/csv;charset=utf-8;' }),
-    save: (csvData, table) => saveAs(csvData, `${table.name}_rows.csv`),
-  })
+  const { exportInDesiredFormat: exportCsv, confirmationModal } =
+    useExportAllRowsGeneric({
+      ...params,
+      convertToOutputFormat: (formattedRows, table) =>
+        Papa.unparse(formattedRows, {
+          columns: table.columns.map((col) => col.name),
+        }),
+      convertToBlob: (csv) =>
+        new Blob([csv], { type: "text/csv;charset=utf-8;" }),
+      save: (csvData, table) => saveAs(csvData, `${table.name}_rows.csv`),
+    });
 
   return {
     exportCsv,
     confirmationModal,
-  }
-}
+  };
+};
 
 type UseExportAllRowsAsSqlReturn = {
-  exportSql: () => Promise<void>
-  confirmationModal: ReactNode | null
-}
+  exportSql: () => Promise<void>;
+  confirmationModal: ReactNode | null;
+};
 
 export const useExportAllRowsAsSql = (
-  params: UseExportAllRowsParams
+  params: UseExportAllRowsParams,
 ): UseExportAllRowsAsSqlReturn => {
-  const { exportInDesiredFormat: exportSql, confirmationModal } = useExportAllRowsGeneric({
-    ...params,
-    convertToOutputFormat: (formattedRows, table) => formatTableRowsToSQL(table, formattedRows),
-    convertToBlob: (sqlStatements) =>
-      new Blob([sqlStatements], { type: 'text/sql;charset=utf-8;' }),
-    save: (sqlData, table) => saveAs(sqlData, `${table.name}_rows.sql`),
-  })
+  const { exportInDesiredFormat: exportSql, confirmationModal } =
+    useExportAllRowsGeneric({
+      ...params,
+      convertToOutputFormat: (formattedRows, table) =>
+        formatTableRowsToSQL(table, formattedRows),
+      convertToBlob: (sqlStatements) =>
+        new Blob([sqlStatements], { type: "text/sql;charset=utf-8;" }),
+      save: (sqlData, table) => saveAs(sqlData, `${table.name}_rows.sql`),
+    });
 
   return {
     exportSql,
     confirmationModal,
-  }
-}
+  };
+};
 
 type UseExportAllRowsAsJsonReturn = {
-  exportJson: () => Promise<void>
-  confirmationModal: ReactNode | null
-}
+  exportJson: () => Promise<void>;
+  confirmationModal: ReactNode | null;
+};
 
 export const useExportAllRowsAsJson = (
-  params: UseExportAllRowsParams
+  params: UseExportAllRowsParams,
 ): UseExportAllRowsAsJsonReturn => {
-  const { exportInDesiredFormat: exportJson, confirmationModal } = useExportAllRowsGeneric({
-    ...params,
-    convertToOutputFormat: (formattedRows) => JSON.stringify(formattedRows),
-    convertToBlob: (jsonStr) => new Blob([jsonStr], { type: 'application/json;charset=utf-8;' }),
-    save: (jsonData, table) => saveAs(jsonData, `${table.name}_rows.json`),
-  })
+  const { exportInDesiredFormat: exportJson, confirmationModal } =
+    useExportAllRowsGeneric({
+      ...params,
+      convertToOutputFormat: (formattedRows) => JSON.stringify(formattedRows),
+      convertToBlob: (jsonStr) =>
+        new Blob([jsonStr], { type: "application/json;charset=utf-8;" }),
+      save: (jsonData, table) => saveAs(jsonData, `${table.name}_rows.json`),
+    });
 
   return {
     exportJson,
     confirmationModal,
-  }
-}
+  };
+};

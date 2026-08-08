@@ -954,8 +954,9 @@ export async function createMcpHttpResponse(
   request: Request,
   dependencies: McpHttpDependencies,
 ): Promise<Response> {
+  let protectedResource: ReturnType<typeof parseProtectedResource> | undefined;
   try {
-    const protectedResource = parseProtectedResource(dependencies.protectedResource);
+    protectedResource = parseProtectedResource(dependencies.protectedResource);
     const url = new URL(request.url);
     if (
       url.pathname === `/.well-known/oauth-protected-resource${protectedResource.resource.pathname}`
@@ -969,7 +970,7 @@ export async function createMcpHttpResponse(
     await server.connect(transport);
     return await transport.handleRequest(request);
   } catch (error) {
-    return unauthorizedResponse(error);
+    return unauthorizedResponse(error, protectedResource);
   }
 }
 
@@ -1133,11 +1134,25 @@ function toolJson(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
 }
 
-function unauthorizedResponse(error: unknown): Response {
+function unauthorizedResponse(
+  error: unknown,
+  protectedResource?: ReturnType<typeof parseProtectedResource>,
+): Response {
   const status = error instanceof ProtocolError && error.code === "forbidden" ? 403 : 401;
+  const headers = new Headers({
+    "content-type": "application/json",
+    "cache-control": "no-store",
+  });
+  if (status === 401 && protectedResource !== undefined) {
+    const metadataUrl = new URL(
+      `/.well-known/oauth-protected-resource${protectedResource.resource.pathname}`,
+      protectedResource.resource,
+    );
+    headers.set("www-authenticate", `Bearer resource_metadata="${metadataUrl.href}"`);
+  }
   return new Response(JSON.stringify({ error: status === 403 ? "forbidden" : "auth" }), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers,
   });
 }
 

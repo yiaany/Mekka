@@ -1,63 +1,82 @@
-import { isStudioDomainError } from '@mekka/studio-domain-sdk'
-import { PermissionAction } from '@supabase/shared-types/out/constants'
-import { keepPreviousData } from '@tanstack/react-query'
-import { useParams } from 'common'
-import { Filter, Plus } from 'lucide-react'
-import { useRouter } from 'next/router'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, Checkbox, Label, Popover, PopoverContent, PopoverTrigger } from 'ui'
+import { isStudioDomainError } from "@mekka/studio-domain-sdk";
+import { PermissionAction } from "@supabase/shared-types/out/constants";
+import { keepPreviousData } from "@tanstack/react-query";
+import { useParams } from "common";
+import { Filter, Plus } from "lucide-react";
+import { useRouter } from "next/router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Button,
+  Checkbox,
+  Label,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "ui";
 import {
   InnerSideBarEmptyPanel,
   InnerSideBarFilters,
   InnerSideBarFilterSearchInput,
   InnerSideBarFilterSortDropdown,
   InnerSideBarFilterSortDropdownItem,
-} from 'ui-patterns/InnerSideMenu'
+} from "ui-patterns/InnerSideMenu";
 
-import { useTableEditorTabsCleanUp } from '../Tabs/Tabs.utils'
-import { EntityListItem } from './EntityListItem'
-import { TableMenuEmptyState } from './TableMenuEmptyState'
-import { TableMenuFilterEmptyState } from './TableMenuFilterEmptyState'
-import { StudioDomainErrorPanel } from './StudioDomainErrorPanel'
-import { ExportDialog } from '@/components/grid/components/header/ExportDialog'
-import { parseSupaTable } from '@/components/grid/SupabaseGrid.utils'
-import { SupaTable } from '@/components/grid/types'
-import { ProtectedSchemaWarning } from '@/components/interfaces/Database/ProtectedSchemaWarning'
-import { ErrorMatcher } from '@/components/interfaces/ErrorHandling/ErrorMatcher'
-import { EditorMenuListSkeleton } from '@/components/layouts/TableEditorLayout/EditorMenuListSkeleton'
-import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
-import { InfiniteListDefault, LoaderForIconMenuItems } from '@/components/ui/InfiniteList'
-import { SchemaSelector } from '@/components/ui/SchemaSelector'
-import { ShortcutTooltip } from '@/components/ui/ShortcutTooltip'
-import { ENTITY_TYPE } from '@/data/entity-types/entity-type-constants'
-import { useEntityTypesQuery } from '@/data/entity-types/entity-types-infinite-query'
-import { useTableApiAccessQuery } from '@/data/privileges/table-api-access-query'
-import { getTableEditor, useTableEditorQuery } from '@/data/table-editor/table-editor-query'
-import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
-import { useLocalStorage } from '@/hooks/misc/useLocalStorage'
-import { useQuerySchemaState } from '@/hooks/misc/useSchemaQueryState'
-import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
-import { useIsProtectedSchema } from '@/hooks/useProtectedSchemas'
-import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
-import { useShortcut } from '@/state/shortcuts/useShortcut'
-import { useTableEditorStateSnapshot } from '@/state/table-editor'
+import { useTableEditorTabsCleanUp } from "../Tabs/Tabs.utils";
+import { EntityListItem } from "./EntityListItem";
+import { TableMenuEmptyState } from "./TableMenuEmptyState";
+import { TableMenuFilterEmptyState } from "./TableMenuFilterEmptyState";
+import { StudioDomainErrorPanel } from "./StudioDomainErrorPanel";
+import { ExportDialog } from "@/components/grid/components/header/ExportDialog";
+import { parseSupaTable } from "@/components/grid/SupabaseGrid.utils";
+import { SupaTable } from "@/components/grid/types";
+import { ProtectedSchemaWarning } from "@/components/interfaces/Database/ProtectedSchemaWarning";
+import { ErrorMatcher } from "@/components/interfaces/ErrorHandling/ErrorMatcher";
+import { EditorMenuListSkeleton } from "@/components/layouts/TableEditorLayout/EditorMenuListSkeleton";
+import { ButtonTooltip } from "@/components/ui/ButtonTooltip";
+import {
+  InfiniteListDefault,
+  LoaderForIconMenuItems,
+} from "@/components/ui/InfiniteList";
+import { SchemaSelector } from "@/components/ui/SchemaSelector";
+import { ShortcutTooltip } from "@/components/ui/ShortcutTooltip";
+import { ENTITY_TYPE } from "@/data/entity-types/entity-type-constants";
+import { useEntityTypesQuery } from "@/data/entity-types/entity-types-infinite-query";
+import { useTableApiAccessQuery } from "@/data/privileges/table-api-access-query";
+import {
+  getTableEditor,
+  useTableEditorQuery,
+} from "@/data/table-editor/table-editor-query";
+import { useAsyncCheckPermissions } from "@/hooks/misc/useCheckPermissions";
+import { useLocalStorage } from "@/hooks/misc/useLocalStorage";
+import { useQuerySchemaState } from "@/hooks/misc/useSchemaQueryState";
+import { useSelectedProjectQuery } from "@/hooks/misc/useSelectedProject";
+import { useIsProtectedSchema } from "@/hooks/useProtectedSchemas";
+import { IS_PLATFORM } from "@/lib/constants";
+import { SHORTCUT_IDS } from "@/state/shortcuts/registry";
+import { useShortcut } from "@/state/shortcuts/useShortcut";
+import { useTableEditorStateSnapshot } from "@/state/table-editor";
 
-type Sort = 'alphabetical' | 'grouped-alphabetical'
+type Sort = "alphabetical" | "grouped-alphabetical";
 
 export const TableEditorMenu = () => {
-  const router = useRouter()
-  const { id: _id, ref: projectRef } = useParams()
-  const id = _id ? Number(_id) : undefined
-  const snap = useTableEditorStateSnapshot()
-  const { selectedSchema, setSelectedSchema } = useQuerySchemaState()
+  const router = useRouter();
+  const { id: _id, ref: projectRef } = useParams();
+  const id = _id && /^\d+$/.test(_id) ? Number(_id) : undefined;
+  const snap = useTableEditorStateSnapshot();
+  const { selectedSchema, setSelectedSchema } = useQuerySchemaState();
 
-  const [searchText, setSearchText] = useState<string>('')
-  const [isSchemaDropdownOpen, setIsSchemaDropdownOpen] = useState(false)
-  const [tableToExport, setTableToExport] = useState<SupaTable>()
-  const [visibleTypes, setVisibleTypes] = useState<string[]>(Object.values(ENTITY_TYPE))
-  const [sort, setSort] = useLocalStorage<Sort>('table-editor-sort', 'alphabetical')
+  const [searchText, setSearchText] = useState<string>("");
+  const [isSchemaDropdownOpen, setIsSchemaDropdownOpen] = useState(false);
+  const [tableToExport, setTableToExport] = useState<SupaTable>();
+  const [visibleTypes, setVisibleTypes] = useState<string[]>(
+    IS_PLATFORM ? Object.values(ENTITY_TYPE) : [ENTITY_TYPE.TABLE],
+  );
+  const [sort, setSort] = useLocalStorage<Sort>(
+    "table-editor-sort",
+    "alphabetical",
+  );
 
-  const { data: project } = useSelectedProjectQuery()
+  const { data: project } = useSelectedProjectQuery();
   const {
     data,
     isLoading,
@@ -79,15 +98,19 @@ export const TableEditorMenu = () => {
     {
       enabled: visibleTypes.length > 0,
       placeholderData: Boolean(searchText) ? keepPreviousData : undefined,
-    }
-  )
+    },
+  );
 
   const entityTypes = useMemo(
     () => data?.pages.flatMap((page) => page.data.entities),
-    [data?.pages]
-  )
-  const entityNames = useMemo(() => entityTypes?.map((entity) => entity.name) ?? [], [entityTypes])
-  const isStudioDomainList = entityTypes?.some((entity) => entity.source === 'studio-domain') ?? false
+    [data?.pages],
+  );
+  const entityNames = useMemo(
+    () => entityTypes?.map((entity) => entity.name) ?? [],
+    [entityTypes],
+  );
+  const isStudioDomainList =
+    entityTypes?.some((entity) => entity.source === "studio-domain") ?? false;
 
   const { data: apiAccessByTableName } = useTableApiAccessQuery(
     {
@@ -96,31 +119,39 @@ export const TableEditorMenu = () => {
       schemaName: selectedSchema,
       tableNames: entityNames,
     },
-    { enabled: Boolean(selectedSchema && entityNames.length > 0 && !isStudioDomainList) }
-  )
+    {
+      enabled: Boolean(
+        selectedSchema && entityNames.length > 0 && !isStudioDomainList,
+      ),
+    },
+  );
 
   const { can: canCreateTables } = useAsyncCheckPermissions(
     PermissionAction.TENANT_SQL_ADMIN_WRITE,
-    'tables'
-  )
+    "tables",
+  );
 
-  const { isSchemaLocked } = useIsProtectedSchema({ schema: selectedSchema })
+  const { isSchemaLocked } = useIsProtectedSchema({ schema: selectedSchema });
 
   const { data: selectedTable } = useTableEditorQuery({
     projectRef: project?.ref,
     connectionString: project?.connectionString,
     id,
-  })
+  });
 
   if (selectedTable?.schema && !selectedSchema) {
-    setSelectedSchema(selectedTable.schema)
+    setSelectedSchema(selectedTable.schema);
   }
 
-  useShortcut(SHORTCUT_IDS.TABLE_EDITOR_FOCUS_SCHEMA, () => setIsSchemaDropdownOpen(true), {
-    registerInCommandMenu: true,
-  })
+  useShortcut(
+    SHORTCUT_IDS.TABLE_EDITOR_FOCUS_SCHEMA,
+    () => setIsSchemaDropdownOpen(true),
+    {
+      registerInCommandMenu: true,
+    },
+  );
 
-  const tableEditorTabsCleanUp = useTableEditorTabsCleanUp()
+  const tableEditorTabsCleanUp = useTableEditorTabsCleanUp();
 
   const onSelectExportCLI = useCallback(
     async (id: number) => {
@@ -128,20 +159,25 @@ export const TableEditorMenu = () => {
         id: id,
         projectRef,
         connectionString: project?.connectionString,
-      })
-      const supaTable = table && parseSupaTable(table)
-      setTableToExport(supaTable)
+      });
+      const supaTable = table && parseSupaTable(table);
+      setTableToExport(supaTable);
     },
-    [project?.connectionString, projectRef]
-  )
+    [project?.connectionString, projectRef],
+  );
 
   const getItemKey = useCallback(
     (index: number) => {
-      const item = entityTypes?.[index]
-      return item?.domainId ?? (item?.id !== undefined ? String(item.id) : `table-editor-entity-${index}`)
+      const item = entityTypes?.[index];
+      return (
+        item?.domainId ??
+        (item?.id !== undefined
+          ? String(item.id)
+          : `table-editor-entity-${index}`)
+      );
     },
-    [entityTypes]
-  )
+    [entityTypes],
+  );
 
   const entityProps = useMemo(
     () => ({
@@ -151,17 +187,27 @@ export const TableEditorMenu = () => {
       onExportCLI: () => onSelectExportCLI(Number(id)),
       apiAccessMap: apiAccessByTableName,
     }),
-    [project?.ref, id, isSchemaLocked, onSelectExportCLI, apiAccessByTableName]
-  )
+    [project?.ref, id, isSchemaLocked, onSelectExportCLI, apiAccessByTableName],
+  );
 
-  const hasFiltersApplied = visibleTypes.length !== 5
+  const hasFiltersApplied =
+    visibleTypes.length !== Object.values(ENTITY_TYPE).length;
 
   useEffect(() => {
     // Clean up tabs + recent items for any tables that might have been removed outside of the dashboard session
     if (entityTypes && !searchText && !isStudioDomainList) {
-      tableEditorTabsCleanUp({ schemas: [selectedSchema], entities: entityTypes })
+      tableEditorTabsCleanUp({
+        schemas: [selectedSchema],
+        entities: entityTypes,
+      });
     }
-  }, [entityTypes, searchText, selectedSchema, tableEditorTabsCleanUp, isStudioDomainList])
+  }, [
+    entityTypes,
+    searchText,
+    selectedSchema,
+    tableEditorTabsCleanUp,
+    isStudioDomainList,
+  ]);
 
   return (
     <>
@@ -177,14 +223,18 @@ export const TableEditorMenu = () => {
               className="mx-4"
               selectedSchemaName={selectedSchema}
               onSelectSchema={(name: string) => {
-                setSearchText('')
-                setSelectedSchema(name)
-                setIsSchemaDropdownOpen(false)
+                setSearchText("");
+                setSelectedSchema(name);
+                setIsSchemaDropdownOpen(false);
               }}
-              onSelectCreateSchema={() => {
-                snap.onAddSchema()
-                setIsSchemaDropdownOpen(false)
-              }}
+              onSelectCreateSchema={
+                IS_PLATFORM
+                  ? () => {
+                      snap.onAddSchema();
+                      setIsSchemaDropdownOpen(false);
+                    }
+                  : undefined
+              }
               open={isSchemaDropdownOpen}
               onOpenChange={setIsSchemaDropdownOpen}
             />
@@ -198,21 +248,27 @@ export const TableEditorMenu = () => {
                 name="New table"
                 disabled={!canCreateTables}
                 size="tiny"
-                icon={<Plus size={14} strokeWidth={1.5} className="text-foreground-muted" />}
+                icon={
+                  <Plus
+                    size={14}
+                    strokeWidth={1.5}
+                    className="text-foreground-muted"
+                  />
+                }
                 variant="default"
                 className="justify-start"
                 onClick={() => {
-                  if (isStudioDomainList && project?.ref) {
-                    void router.push(`/project/${project.ref}/editor/new`)
-                    return
+                  if (!IS_PLATFORM && project?.ref) {
+                    void router.push(`/project/${project.ref}/editor/new`);
+                    return;
                   }
-                  snap.onAddTable()
+                  snap.onAddTable();
                 }}
                 tooltip={{
                   content: {
-                    side: 'bottom',
+                    side: "bottom",
                     text: !canCreateTables
-                      ? 'You need additional permissions to create tables'
+                      ? "You need additional permissions to create tables"
                       : undefined,
                   },
                 }}
@@ -220,7 +276,11 @@ export const TableEditorMenu = () => {
                 New table
               </ButtonTooltip>
             ) : (
-              <ProtectedSchemaWarning size="sm" schema={selectedSchema} entity="table" />
+              <ProtectedSchemaWarning
+                size="sm"
+                schema={selectedSchema}
+                entity="table"
+              />
             )}
           </div>
         </div>
@@ -253,53 +313,64 @@ export const TableEditorMenu = () => {
               </InnerSideBarFilterSortDropdown>
             </InnerSideBarFilterSearchInput>
 
-            <Popover>
-              <PopoverTrigger asChild>
-                <ButtonTooltip
-                  className="h-[32px] md:h-[28px] px-1.5"
-                  variant={hasFiltersApplied ? 'default' : 'dashed'}
-                  icon={<Filter />}
-                  aria-label="Filter"
-                  tooltip={{ content: { side: 'bottom', text: 'Filter' } }}
-                />
-              </PopoverTrigger>
-              <PopoverContent className="p-0 w-60" side="bottom" align="center">
-                <div className="px-3 pt-3 pb-2 flex flex-col gap-y-2">
-                  <p className="text-xs">Filter entity types</p>
-                  <div className="flex flex-col">
-                    {Object.entries(ENTITY_TYPE).map(([key, value]) => (
-                      <div key={key} className="group flex items-center justify-between py-0.5">
-                        <div className="flex items-center gap-x-2">
-                          <Checkbox
-                            id={key}
-                            name={key}
-                            checked={visibleTypes.includes(value)}
-                            onCheckedChange={() => {
-                              if (visibleTypes.includes(value)) {
-                                setVisibleTypes(visibleTypes.filter((y) => y !== value))
-                              } else {
-                                setVisibleTypes(visibleTypes.concat([value]))
-                              }
-                            }}
-                          />
-                          <Label htmlFor={key} className="capitalize text-xs">
-                            {key.toLowerCase().replace('_', ' ')}
-                          </Label>
-                        </div>
-                        <Button
-                          size="tiny"
-                          variant="default"
-                          onClick={() => setVisibleTypes([value])}
-                          className="transition opacity-0 group-hover:opacity-100 h-auto px-1 py-0.5"
+            {IS_PLATFORM && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <ButtonTooltip
+                    className="h-[32px] md:h-[28px] px-1.5"
+                    variant={hasFiltersApplied ? "default" : "dashed"}
+                    icon={<Filter />}
+                    aria-label="Filter"
+                    tooltip={{ content: { side: "bottom", text: "Filter" } }}
+                  />
+                </PopoverTrigger>
+                <PopoverContent
+                  className="p-0 w-60"
+                  side="bottom"
+                  align="center"
+                >
+                  <div className="px-3 pt-3 pb-2 flex flex-col gap-y-2">
+                    <p className="text-xs">Filter entity types</p>
+                    <div className="flex flex-col">
+                      {Object.entries(ENTITY_TYPE).map(([key, value]) => (
+                        <div
+                          key={key}
+                          className="group flex items-center justify-between py-0.5"
                         >
-                          Select only
-                        </Button>
-                      </div>
-                    ))}
+                          <div className="flex items-center gap-x-2">
+                            <Checkbox
+                              id={key}
+                              name={key}
+                              checked={visibleTypes.includes(value)}
+                              onCheckedChange={() => {
+                                if (visibleTypes.includes(value)) {
+                                  setVisibleTypes(
+                                    visibleTypes.filter((y) => y !== value),
+                                  );
+                                } else {
+                                  setVisibleTypes(visibleTypes.concat([value]));
+                                }
+                              }}
+                            />
+                            <Label htmlFor={key} className="capitalize text-xs">
+                              {key.toLowerCase().replace("_", " ")}
+                            </Label>
+                          </div>
+                          <Button
+                            size="tiny"
+                            variant="default"
+                            onClick={() => setVisibleTypes([value])}
+                            className="transition opacity-0 group-hover:opacity-100 h-auto px-1 py-0.5"
+                          >
+                            Select only
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </PopoverContent>
-            </Popover>
+                </PopoverContent>
+              </Popover>
+            )}
           </InnerSideBarFilters>
 
           {visibleTypes.length === 0 && (
@@ -316,7 +387,7 @@ export const TableEditorMenu = () => {
               {!isStudioDomainError(error) && (
                 <ErrorMatcher
                   title="Failed to load tables"
-                  error={error ?? 'Failed to load tables'}
+                  error={error ?? "Failed to load tables"}
                   supportFormParams={{ projectRef: project?.ref }}
                   className="mx-4 mt-3"
                 />
@@ -337,7 +408,10 @@ export const TableEditorMenu = () => {
                 />
               )}
               {(entityTypes?.length ?? 0) > 0 && (
-                <div className="flex flex-1 min-h-0 w-full" data-testid="tables-list">
+                <div
+                  className="flex flex-1 min-h-0 w-full"
+                  data-testid="tables-list"
+                >
                   <InfiniteListDefault
                     className="h-full w-full"
                     items={entityTypes!}
@@ -364,9 +438,9 @@ export const TableEditorMenu = () => {
         table={tableToExport}
         open={!!tableToExport}
         onOpenChange={(open) => {
-          if (!open) setTableToExport(undefined)
+          if (!open) setTableToExport(undefined);
         }}
       />
     </>
-  )
-}
+  );
+};

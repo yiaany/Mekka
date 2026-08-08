@@ -134,6 +134,11 @@ export type ReconciliationReport = Readonly<{
   issues: readonly ReconciliationIssue[];
 }>;
 
+export type ResumableUploadLeaseReconciliationReport = Readonly<{
+  completedUploads: number;
+  releasedUploads: number;
+}>;
+
 export type ObjectStorageCoreOptions = Readonly<{
   metadata: StorageAdapter;
   provider: ObjectProvider;
@@ -231,6 +236,7 @@ export interface ObjectStorageCore {
   ): Promise<ResumableUploadAppendResult>;
   abortResumableUpload(context: TenantContext, uploadId: string): Promise<void>;
   cleanupExpiredResumableUploads(): number;
+  reconcileExpiredResumableUploadLeases(): Promise<ResumableUploadLeaseReconciliationReport>;
   reconcileBucket(context: TenantContext, bucketName: string): Promise<ReconciliationReport>;
 }
 
@@ -258,7 +264,7 @@ type ObjectRow = Readonly<{
   updated_at: number;
 }>;
 
-type UploadState = "uploading" | "finalizing" | "complete";
+type UploadState = "uploading" | "finalizing" | "complete" | "pending_delete";
 
 type UploadRow = Readonly<{
   upload_id: string;
@@ -272,10 +278,23 @@ type UploadRow = Readonly<{
   idempotency_key: string;
   expires_at: number;
   state: UploadState;
+  finalizing_started_at: number | null;
+  lease_deadline: number | null;
+  object_version: string | null;
+  provider_key: string | null;
   body: Uint8Array;
   created_at: number;
   updated_at: number;
 }>;
+
+type LeasedUploadRow = UploadRow &
+  Readonly<{
+    organization_id: string;
+    project_id: string;
+    environment_id: string;
+    branch_id: string;
+    generation: number;
+  }>;
 
 type RuntimeOptions = Readonly<{
   metadata: StorageAdapter;
@@ -297,7 +316,8 @@ const bucketNamePattern = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
 const idempotencyKeyPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 export const storageObjectPathMaxUtf8Bytes = 384;
 export const storageObjectPathSegmentMaxUtf8Bytes = 180;
-export const storageMetadataSchemaVersion = 2;
+export const storageMetadataSchemaVersion = 3;
+const resumableFinalizationLeaseMs = 60_000;
 
 export function createObjectStorageCore(options: ObjectStorageCoreOptions): ObjectStorageCore {
   const runtime: RuntimeOptions = Object.freeze({
@@ -368,6 +388,8 @@ export function createObjectStorageCore(options: ObjectStorageCoreOptions): Obje
     abortResumableUpload: (context, uploadId) =>
       runCoreOperation(() => abortResumableUpload(runtime, context, uploadId)),
     cleanupExpiredResumableUploads: () => cleanupExpiredResumableUploads(runtime),
+    reconcileExpiredResumableUploadLeases: () =>
+      runCoreOperation(() => reconcileExpiredResumableUploadLeases(runtime)),
     reconcileBucket: (context, bucketName) =>
       runCoreOperation(() => reconcileBucket(runtime, context, bucketName)),
   };
@@ -524,6 +546,8 @@ async function putObject(
     contentType: string;
     idempotencyKey: string;
     resumableUploadId?: string;
+    version?: string;
+    providerKey?: string;
   }>,
 ): Promise<StorageObjectMetadata> {
   const bucketName = normalizeBucketName(input.bucketName);
@@ -548,6 +572,20 @@ async function putObject(
   requireBucket(runtime.metadata, tenant, bucketName);
   const checksumSha256 = createHash("sha256").update(body).digest("hex");
   const timestamp = validTimestamp(runtime.now());
+  if ((input.version === undefined) !== (input.providerKey === undefined)) {
+    throw infrastructure("Resumable object identity is incomplete.");
+  }
+  const version =
+    input.version === undefined
+      ? normalizeVersion(runtime.createVersion())
+      : normalizeVersion(input.version);
+  const providerKey =
+    input.providerKey === undefined
+      ? createObjectProviderKey(context.tenant, bucketName, objectPath, version)
+      : input.providerKey;
+  if (providerKey !== createObjectProviderKey(context.tenant, bucketName, objectPath, version)) {
+    throw infrastructure("Resumable object identity is invalid.");
+  }
   let row = runtime.metadata.transaction((transaction) => {
     const existing = findObject(transaction, tenant, bucketName, objectPath);
     if (existing !== null) {
@@ -582,8 +620,6 @@ async function putObject(
       throw conflict("Object target or idempotency key is reserved by a resumable upload.");
     }
 
-    const version = normalizeVersion(runtime.createVersion());
-    const providerKey = createObjectProviderKey(context.tenant, bucketName, objectPath, version);
     transaction.execute({
       sql: `INSERT INTO storage_objects (
           organization_id, project_id, environment_id, branch_id, generation,
@@ -858,7 +894,7 @@ async function createResumableUpload(
       sql: `SELECT COUNT(*) AS sessions, COALESCE(SUM(upload_length), 0) AS bytes
         FROM storage_uploads
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
-          AND branch_id = ? AND generation = ? AND expires_at > ?`,
+          AND branch_id = ? AND generation = ? AND expires_at > ? AND state <> 'pending_delete'`,
       parameters: [...tenant, timestamp],
     }).rows[0];
     if (usage === undefined) {
@@ -876,8 +912,8 @@ async function createResumableUpload(
           organization_id, project_id, environment_id, branch_id, generation,
           upload_id, actor_kind, actor_id, bucket_name, object_path, upload_length,
           upload_offset, content_type, idempotency_key, expires_at, state, body,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'uploading', ?, ?, ?)`,
+          finalizing_started_at, lease_deadline, object_version, provider_key, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'uploading', ?, NULL, NULL, NULL, NULL, ?, ?)`,
       parameters: [
         ...tenant,
         uploadId,
@@ -964,15 +1000,34 @@ async function appendResumableUpload(
     body.set(current.body);
     body.set(chunk, current.body.byteLength);
     const nextOffset = offset + chunk.byteLength;
-    const state: UploadState = nextOffset === current.upload_length ? "finalizing" : "uploading";
+    const finalizing = nextOffset === current.upload_length;
+    const state: UploadState = finalizing ? "finalizing" : "uploading";
+    const finalizingStartedAt = finalizing ? validTimestamp(runtime.now()) : null;
+    const leaseDeadline =
+      finalizingStartedAt === null ? null : finalizationLeaseDeadline(finalizingStartedAt);
+    const objectVersion = finalizing ? normalizeVersion(runtime.createVersion()) : null;
+    const providerKey =
+      finalizing && objectVersion !== null
+        ? createObjectProviderKey(
+            context.tenant,
+            current.bucket_name,
+            current.object_path,
+            objectVersion,
+          )
+        : null;
     transaction.execute({
-      sql: `UPDATE storage_uploads SET upload_offset = ?, state = ?, body = ?, updated_at = ?
+      sql: `UPDATE storage_uploads SET upload_offset = ?, state = ?, body = ?, finalizing_started_at = ?,
+          lease_deadline = ?, object_version = ?, provider_key = ?, updated_at = ?
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
           AND branch_id = ? AND generation = ? AND upload_id = ? AND upload_offset = ?`,
       parameters: [
         nextOffset,
         state,
         body,
+        finalizingStartedAt,
+        leaseDeadline,
+        objectVersion,
+        providerKey,
         validTimestamp(runtime.now()),
         ...tenant,
         uploadId,
@@ -984,6 +1039,18 @@ async function appendResumableUpload(
   if (row.state === "uploading") {
     return Object.freeze({ upload: toResumableUpload(row), object: null });
   }
+  if (row.state === "pending_delete") {
+    throw conflict("Upload finalization lease has expired.");
+  }
+  if (
+    row.state === "finalizing" &&
+    (row.lease_deadline === null ||
+      row.lease_deadline <= validTimestamp(runtime.now()) ||
+      row.object_version === null ||
+      row.provider_key === null)
+  ) {
+    throw conflict("Upload finalization lease has expired.");
+  }
   const object = await putObject(runtime, context, {
     bucketName: row.bucket_name,
     path: row.object_path,
@@ -991,14 +1058,22 @@ async function appendResumableUpload(
     contentType: row.content_type,
     idempotencyKey: row.idempotency_key,
     resumableUploadId: row.upload_id,
+    ...(row.object_version === null || row.provider_key === null
+      ? {}
+      : { version: row.object_version, providerKey: row.provider_key }),
   });
   const finalized = runtime.metadata.transaction((transaction) => {
     const update = transaction.execute({
-      sql: `UPDATE storage_uploads SET state = 'complete', updated_at = ?
+      sql: `UPDATE storage_uploads SET state = 'complete', lease_deadline = NULL, updated_at = ?
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
           AND branch_id = ? AND generation = ? AND upload_id = ? AND state = 'finalizing'
-          AND upload_offset = upload_length`,
-      parameters: [validTimestamp(runtime.now()), ...tenant, uploadId],
+          AND upload_offset = upload_length AND lease_deadline > ?`,
+      parameters: [
+        validTimestamp(runtime.now()),
+        ...tenant,
+        uploadId,
+        validTimestamp(runtime.now()),
+      ],
     });
     const current = requireUpload(transaction, tenant, uploadId);
     requireUploadOwner(current, context);
@@ -1049,7 +1124,7 @@ async function abortResumableUpload(
 function cleanupExpiredResumableUploads(runtime: RuntimeOptions): number {
   try {
     return runtime.metadata.execute({
-      sql: "DELETE FROM storage_uploads WHERE expires_at <= ? AND state <> 'finalizing'",
+      sql: "DELETE FROM storage_uploads WHERE expires_at <= ? AND state IN ('uploading', 'complete', 'pending_delete')",
       parameters: [validTimestamp(runtime.now())],
     }).changes;
   } catch (error) {
@@ -1062,6 +1137,122 @@ function cleanupExpiredResumableUploads(runtime: RuntimeOptions): number {
     }
     throw infrastructure("Storage metadata operation failed.");
   }
+}
+
+async function reconcileExpiredResumableUploadLeases(
+  runtime: RuntimeOptions,
+): Promise<ResumableUploadLeaseReconciliationReport> {
+  const timestamp = validTimestamp(runtime.now());
+  const rows = runtime.metadata.execute<LeasedUploadRow>({
+    sql: `SELECT organization_id, project_id, environment_id, branch_id, generation,
+        upload_id, actor_kind, actor_id, bucket_name, object_path, upload_length, upload_offset,
+        content_type, idempotency_key, expires_at, state, finalizing_started_at, lease_deadline,
+        object_version, provider_key, body, created_at, updated_at
+      FROM storage_uploads WHERE state = 'finalizing' AND lease_deadline <= ?`,
+    parameters: [timestamp],
+  }).rows;
+  let completedUploads = 0;
+  let releasedUploads = 0;
+  for (const row of rows) {
+    if (
+      row.object_version === null ||
+      row.provider_key === null ||
+      row.upload_offset !== row.upload_length
+    ) {
+      if (releaseExpiredFinalizingUpload(runtime, row, timestamp)) releasedUploads += 1;
+      continue;
+    }
+    let providerMetadata: ObjectProviderMetadata | null;
+    try {
+      providerMetadata = await runtime.provider.head(row.provider_key);
+    } catch (error) {
+      if (mapProviderError(error).retryable) continue;
+      if (releaseExpiredFinalizingUpload(runtime, row, timestamp)) releasedUploads += 1;
+      continue;
+    }
+    if (
+      providerMetadata === null ||
+      providerMetadata.key !== row.provider_key ||
+      providerMetadata.size !== row.upload_length ||
+      providerMetadata.checksumSha256 !== createHash("sha256").update(row.body).digest("hex")
+    ) {
+      if (releaseExpiredFinalizingUpload(runtime, row, timestamp)) releasedUploads += 1;
+      continue;
+    }
+    const completed = runtime.metadata.transaction((transaction) => {
+      const tenant = uploadTenantParameters(row);
+      const object = findObject(transaction, tenant, row.bucket_name, row.object_path);
+      if (
+        object === null ||
+        object.provider_key !== row.provider_key ||
+        object.version !== row.object_version ||
+        object.size !== row.upload_length ||
+        object.checksum_sha256 !== providerMetadata.checksumSha256 ||
+        (object.state !== "pending_put" && object.state !== "ready")
+      ) {
+        return false;
+      }
+      if (object.state === "pending_put") {
+        transaction.execute({
+          sql: `UPDATE storage_objects SET state = 'ready', provider_etag = ?, updated_at = ?
+            WHERE organization_id = ? AND project_id = ? AND environment_id = ?
+              AND branch_id = ? AND generation = ? AND bucket_name = ? AND object_path = ?
+              AND provider_key = ? AND state = 'pending_put'`,
+          parameters: [
+            providerMetadata.etag,
+            timestamp,
+            ...tenant,
+            row.bucket_name,
+            row.object_path,
+            row.provider_key,
+          ],
+        });
+      }
+      return (
+        transaction.execute({
+          sql: `UPDATE storage_uploads SET state = 'complete', lease_deadline = NULL, updated_at = ?
+            WHERE organization_id = ? AND project_id = ? AND environment_id = ?
+              AND branch_id = ? AND generation = ? AND upload_id = ? AND state = 'finalizing'
+              AND lease_deadline <= ? AND provider_key = ?`,
+          parameters: [timestamp, ...tenant, row.upload_id, timestamp, row.provider_key],
+        }).changes === 1
+      );
+    });
+    if (completed) {
+      completedUploads += 1;
+    } else if (releaseExpiredFinalizingUpload(runtime, row, timestamp)) {
+      releasedUploads += 1;
+    }
+  }
+  return Object.freeze({ completedUploads, releasedUploads });
+}
+
+function releaseExpiredFinalizingUpload(
+  runtime: RuntimeOptions,
+  row: LeasedUploadRow,
+  timestamp: number,
+): boolean {
+  return runtime.metadata.transaction((transaction) => {
+    const tenant = uploadTenantParameters(row);
+    const update = transaction.execute({
+      sql: `UPDATE storage_uploads SET state = 'pending_delete', updated_at = ?
+        WHERE organization_id = ? AND project_id = ? AND environment_id = ?
+          AND branch_id = ? AND generation = ? AND upload_id = ? AND state = 'finalizing'
+          AND lease_deadline <= ?`,
+      parameters: [timestamp, ...tenant, row.upload_id, timestamp],
+    });
+    if (update.changes !== 1) return false;
+    if (row.provider_key !== null) {
+      transaction.execute({
+        sql: `DELETE FROM storage_objects
+          WHERE organization_id = ? AND project_id = ? AND environment_id = ?
+            AND branch_id = ? AND generation = ? AND bucket_name = ? AND object_path = ?
+            AND provider_key = ? AND state = 'pending_put'`,
+        parameters: [...tenant, row.bucket_name, row.object_path, row.provider_key],
+      });
+    }
+    return true;
+  });
 }
 
 async function getObjectMetadata(
@@ -1352,6 +1543,27 @@ function initializeMetadata(metadata: StorageAdapter): void {
       });
       return;
     }
+    if (version === 2) {
+      transaction.execute({ sql: "ALTER TABLE storage_uploads RENAME TO storage_uploads_v2" });
+      createUploadTable(transaction);
+      transaction.execute({
+        sql: `INSERT INTO storage_uploads (
+            organization_id, project_id, environment_id, branch_id, generation,
+            upload_id, actor_kind, actor_id, bucket_name, object_path, upload_length,
+            upload_offset, content_type, idempotency_key, expires_at, state, body,
+            finalizing_started_at, lease_deadline, object_version, provider_key, created_at, updated_at
+          ) SELECT organization_id, project_id, environment_id, branch_id, generation,
+            upload_id, actor_kind, actor_id, bucket_name, object_path, upload_length,
+            upload_offset, content_type, idempotency_key, expires_at, state, body,
+            NULL, NULL, NULL, NULL, created_at, updated_at FROM storage_uploads_v2`,
+      });
+      transaction.execute({ sql: "DROP TABLE storage_uploads_v2" });
+      transaction.execute({
+        sql: "UPDATE storage_metadata_schema SET version = ? WHERE singleton = 1",
+        parameters: [storageMetadataSchemaVersion],
+      });
+      return;
+    }
     if (version !== undefined) {
       throw new StorageCoreError(
         "STORAGE_CORE_UNSUPPORTED",
@@ -1437,19 +1649,16 @@ function createUploadTable(transaction: StorageExecutor): void {
       content_type TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
       expires_at INTEGER NOT NULL,
-      state TEXT NOT NULL CHECK (state IN ('uploading', 'finalizing', 'complete')),
+      state TEXT NOT NULL CHECK (state IN ('uploading', 'finalizing', 'complete', 'pending_delete')),
       body BLOB NOT NULL,
+      finalizing_started_at INTEGER,
+      lease_deadline INTEGER,
+      object_version TEXT,
+      provider_key TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       PRIMARY KEY (
         organization_id, project_id, environment_id, branch_id, generation, upload_id
-      ),
-      UNIQUE (
-        organization_id, project_id, environment_id, branch_id, generation, idempotency_key
-      ),
-      UNIQUE (
-        organization_id, project_id, environment_id, branch_id, generation,
-        bucket_name, object_path
       ),
       FOREIGN KEY (
         organization_id, project_id, environment_id, branch_id, generation, bucket_name
@@ -1457,6 +1666,18 @@ function createUploadTable(transaction: StorageExecutor): void {
         organization_id, project_id, environment_id, branch_id, generation, name
       ) ON DELETE RESTRICT
     ) STRICT`,
+  });
+  transaction.execute({
+    sql: `CREATE UNIQUE INDEX storage_uploads_active_idempotency_key
+      ON storage_uploads (
+        organization_id, project_id, environment_id, branch_id, generation, idempotency_key
+      ) WHERE state <> 'pending_delete'`,
+  });
+  transaction.execute({
+    sql: `CREATE UNIQUE INDEX storage_uploads_active_path
+      ON storage_uploads (
+        organization_id, project_id, environment_id, branch_id, generation, bucket_name, object_path
+      ) WHERE state <> 'pending_delete'`,
   });
 }
 
@@ -1569,7 +1790,8 @@ function findUpload(
     executor.execute<UploadRow>({
       sql: `SELECT upload_id, actor_kind, actor_id, bucket_name, object_path,
           upload_length, upload_offset, content_type, idempotency_key, expires_at,
-          state, body, created_at, updated_at
+          state, finalizing_started_at, lease_deadline, object_version, provider_key, body,
+          created_at, updated_at
         FROM storage_uploads
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
           AND branch_id = ? AND generation = ? AND upload_id = ?`,
@@ -1599,10 +1821,10 @@ function findUploadByIdempotencyKey(
     executor.execute<UploadRow>({
       sql: `SELECT upload_id, actor_kind, actor_id, bucket_name, object_path,
           upload_length, upload_offset, content_type, idempotency_key, expires_at,
-          state, body, created_at, updated_at
-        FROM storage_uploads
+          state, finalizing_started_at, lease_deadline, object_version, provider_key, body,
+          created_at, updated_at FROM storage_uploads
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
-          AND branch_id = ? AND generation = ? AND idempotency_key = ?`,
+          AND branch_id = ? AND generation = ? AND idempotency_key = ? AND state <> 'pending_delete'`,
       parameters: [...tenant, idempotencyKey],
     }).rows[0] ?? null
   );
@@ -1618,10 +1840,11 @@ function findUploadByPath(
     executor.execute<UploadRow>({
       sql: `SELECT upload_id, actor_kind, actor_id, bucket_name, object_path,
           upload_length, upload_offset, content_type, idempotency_key, expires_at,
-          state, body, created_at, updated_at
-        FROM storage_uploads
+          state, finalizing_started_at, lease_deadline, object_version, provider_key, body,
+          created_at, updated_at FROM storage_uploads
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
-          AND branch_id = ? AND generation = ? AND bucket_name = ? AND object_path = ?`,
+          AND branch_id = ? AND generation = ? AND bucket_name = ? AND object_path = ?
+          AND state <> 'pending_delete'`,
       parameters: [...tenant, bucketName, objectPath],
     }).rows[0] ?? null
   );
@@ -1634,7 +1857,7 @@ function requireActiveUpload(
 ): UploadRow {
   const row = requireUpload(runtime.metadata, tenantParameters(context.tenant), uploadId);
   requireUploadOwner(row, context);
-  if (row.expires_at <= validTimestamp(runtime.now())) {
+  if (row.expires_at <= validTimestamp(runtime.now()) || row.state === "pending_delete") {
     throw notFound("Upload was not found.");
   }
   return row;
@@ -1662,6 +1885,16 @@ function isRetryOfFinalChunk(row: UploadRow, offset: number, chunk: Uint8Array):
 
 function isConflictingUploadReservation(row: UploadRow | null, uploadId?: string): boolean {
   return row !== null && (row.upload_id !== uploadId || row.state !== "finalizing");
+}
+
+function uploadTenantParameters(row: LeasedUploadRow): readonly StorageValue[] {
+  return Object.freeze([
+    row.organization_id,
+    row.project_id,
+    row.environment_id,
+    row.branch_id,
+    row.generation,
+  ]);
 }
 
 function listAllObjectRows(
@@ -1863,6 +2096,14 @@ function validTimestamp(value: number): number {
     throw infrastructure("Storage clock returned an invalid timestamp.");
   }
   return value;
+}
+
+function finalizationLeaseDeadline(finalizingStartedAt: number): number {
+  const deadline = finalizingStartedAt + resumableFinalizationLeaseMs;
+  if (!Number.isSafeInteger(deadline)) {
+    throw infrastructure("Upload finalization lease deadline is invalid.");
+  }
+  return deadline;
 }
 
 function verifyProviderMetadata(

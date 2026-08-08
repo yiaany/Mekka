@@ -1,59 +1,67 @@
-import { Lock } from 'lucide-react'
-import Link from 'next/link'
-import { useRouter } from 'next/router'
-import { useEffect, useState } from 'react'
-import { Button, cn } from 'ui'
+import { Lock } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { useEffect, useState } from "react";
+import { Button, cn } from "ui";
 
-import { LastSignInWrapper } from '@/components/interfaces/SignIn/LastSignInWrapper'
-import { SignInForm } from '@/components/interfaces/SignIn/SignInForm'
-import { SignInWithCustom } from '@/components/interfaces/SignIn/SignInWithCustom'
-import { SignInWithExternalProvider } from '@/components/interfaces/SignIn/SignInWithExternalProvider'
-import { AuthenticationLayout } from '@/components/layouts/AuthenticationLayout'
-import { SignInLayout } from '@/components/layouts/SignInLayout/SignInLayout'
-import { useCustomContent } from '@/hooks/custom-content/useCustomContent'
-import { useEnabledIdentityProviders } from '@/hooks/misc/useEnabledIdentityProviders'
-import { useInboundBranding } from '@/hooks/misc/useInboundBranding'
-import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
-import { useSiwcQueryParamOptIn } from '@/hooks/misc/useSiwcQueryParamOptIn'
-import { IS_PLATFORM } from '@/lib/constants'
-import type { ExternalIdentityProviderConfig } from '@/lib/external-identity-providers'
-import type { NextPageWithLayout } from '@/types'
+import { LastSignInWrapper } from "@/components/interfaces/SignIn/LastSignInWrapper";
+import { SignInForm } from "@/components/interfaces/SignIn/SignInForm";
+import { SignInWithCustom } from "@/components/interfaces/SignIn/SignInWithCustom";
+import { SignInWithExternalProvider } from "@/components/interfaces/SignIn/SignInWithExternalProvider";
+import { AuthenticationLayout } from "@/components/layouts/AuthenticationLayout";
+import { SignInLayout } from "@/components/layouts/SignInLayout/SignInLayout";
+import { useCustomContent } from "@/hooks/custom-content/useCustomContent";
+import { useEnabledIdentityProviders } from "@/hooks/misc/useEnabledIdentityProviders";
+import { useInboundBranding } from "@/hooks/misc/useInboundBranding";
+import { useIsFeatureEnabled } from "@/hooks/misc/useIsFeatureEnabled";
+import { useSiwcQueryParamOptIn } from "@/hooks/misc/useSiwcQueryParamOptIn";
+import { IS_PLATFORM } from "@/lib/constants";
+import type { ExternalIdentityProviderConfig } from "@/lib/external-identity-providers";
+import type { NextPageWithLayout } from "@/types";
 
 const SignInPage: NextPageWithLayout = () => {
-  useSiwcQueryParamOptIn()
+  useSiwcQueryParamOptIn();
 
-  const router = useRouter()
-  const [showOtherOptions, setShowOtherOptions] = useState(false)
+  const router = useRouter();
+  const [showOtherOptions, setShowOtherOptions] = useState(false);
 
   const {
     dashboardAuthSignInWithSso: signInWithSsoEnabled,
     dashboardAuthSignInWithEmail: signInWithEmailEnabled,
     dashboardAuthSignUp: signUpEnabled,
   } = useIsFeatureEnabled([
-    'dashboard_auth:sign_in_with_sso',
-    'dashboard_auth:sign_in_with_email',
-    'dashboard_auth:sign_up',
-  ])
+    "dashboard_auth:sign_in_with_sso",
+    "dashboard_auth:sign_in_with_email",
+    "dashboard_auth:sign_up",
+  ]);
 
   const {
     dashboardAuthCustomProvider: customProvider,
     dashboardAuthCustomProviders: customProvidersNew,
-  } = useCustomContent(['dashboard_auth:custom_provider', 'dashboard_auth:custom_providers'])
+  } = useCustomContent([
+    "dashboard_auth:custom_provider",
+    "dashboard_auth:custom_providers",
+  ]);
 
   // [Joshen] This is just for backward compatibility - singular customProvider needs to be deprecated subsequently
   // Just need to remove customProvider and rename customProvidersNew to customProviders
-  const customProviders = customProvidersNew ?? (customProvider ? [customProvider] : [])
+  const customProviders =
+    customProvidersNew ?? (customProvider ? [customProvider] : []);
 
-  const { focusProvider } = useInboundBranding('sign-in')
-  const signInProviders = useEnabledIdentityProviders().filter((provider) => provider.showOnSignIn)
+  const { focusProvider } = useInboundBranding("sign-in");
+  const signInProviders = useEnabledIdentityProviders().filter(
+    (provider) => provider.showOnSignIn,
+  );
 
   const renderAuthOptions = (
     providers: ExternalIdentityProviderConfig[],
-    dividerBgClass = 'bg-studio'
+    dividerBgClass = "bg-studio",
   ) => {
     const showOrDivider =
-      (providers.length > 0 || signInWithSsoEnabled || customProviders.length > 0) &&
-      signInWithEmailEnabled
+      (providers.length > 0 ||
+        signInWithSsoEnabled ||
+        customProviders.length > 0) &&
+      signInWithEmailEnabled;
 
     return (
       <>
@@ -66,8 +74,14 @@ const SignInPage: NextPageWithLayout = () => {
         ))}
         {signInWithSsoEnabled && (
           <LastSignInWrapper type="sso">
-            <Button asChild block size="large" variant="outline" icon={<Lock />}>
-              <Link href={{ pathname: '/sign-in-sso', query: router.query }}>
+            <Button
+              asChild
+              block
+              size="large"
+              variant="outline"
+              icon={<Lock />}
+            >
+              <Link href={{ pathname: "/sign-in-sso", query: router.query }}>
                 Continue with SSO
               </Link>
             </Button>
@@ -79,38 +93,44 @@ const SignInPage: NextPageWithLayout = () => {
               <div className="w-full border-t border-strong" />
             </div>
             <div className="relative flex justify-center text-sm">
-              <span className={cn('px-2 text-sm text-foreground', dividerBgClass)}>or</span>
+              <span
+                className={cn("px-2 text-sm text-foreground", dividerBgClass)}
+              >
+                or
+              </span>
             </div>
           </div>
         )}
         {signInWithEmailEnabled && <SignInForm />}
       </>
-    )
-  }
+    );
+  };
 
   useEffect(() => {
     if (!IS_PLATFORM) {
       // on selfhosted instance just redirect to projects page
-      router.replace('/project/default')
+      router.replace("/project/local/editor");
     }
-  }, [router])
+  }, [router]);
 
   // Inbound link focused us on a single provider — lead with that one (SignInLayout renders the
   // matching interstitial frame around it), but let the user reveal the rest of our options.
   if (focusProvider) {
-    const otherProviders = signInProviders.filter((provider) => provider.id !== focusProvider.id)
+    const otherProviders = signInProviders.filter(
+      (provider) => provider.id !== focusProvider.id,
+    );
     const hasOtherOptions =
       otherProviders.length > 0 ||
       signInWithSsoEnabled ||
       customProviders.length > 0 ||
-      signInWithEmailEnabled
+      signInWithEmailEnabled;
 
     return (
       <div className="flex flex-col gap-5">
         <SignInWithExternalProvider provider={focusProvider} />
         {hasOtherOptions &&
           (showOtherOptions ? (
-            renderAuthOptions(otherProviders, 'bg-surface-100')
+            renderAuthOptions(otherProviders, "bg-surface-100")
           ) : (
             <Button
               block
@@ -123,18 +143,20 @@ const SignInPage: NextPageWithLayout = () => {
             </Button>
           ))}
       </div>
-    )
+    );
   }
 
   return (
     <>
-      <div className="flex flex-col gap-5">{renderAuthOptions(signInProviders)}</div>
+      <div className="flex flex-col gap-5">
+        {renderAuthOptions(signInProviders)}
+      </div>
 
       {signUpEnabled && (
         <div className="self-center my-8 text-sm">
-          <span className="text-foreground-light">Don’t have an account?</span>{' '}
+          <span className="text-foreground-light">Don’t have an account?</span>{" "}
           <Link
-            href={{ pathname: '/sign-up', query: router.query }}
+            href={{ pathname: "/sign-up", query: router.query }}
             className="underline transition text-foreground hover:text-foreground-light"
           >
             Sign up
@@ -142,8 +164,8 @@ const SignInPage: NextPageWithLayout = () => {
         </div>
       )}
     </>
-  )
-}
+  );
+};
 
 SignInPage.getLayout = (page) => (
   <AuthenticationLayout>
@@ -156,6 +178,6 @@ SignInPage.getLayout = (page) => (
       {page}
     </SignInLayout>
   </AuthenticationLayout>
-)
+);
 
-export default SignInPage
+export default SignInPage;

@@ -173,6 +173,14 @@ describe("policy engine v1", () => {
       expect(adapter.execute(compileSelect(manifest, rewritten.ast)).rows).toEqual([
         { id: 1, body: "Alice note" },
       ]);
+      const allFields = rewritePolicyQuery(
+        manifest,
+        document,
+        context("alice"),
+        "select",
+        parseQuery(manifest, "notes", "select=*"),
+      );
+      expect(allFields.ast.select).toEqual({ kind: "columns", columns: ["id", "body"] });
       expect(
         simulatePolicy(manifest, document, {
           context: context("alice"),
@@ -194,6 +202,60 @@ describe("policy engine v1", () => {
     } finally {
       adapter.close();
     }
+  });
+
+  test("select star exposes only fields safe across every row-producing rule", () => {
+    const manifest = notesManifest();
+    const multiRule: PolicyDocument = {
+      formatVersion: policyFormatVersion,
+      tables: [
+        {
+          table: "notes",
+          rules: [
+            {
+              name: "owner-public",
+              action: "select",
+              using: {
+                kind: "comparison",
+                column: "owner_id",
+                operator: "eq",
+                value: { kind: "actor_id" },
+              },
+              fields: { allow: ["id", "body"], deny: [] },
+            },
+            {
+              name: "other-secret",
+              action: "select",
+              using: {
+                kind: "comparison",
+                column: "owner_id",
+                operator: "neq",
+                value: { kind: "actor_id" },
+              },
+              fields: { allow: ["id", "owner_id"], deny: [] },
+            },
+          ],
+        },
+      ],
+    };
+
+    const rewritten = rewritePolicyQuery(
+      manifest,
+      multiRule,
+      context("alice"),
+      "select",
+      parseQuery(manifest, "notes", "select=*"),
+    );
+    expect(rewritten.ast.select).toEqual({ kind: "columns", columns: ["id"] });
+    expect(() =>
+      rewritePolicyQuery(
+        manifest,
+        multiRule,
+        context("alice"),
+        "select",
+        parseQuery(manifest, "notes", "select=body"),
+      ),
+    ).toThrow(new PolicyError("POLICY_FORBIDDEN", "Selected fields are not permitted by policy."));
   });
 
   test("applies row and new-value checks across insert, update and delete", () => {

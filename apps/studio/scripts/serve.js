@@ -18,9 +18,10 @@
 import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createServer } from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import path from 'node:path'
 import { Readable } from 'node:stream'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { readEnvFiles } from './lib/env.js'
 
@@ -39,12 +40,23 @@ for (const [k, v] of Object.entries(parsed)) {
   )
 }
 
+const accessToken = process.env.MEKKA_STUDIO_ACCESS_TOKEN
+const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN
+if (process.env.NODE_ENV === 'production') {
+  if (!accessToken || accessToken.length < 24) {
+    throw new Error('MEKKA_STUDIO_ACCESS_TOKEN must contain at least 24 characters in production')
+  }
+  if (!internalProxyToken || internalProxyToken.length < 24) {
+    throw new Error('MEKKA_INTERNAL_PROXY_TOKEN must contain at least 24 characters in production')
+  }
+}
+
 // Initialize server-side Sentry now that .env values are in process.env (the
 // instrument module reads process.env.NEXT_PUBLIC_SENTRY_DSN at call time).
 // Imported dynamically here rather than via a `--import` flag so it runs after
 // the env-loading block above. Non-fatal if the SDK isn't present.
 try {
-  await import(path.join(studioRoot, 'instrument.server.mjs'))
+  await import(pathToFileURL(path.join(studioRoot, 'instrument.server.mjs')).href)
 } catch (err) {
   console.warn('[serve] Sentry server init skipped:', err?.message ?? err)
 }
@@ -52,7 +64,9 @@ const { wrapFetchWithSentry } = await import('@sentry/tanstackstart-react').catc
   wrapFetchWithSentry: (fetchHandler) => fetchHandler,
 }))
 
-const { default: rawHandler } = await import(path.join(studioRoot, 'dist/server/server.js'))
+const { default: rawHandler } = await import(
+  pathToFileURL(path.join(studioRoot, 'dist/server/server.js')).href
+)
 // Wrap so request-scoped errors (incl. ones swallowed into a 500) are captured.
 const handler = {
   ...rawHandler,
@@ -130,6 +144,7 @@ function toWebRequest(req) {
     if (Array.isArray(v)) for (const vv of v) headers.append(k, vv)
     else if (v !== undefined) headers.set(k, v)
   }
+  if (internalProxyToken) headers.set('x-mekka-internal-proxy', internalProxyToken)
   const init = { method: req.method, headers }
   // Only attach a body for methods that can carry one AND that actually
   // have body bytes coming. Wrapping `req` in `Readable.toWeb(req)` for
@@ -147,6 +162,31 @@ function toWebRequest(req) {
     init.duplex = 'half'
   }
   return new Request(url, init)
+}
+
+function isHealthRequest(req) {
+  const pathname = new URL(req.url, 'http://localhost').pathname
+  return pathname.endsWith('/api/health/live') || pathname.endsWith('/api/health/ready')
+}
+
+function isAuthorized(req) {
+  if (process.env.NODE_ENV !== 'production') return true
+  const authorization = req.headers.authorization
+  if (!authorization?.startsWith('Basic ')) return false
+
+  let password
+  try {
+    const decoded = Buffer.from(authorization.slice(6), 'base64').toString('utf8')
+    const separator = decoded.indexOf(':')
+    if (separator < 0) return false
+    password = decoded.slice(separator + 1)
+  } catch {
+    return false
+  }
+
+  const actual = Buffer.from(password)
+  const expected = Buffer.from(accessToken)
+  return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
 async function pipeWebResponse(response, res) {
@@ -198,6 +238,17 @@ const port = Number(process.env.PORT || 8082)
 createServer(async (req, res) => {
   try {
     for (const [key, value] of SECURITY_HEADERS) res.setHeader(key, value)
+    const rawPathname = new URL(req.url ?? '/', 'http://studio.local').pathname
+    const pathname = rawPathname.length > 1 ? rawPathname.replace(/\/$/, '') : rawPathname
+    const isAgentAccessRequest =
+      pathname === '/mcp' || pathname === '/.well-known/oauth-protected-resource/mcp'
+    if (!isHealthRequest(req) && !isAgentAccessRequest && !isAuthorized(req)) {
+      res.statusCode = 401
+      res.setHeader('www-authenticate', 'Basic realm="Mekka Studio", charset="UTF-8"')
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({ error: { message: 'Authentication required' } }))
+      return
+    }
     if (await serveStatic(req, res)) return
     const response = await handler.fetch(toWebRequest(req))
     await pipeWebResponse(response, res)

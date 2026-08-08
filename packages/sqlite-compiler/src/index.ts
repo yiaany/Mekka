@@ -126,9 +126,13 @@ export function compileMutation(manifest: SchemaManifest, ast: MutationAst): Com
       const mutableColumns = values.columns.filter(
         (column) => !primaryKey.columns.includes(column),
       );
+      const firstPrimaryKey = primaryKey.columns[0];
+      if (firstPrimaryKey === undefined) {
+        throw malformed("Upsert mutations require a primary key.");
+      }
       const conflictAction =
         mutableColumns.length === 0
-          ? "DO NOTHING"
+          ? `DO UPDATE SET ${quoteIdentifier(firstPrimaryKey)} = excluded.${quoteIdentifier(firstPrimaryKey)}`
           : `DO UPDATE SET ${mutableColumns.map((column) => `${quoteIdentifier(column)} = excluded.${quoteIdentifier(column)}`).join(", ")}`;
       return freezeMutation(
         `INSERT INTO ${quoteIdentifier(table.name)} (${values.columns.map(quoteIdentifier).join(", ")}) VALUES (${values.columns.map(() => "?").join(", ")}) ON CONFLICT (${primaryKey.columns.map(quoteIdentifier).join(", ")}) ${conflictAction} RETURNING *`,

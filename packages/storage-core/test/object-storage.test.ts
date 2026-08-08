@@ -656,6 +656,130 @@ describe("Storage core", () => {
     }
   });
 
+  test("recovers an expired resumable finalization lease when the provider object matches", async () => {
+    const directory = await temporaryDirectory("mekka-storage-lease-recovery-");
+    const metadata = openStorageAdapter({ databasePath: ":memory:" });
+    const provider = createLocalObjectProvider(join(directory, "objects"));
+    const failingProvider = new FailOncePutProvider(provider);
+    let clock = 1_000;
+    const core = createObjectStorageCore({
+      metadata,
+      provider: failingProvider,
+      policy: allowAllPolicy,
+      now: () => clock,
+      createVersion: () => "version-lease-001",
+      createUploadId: () => "upload-lease-001",
+    });
+    const tenant = context("project-one", 1);
+    try {
+      await core.createBucket(tenant, { name: "assets" });
+      const upload = await core.createResumableUpload(tenant, {
+        bucketName: "assets",
+        path: "leases/recovered.bin",
+        uploadLength: 3,
+        contentType: "application/octet-stream",
+        idempotencyKey: "upload-lease-recovered-001",
+        expiresAt: 120_000,
+      });
+      await expect(
+        core.appendResumableUpload(tenant, upload.id, 0, bytes("one")),
+      ).rejects.toMatchObject({
+        code: "STORAGE_CORE_INFRASTRUCTURE",
+        retryable: true,
+      });
+
+      clock = 61_000;
+      expect(await core.reconcileExpiredResumableUploadLeases()).toEqual({
+        completedUploads: 1,
+        releasedUploads: 0,
+      });
+      expect(await core.getResumableUpload(tenant, upload.id)).toMatchObject({ complete: true });
+      expect(await core.getObjectMetadata(tenant, "assets", "leases/recovered.bin")).toMatchObject({
+        size: 3,
+        version: "version-lease-001",
+      });
+    } finally {
+      provider.close();
+      metadata.close();
+    }
+  });
+
+  test("releases reservations after an expired resumable lease has a fatal provider result", async () => {
+    const directory = await temporaryDirectory("mekka-storage-lease-release-");
+    const metadata = openStorageAdapter({ databasePath: ":memory:" });
+    const provider = createLocalObjectProvider(join(directory, "objects"));
+    const failingProvider = new FailOncePutProvider(provider);
+    let clock = 1_000;
+    let uploadNumber = 0;
+    const core = createObjectStorageCore({
+      metadata,
+      provider: failingProvider,
+      policy: allowAllPolicy,
+      now: () => clock,
+      createVersion: () => "version-lease-release-001",
+      createUploadId: () => `upload-lease-release-00${++uploadNumber}`,
+      maxUploadSessionsPerTenant: 1,
+      maxUploadBytesPerTenant: 3,
+    });
+    const tenant = context("project-one", 1);
+    try {
+      await core.createBucket(tenant, { name: "assets" });
+      const upload = await core.createResumableUpload(tenant, {
+        bucketName: "assets",
+        path: "leases/released.bin",
+        uploadLength: 3,
+        contentType: "application/octet-stream",
+        idempotencyKey: "upload-lease-release-001",
+        expiresAt: 120_000,
+      });
+      await expect(
+        core.appendResumableUpload(tenant, upload.id, 0, bytes("one")),
+      ).rejects.toMatchObject({
+        code: "STORAGE_CORE_INFRASTRUCTURE",
+        retryable: true,
+      });
+
+      clock = 61_000;
+      const recoveryCore = createObjectStorageCore({
+        metadata,
+        provider: new FatalHeadProvider(provider),
+        policy: allowAllPolicy,
+        now: () => clock,
+        createUploadId: () => `upload-lease-release-00${++uploadNumber}`,
+        maxUploadSessionsPerTenant: 1,
+        maxUploadBytesPerTenant: 3,
+      });
+      expect(await recoveryCore.reconcileExpiredResumableUploadLeases()).toEqual({
+        completedUploads: 0,
+        releasedUploads: 1,
+      });
+      expect(
+        metadata.execute<{ state: string }>({
+          sql: "SELECT state FROM storage_uploads WHERE upload_id = ?",
+          parameters: [upload.id],
+        }).rows,
+      ).toEqual([{ state: "pending_delete" }]);
+      expect(
+        metadata.execute<{ count: number }>({
+          sql: "SELECT COUNT(*) AS count FROM storage_objects WHERE object_path = 'leases/released.bin'",
+        }).rows,
+      ).toEqual([{ count: 0 }]);
+      await expect(
+        recoveryCore.createResumableUpload(tenant, {
+          bucketName: "assets",
+          path: "leases/released.bin",
+          uploadLength: 3,
+          contentType: "application/octet-stream",
+          idempotencyKey: "upload-lease-release-001",
+          expiresAt: 120_000,
+        }),
+      ).resolves.toMatchObject({ id: "upload-lease-release-002" });
+    } finally {
+      provider.close();
+      metadata.close();
+    }
+  });
+
   test("enforces resumable session, byte, chunk quotas and supports abort", async () => {
     const directory = await temporaryDirectory("mekka-storage-upload-quota-");
     const metadata = openStorageAdapter({ databasePath: ":memory:" });
@@ -1083,7 +1207,7 @@ describe("Storage core", () => {
     }
   });
 
-  test("migrates metadata once, preserves existing data, and rejects future schema versions", async () => {
+  test("migrates v2 metadata once, preserves existing data, and rejects future schema versions", async () => {
     const fixture = await createFixture();
     const tenant = context("project-one", 1);
     try {
@@ -1097,7 +1221,40 @@ describe("Storage core", () => {
       });
       fixture.metadata.execute({ sql: "DROP TABLE storage_uploads" });
       fixture.metadata.execute({
-        sql: "UPDATE storage_metadata_schema SET version = 1 WHERE singleton = 1",
+        sql: `CREATE TABLE storage_uploads (
+          organization_id TEXT NOT NULL,
+          project_id TEXT NOT NULL,
+          environment_id TEXT NOT NULL,
+          branch_id TEXT NOT NULL,
+          generation INTEGER NOT NULL,
+          upload_id TEXT NOT NULL,
+          actor_kind TEXT NOT NULL CHECK (actor_kind IN ('user', 'service', 'agent')),
+          actor_id TEXT NOT NULL,
+          bucket_name TEXT NOT NULL,
+          object_path TEXT NOT NULL,
+          upload_length INTEGER NOT NULL CHECK (upload_length >= 0),
+          upload_offset INTEGER NOT NULL CHECK (upload_offset >= 0 AND upload_offset <= upload_length),
+          content_type TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          state TEXT NOT NULL CHECK (state IN ('uploading', 'finalizing', 'complete')),
+          body BLOB NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (
+            organization_id, project_id, environment_id, branch_id, generation, upload_id
+          ),
+          UNIQUE (
+            organization_id, project_id, environment_id, branch_id, generation, idempotency_key
+          ),
+          UNIQUE (
+            organization_id, project_id, environment_id, branch_id, generation,
+            bucket_name, object_path
+          )
+        ) STRICT`,
+      });
+      fixture.metadata.execute({
+        sql: "UPDATE storage_metadata_schema SET version = 2 WHERE singleton = 1",
       });
       const reopened = createObjectStorageCore({
         metadata: fixture.metadata,
@@ -1113,7 +1270,6 @@ describe("Storage core", () => {
           sql: "SELECT version FROM storage_metadata_schema WHERE singleton = 1",
         }).rows,
       ).toEqual([{ version: storageMetadataSchemaVersion }]);
-
       fixture.metadata.execute({
         sql: "UPDATE storage_metadata_schema SET version = ? WHERE singleton = 1",
         parameters: [storageMetadataSchemaVersion + 1],
@@ -1127,7 +1283,7 @@ describe("Storage core", () => {
       ).toThrow(
         new StorageCoreError(
           "STORAGE_CORE_UNSUPPORTED",
-          "Storage metadata schema version 3 is not supported.",
+          "Storage metadata schema version 4 is not supported.",
         ),
       );
     } finally {
@@ -1365,6 +1521,38 @@ class FailOncePutProvider implements ObjectProvider {
 
   head(key: string): Promise<ObjectProviderMetadata | null> {
     return this.delegate.head(key);
+  }
+
+  delete(key: string): Promise<void> {
+    return this.delegate.delete(key);
+  }
+
+  list(prefix: string): Promise<readonly ObjectProviderMetadata[]> {
+    return this.delegate.list(prefix);
+  }
+
+  close(): void {}
+}
+
+class FatalHeadProvider implements ObjectProvider {
+  constructor(private readonly delegate: ObjectProvider) {}
+
+  put(request: ObjectProviderPutRequest): Promise<ObjectProviderMetadata> {
+    return this.delegate.put(request);
+  }
+
+  head(): Promise<ObjectProviderMetadata | null> {
+    return Promise.reject(
+      new ObjectProviderError(
+        "OBJECT_PROVIDER_INVALID",
+        "Provider object cannot be inspected.",
+        false,
+      ),
+    );
+  }
+
+  get(key: string, maxBytes: number): Promise<ObjectProviderGetResult | null> {
+    return this.delegate.get(key, maxBytes);
   }
 
   delete(key: string): Promise<void> {

@@ -2,9 +2,6 @@ import { PermissionAction } from '@supabase/shared-types/out/constants'
 import { Check, ChevronsUpDown, Plus } from 'lucide-react'
 import { ComponentPropsWithoutRef, forwardRef, useMemo, useState } from 'react'
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
   Button,
   Command,
   CommandEmpty,
@@ -17,13 +14,10 @@ import {
   PopoverContent,
   PopoverTrigger,
   ScrollArea,
-  Skeleton,
 } from 'ui'
 
-import { useSchemasQuery } from '@/data/database/schemas-query'
 import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
 import { useSchemasFilteredForHighAvailability } from '@/hooks/misc/useHighAvailability'
-import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 
 type SchemaSelectorProps = Omit<ComponentPropsWithoutRef<'div'>, 'onSelect'> & {
   disabled?: boolean
@@ -42,6 +36,7 @@ type SchemaSelectorProps = Omit<ComponentPropsWithoutRef<'div'>, 'onSelect'> & {
 }
 
 const DEFAULT_EXCLUDED_SCHEMAS: string[] = []
+const LOCAL_SQLITE_SCHEMA = { id: 0, name: 'main', owner: 'local', comment: null }
 
 export const SchemaSelector = forwardRef<HTMLDivElement, SchemaSelectorProps>(
   (
@@ -76,20 +71,7 @@ export const SchemaSelector = forwardRef<HTMLDivElement, SchemaSelectorProps>(
       'schemas'
     )
 
-    const { data: project } = useSelectedProjectQuery()
-    const {
-      data,
-      isPending: isSchemasLoading,
-      isSuccess: isSchemasSuccess,
-      isError: isSchemasError,
-      error: schemasError,
-      refetch: refetchSchemas,
-    } = useSchemasQuery({
-      projectRef: project?.ref,
-      connectionString: project?.connectionString,
-    })
-
-    const visibleSchemas = useSchemasFilteredForHighAvailability(data)
+    const visibleSchemas = useSchemasFilteredForHighAvailability([LOCAL_SQLITE_SCHEMA])
 
     const schemas = useMemo(
       () =>
@@ -101,32 +83,7 @@ export const SchemaSelector = forwardRef<HTMLDivElement, SchemaSelectorProps>(
 
     return (
       <div ref={ref} className={className} {...rest}>
-        {isSchemasLoading && (
-          <Button
-            variant="default"
-            key="schema-selector-skeleton"
-            className="w-full [&>span]:w-full"
-            size={size}
-            disabled
-          >
-            <Skeleton className="w-full h-3 bg-foreground-muted" />
-          </Button>
-        )}
-
-        {showError && isSchemasError && (
-          <Alert variant="warning" className="px-3! py-3!">
-            <AlertTitle className="text-xs text-amber-900">Failed to load schemas</AlertTitle>
-            <AlertDescription className="text-xs mb-2 wrap-break-word">
-              Error: {(schemasError as any)?.message}
-            </AlertDescription>
-            <Button variant="default" size="tiny" onClick={() => refetchSchemas()}>
-              Reload schemas
-            </Button>
-          </Alert>
-        )}
-
-        {isSchemasSuccess && (
-          <Popover open={open} onOpenChange={setOpen} modal={false}>
+        <Popover open={open} onOpenChange={setOpen} modal={false}>
             <PopoverTrigger asChild>
               <Button
                 size={size}
@@ -230,8 +187,7 @@ export const SchemaSelector = forwardRef<HTMLDivElement, SchemaSelectorProps>(
                 </CommandList>
               </Command>
             </PopoverContent>
-          </Popover>
-        )}
+        </Popover>
       </div>
     )
   }

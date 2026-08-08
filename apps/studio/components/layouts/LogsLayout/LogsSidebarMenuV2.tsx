@@ -111,12 +111,6 @@ export function LogsSidebarMenuV2() {
       items: [],
     },
     {
-      name: 'Postgres',
-      key: 'postgres-logs',
-      url: `/project/${ref}/logs/postgres-logs`,
-      items: [],
-    },
-    {
       name: 'PostgREST',
       key: 'postgrest-logs',
       url: `/project/${ref}/logs/postgrest-logs`,

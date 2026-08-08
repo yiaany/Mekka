@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type PolicyDocument, policyFormatVersion } from "@mekka/policy-engine";
 import {
+  type Capability,
   createTenantContext,
   ProtocolError,
   type TenantContext,
@@ -28,6 +29,7 @@ import {
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  Bun.gc(true);
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => removeTemporaryDirectory(directory)),
   );
@@ -42,6 +44,7 @@ async function removeTemporaryDirectory(directory: string): Promise<void> {
       if (attempt === 59) {
         throw error;
       }
+      Bun.gc(true);
       await new Promise<void>((resolve) => setTimeout(resolve, 50));
     }
   }
@@ -229,6 +232,71 @@ describe("REST SELECT gateway", () => {
         Array.from({ length: 25 }, () => [{ id: 1, body: "Alice note" }]),
       );
       expect(fixture.metrics.filter((metric) => metric.outcome === "success")).toHaveLength(25);
+    } finally {
+      fixture.adapter.close();
+    }
+  });
+});
+
+describe("MCP gateway", () => {
+  test("serves protected-resource metadata and an authenticated Streamable HTTP initialize request", async () => {
+    const fixture = await createGatewayFixture({ enableMcp: true });
+    try {
+      const metadata = await fixture.app.handle(
+        new Request("http://localhost/.well-known/oauth-protected-resource/mcp"),
+      );
+      const missing = await fixture.app.handle(
+        new Request("http://localhost/mcp", { method: "POST" }),
+      );
+      const initialized = await fixture.app.handle(
+        new Request("http://localhost/mcp", {
+          method: "POST",
+          headers: {
+            accept: "application/json, text/event-stream",
+            authorization: "Bearer mcp-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-11-25",
+              capabilities: {},
+              clientInfo: { name: "gateway-test-client", version: "1.0.0" },
+            },
+          }),
+        }),
+      );
+      const tools = await fixture.app.handle(
+        new Request("http://localhost/mcp", {
+          method: "POST",
+          headers: {
+            accept: "application/json, text/event-stream",
+            authorization: "Bearer mcp-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+        }),
+      );
+
+      expect(metadata.status).toBe(200);
+      expect(await metadata.json()).toMatchObject({ resource: "http://localhost/mcp" });
+      expect(missing.status).toBe(401);
+      expect(initialized.status).toBe(200);
+      expect(await initialized.json()).toMatchObject({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { protocolVersion: "2025-11-25" },
+      });
+      expect(tools.status).toBe(200);
+      expect(await tools.json()).toMatchObject({
+        jsonrpc: "2.0",
+        id: 2,
+        result: {
+          tools: expect.arrayContaining([expect.objectContaining({ name: "inspect_schema" })]),
+        },
+      });
     } finally {
       fixture.adapter.close();
     }
@@ -448,6 +516,7 @@ async function createGatewayFixture(
       maxResponseBytes: number;
       queryTimeoutMs: number;
       bulkCapability: boolean;
+      enableMcp: boolean;
     }>
   > = {},
 ): Promise<{
@@ -457,7 +526,7 @@ async function createGatewayFixture(
   rateLimitAllowed: boolean;
   shouldTimeout: boolean;
 }> {
-  const { bulkCapability = false, ...gatewayLimits } = limits;
+  const { bulkCapability = false, enableMcp = false, ...gatewayLimits } = limits;
   const adapter = await createTemporaryAdapter();
   adapter.execute({
     sql: "CREATE TABLE notes (id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL, body TEXT NOT NULL, private_note TEXT)",
@@ -536,6 +605,42 @@ async function createGatewayFixture(
     storagePublicOrigin: "https://storage.example.test",
     recordMetric: (metric) => fixture.metrics.push(metric),
     recordStorageAudit: () => undefined,
+    ...(enableMcp
+      ? {
+          mcp: {
+            tokenVerifier: {
+              async verifyAccessToken(token) {
+                if (token !== "mcp-token") throw new Error("invalid token");
+                return {
+                  userId: "alice",
+                  sessionId: "mcp-session",
+                  tenant: tenantContext.tenant,
+                  issuedAt: 1,
+                  expiresAt: 4_000_000_000,
+                  tokenId: "mcp-token-id",
+                };
+              },
+            },
+            capabilityStore: {
+              async listCapabilities(): Promise<readonly Capability[]> {
+                return [
+                  {
+                    id: "mcp-read-capability",
+                    tenant: tenantContext.tenant,
+                    actions: ["mcp:read"],
+                    expiresAt: 4_000_000_000,
+                  },
+                ];
+              },
+            },
+            protectedResource: {
+              resourceUrl: "http://localhost/mcp",
+              authorizationServerUrl: "http://localhost/auth",
+            },
+            listLogs: () => [],
+          },
+        }
+      : {}),
     now,
     limits: { maxRows: 1, maxResponseBytes: 1_000, queryTimeoutMs: 25, ...gatewayLimits },
   });

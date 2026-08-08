@@ -5,10 +5,19 @@ import {
   simulatePolicy,
 } from "@mekka/policy-engine";
 import {
+  createMcpHttpResponse,
+  type McpCapabilityStore,
+  type McpLogEntry,
+  type McpMutationWorkflow,
+  type McpProtectedResource,
+  type McpTokenVerifier,
+} from "@mekka/mcp";
+import {
   createErrorEnvelope,
   type ErrorCode,
   hasCapability,
   ProtocolError,
+  tenantHeaders,
   parseTenantIdentityFromHeaders,
   resolveCorrelationId,
   type TenantContext,
@@ -34,6 +43,13 @@ import {
   type RealtimeGatewayDependencies,
 } from "./realtime";
 import { createStorageRoutes } from "./storage";
+import {
+  createSupabaseErrorBody,
+  isSupabaseDataRequest,
+  parseSupabaseMutationPreference,
+  type SupabaseDataDependencies,
+  validateSupabaseReadRequest,
+} from "./supabase-data";
 
 export type RestQueryExecutor = Readonly<{
   execute<Row extends Record<string, StorageValue> = Record<string, StorageValue>>(
@@ -74,6 +90,14 @@ export type StorageAuditEvent = Readonly<{
   objectPathHash?: string;
 }>;
 
+export type GatewayMcpDependencies = Readonly<{
+  tokenVerifier: McpTokenVerifier;
+  capabilityStore: McpCapabilityStore;
+  protectedResource: McpProtectedResource;
+  listLogs(context: TenantContext): Promise<readonly McpLogEntry[]> | readonly McpLogEntry[];
+  mutations?: McpMutationWorkflow;
+}>;
+
 export type GatewayDependencies = Readonly<{
   authenticate(request: Request): Promise<TenantContext> | TenantContext;
   resolveProject(context: TenantContext): Promise<RestProject> | RestProject;
@@ -83,6 +107,8 @@ export type GatewayDependencies = Readonly<{
   storagePublicOrigin: string;
   recordMetric(metric: GatewayMetric): void;
   recordStorageAudit(event: StorageAuditEvent): Promise<void> | void;
+  mcp?: GatewayMcpDependencies;
+  supabaseData?: SupabaseDataDependencies;
   now?: () => number;
   limits?: Partial<GatewayLimits>;
 }> &
@@ -108,6 +134,12 @@ type MutationTransactionResult =
   | Readonly<{ kind: "response"; response: MutationResponse; rowCount: number }>
   | Readonly<{ kind: "idempotency_conflict" }>;
 
+type MutationPreference = Readonly<{
+  returnRepresentation: boolean;
+  countExact: boolean;
+  mergeDuplicates: boolean;
+}>;
+
 export class RestQueryTimeoutError extends Error {
   constructor() {
     super("The query exceeded its execution deadline.");
@@ -128,102 +160,148 @@ const defaultLimits: GatewayLimits = Object.freeze({
 export function createGatewayApp(dependencies: GatewayDependencies) {
   const limits = resolveLimits(dependencies.limits);
   const now = dependencies.now ?? Date.now;
+  const mcp =
+    dependencies.mcp === undefined
+      ? null
+      : {
+          resolveProject: async (context: TenantContext) => {
+            const project = await dependencies.resolveProject(context);
+            return {
+              tenant: project.tenant,
+              storage: project.storage,
+              policies: project.policies,
+            };
+          },
+          listLogs: dependencies.mcp.listLogs,
+          tokenVerifier: dependencies.mcp.tokenVerifier,
+          capabilityStore: dependencies.mcp.capabilityStore,
+          protectedResource: dependencies.mcp.protectedResource,
+          ...(dependencies.mcp.mutations === undefined
+            ? {}
+            : { mutations: dependencies.mcp.mutations }),
+          now,
+        };
 
-  return new Elysia({ name: "gateway" })
+  const app = new Elysia({ name: "gateway" })
     .get("/openapi.json", () => openApiDocument)
     .use(createRealtimeRoutes(dependencies))
     .use(createStorageRoutes(dependencies, limits, now))
-    .get("/rest/v1/:table", async ({ request, params }) => {
-      const startedAt = now();
-      let rowCount = 0;
-
-      try {
-        const headerTenant = parseTenantIdentityFromHeaders(request.headers);
-        const context = await dependencies.authenticate(request);
-        if (!sameTenant(headerTenant, context.tenant)) {
-          throw new GatewayError(
-            "forbidden",
-            403,
-            "Tenant context does not match request headers.",
-          );
-        }
-        if (!(await dependencies.consumeRateLimit(context))) {
-          throw new GatewayError("quota", 429, "Request rate limit exceeded.");
-        }
-
-        const project = await dependencies.resolveProject(context);
-        if (!sameTenant(project.tenant, context.tenant)) {
-          throw new GatewayError(
-            "forbidden",
-            403,
-            "Resolved project does not match request tenant.",
-          );
-        }
-
-        const manifest = buildSchemaManifest(project.storage);
-        const ast = parseQuery(manifest, params.table, new URL(request.url).search);
-        const rangedAst = applyRange(ast, request.headers, limits.maxRows);
-        const rewritten = rewritePolicyQuery(
-          manifest,
-          project.policies,
-          context,
-          "select",
-          rangedAst,
+    .all("/rest/v1/:table", ({ request, params }) => {
+      if (request.method === "GET" || request.method === "HEAD") {
+        return handleSelect(
+          request,
+          params.table,
+          dependencies,
+          limits,
+          now,
+          request.method === "HEAD",
         );
-        const compiled = compileSelect(manifest, rewritten.ast);
-        const result = project.executor.execute(compiled, limits.queryTimeoutMs);
-        const rows = result.rows;
-        rowCount = rows.length;
-        const body = JSON.stringify(rows);
-
-        if (new TextEncoder().encode(body).byteLength > limits.maxResponseBytes) {
-          throw new GatewayError("quota", 413, "Response size limit exceeded.");
-        }
-
-        const countRequested = parseCountPreference(request.headers);
-        const total = countRequested
-          ? readExactCount(
-              project.executor.execute(
-                compileSelectCount(manifest, rewritten.ast),
-                limits.queryTimeoutMs,
-              ),
-            )
-          : null;
-        const contentRange = createContentRange(rangedAst.offset, rows.length, total);
-        const headers = new Headers({
-          "content-type": "application/json; charset=utf-8",
-          "content-range": contentRange,
-          "range-unit": "items",
-          "x-correlation-id": context.correlationId,
-        });
-        const status = countRequested ? 206 : 200;
-        dependencies.recordMetric({
-          outcome: "success",
-          status,
-          durationMs: now() - startedAt,
-          rowCount,
-        });
-        return new Response(body, { status, headers });
-      } catch (error) {
-        const response = toErrorResponse(error, request.headers);
-        dependencies.recordMetric({
-          outcome: metricOutcome(response.status, error),
-          status: response.status,
-          durationMs: now() - startedAt,
-          rowCount,
-        });
-        return response;
       }
-    })
-    .post("/rest/v1/:table", async ({ request, params }) =>
-      handleMutation("insert", request, params.table, dependencies, limits, now),
-    )
-    .patch("/rest/v1/:table", async ({ request, params }) =>
-      handleMutation("update", request, params.table, dependencies, limits, now),
-    )
-    .delete("/rest/v1/:table", async ({ request, params }) =>
-      handleMutation("delete", request, params.table, dependencies, limits, now),
+      if (request.method === "POST") {
+        return handleMutation("insert", request, params.table, dependencies, limits, now);
+      }
+      if (request.method === "PATCH") {
+        return handleMutation("update", request, params.table, dependencies, limits, now);
+      }
+      if (request.method === "DELETE") {
+        return handleMutation("delete", request, params.table, dependencies, limits, now);
+      }
+      return new Response(null, {
+        status: 405,
+        headers: { allow: "GET, HEAD, POST, PATCH, DELETE" },
+      });
+    });
+  if (mcp !== null) {
+    app.all("/mcp", ({ request }) => createMcpHttpResponse(request, mcp));
+    app.all("/.well-known/oauth-protected-resource/mcp", ({ request }) =>
+      createMcpHttpResponse(request, mcp),
     );
+  }
+  return app;
+}
+
+async function handleSelect(
+  request: Request,
+  tableName: string,
+  dependencies: GatewayDependencies,
+  limits: GatewayLimits,
+  now: () => number,
+  head: boolean,
+): Promise<Response> {
+  const startedAt = now();
+  let rowCount = 0;
+
+  try {
+    const compatibility = isSupabaseDataRequest(request, dependencies.supabaseData);
+    if (compatibility) validateSupabaseReadRequest(request);
+    const context = await authenticateRestRequest(request, dependencies, compatibility);
+    if (!(await dependencies.consumeRateLimit(context))) {
+      throw new GatewayError("quota", 429, "Request rate limit exceeded.");
+    }
+    const project = await dependencies.resolveProject(context);
+    if (!sameTenant(project.tenant, context.tenant)) {
+      throw new GatewayError("forbidden", 403, "Resolved project does not match request tenant.");
+    }
+
+    const manifest = buildSchemaManifest(project.storage);
+    const ast = parseQuery(manifest, tableName, new URL(request.url).search);
+    const rangedAst = applyRange(ast, request.headers, limits.maxRows);
+    const rewritten = rewritePolicyQuery(manifest, project.policies, context, "select", rangedAst);
+    const rows = project.executor.execute(
+      compileSelect(manifest, rewritten.ast),
+      limits.queryTimeoutMs,
+    ).rows;
+    rowCount = rows.length;
+    const body = JSON.stringify(rows);
+    if (new TextEncoder().encode(body).byteLength > limits.maxResponseBytes) {
+      throw new GatewayError("quota", 413, "Response size limit exceeded.");
+    }
+
+    const countRequested = parseCountPreference(request.headers);
+    const total = countRequested
+      ? readExactCount(
+          project.executor.execute(
+            compileSelectCount(manifest, rewritten.ast),
+            limits.queryTimeoutMs,
+          ),
+        )
+      : null;
+    const contentRange = createContentRange(rangedAst.offset, rows.length, total);
+    const headers = new Headers({
+      "content-type": "application/json; charset=utf-8",
+      "content-range": contentRange,
+      "range-unit": "items",
+      "x-correlation-id": context.correlationId,
+    });
+    const status =
+      compatibility && countRequested
+        ? rangedAst.offset > 0 || (total !== null && rows.length < total)
+          ? 206
+          : 200
+        : countRequested
+          ? 206
+          : 200;
+    dependencies.recordMetric({
+      outcome: "success",
+      status,
+      durationMs: now() - startedAt,
+      rowCount,
+    });
+    return new Response(head ? null : body, { status, headers });
+  } catch (error) {
+    const response = toErrorResponse(
+      error,
+      request.headers,
+      isSupabaseDataRequest(request, dependencies.supabaseData),
+    );
+    dependencies.recordMetric({
+      outcome: metricOutcome(response.status, error),
+      status: response.status,
+      durationMs: now() - startedAt,
+      rowCount,
+    });
+    return response;
+  }
 }
 
 async function handleMutation(
@@ -238,11 +316,8 @@ async function handleMutation(
   let rowCount = 0;
 
   try {
-    const headerTenant = parseTenantIdentityFromHeaders(request.headers);
-    const context = await dependencies.authenticate(request);
-    if (!sameTenant(headerTenant, context.tenant)) {
-      throw new GatewayError("forbidden", 403, "Tenant context does not match request headers.");
-    }
+    const compatibility = isSupabaseDataRequest(request, dependencies.supabaseData);
+    const context = await authenticateRestRequest(request, dependencies, compatibility);
     if (!(await dependencies.consumeRateLimit(context))) {
       throw new GatewayError("quota", 429, "Request rate limit exceeded.");
     }
@@ -251,8 +326,10 @@ async function handleMutation(
       throw new GatewayError("forbidden", 403, "Resolved project does not match request tenant.");
     }
 
-    const preference = parseMutationPreference(request.headers);
-    const idempotencyKey = parseIdempotencyKey(request.headers);
+    const preference = compatibility
+      ? parseSupabaseMutationPreference(request.headers)
+      : parseMutationPreference(request.headers);
+    const idempotencyKey = parseIdempotencyKey(request.headers, compatibility);
     const manifest = buildSchemaManifest(project.storage);
     const requestData = await parseMutationRequest(
       request,
@@ -262,6 +339,8 @@ async function handleMutation(
       context,
       limits.maxRows,
       now,
+      preference,
+      compatibility,
     );
     const fingerprint = JSON.stringify({
       action,
@@ -270,6 +349,8 @@ async function handleMutation(
       body: requestData.values,
       upsert: requestData.upsert,
       returnRepresentation: preference.returnRepresentation,
+      countExact: preference.countExact,
+      returnColumns: requestData.returnColumns,
     });
     const transactionId = crypto.randomUUID();
     const transactionResult = project.storage.transaction<MutationTransactionResult>(
@@ -292,7 +373,11 @@ async function handleMutation(
           tableName,
           requestData,
           preference.returnRepresentation,
+          preference.countExact,
+          requestData.returnColumns,
+          compatibility,
           limits.maxRows,
+          limits.maxResponseBytes,
           transactionId,
           startedAt,
         );
@@ -322,7 +407,11 @@ async function handleMutation(
     });
     return new Response(response.body, { status: response.status, headers });
   } catch (error) {
-    const response = toErrorResponse(error, request.headers);
+    const response = toErrorResponse(
+      error,
+      request.headers,
+      isSupabaseDataRequest(request, dependencies.supabaseData),
+    );
     dependencies.recordMetric({
       outcome: metricOutcome(response.status, error),
       status: response.status,
@@ -333,13 +422,41 @@ async function handleMutation(
   }
 }
 
+async function authenticateRestRequest(
+  request: Request,
+  dependencies: GatewayDependencies,
+  compatibility: boolean,
+): Promise<TenantContext> {
+  const context = compatibility
+    ? await dependencies.supabaseData?.authenticateApiKey(request)
+    : await dependencies.authenticate(request);
+  if (context === undefined) throw new ProtocolError("auth");
+  const tenantHeaderNames = [
+    tenantHeaders.organizationId,
+    tenantHeaders.projectId,
+    tenantHeaders.environmentId,
+    tenantHeaders.branchId,
+    tenantHeaders.generation,
+  ];
+  const present = tenantHeaderNames.filter((name) => request.headers.has(name)).length;
+  if (!compatibility || present > 0) {
+    if (present !== tenantHeaderNames.length) throw new ProtocolError("validation");
+    const headerTenant = parseTenantIdentityFromHeaders(request.headers);
+    if (!sameTenant(headerTenant, context.tenant)) {
+      throw new GatewayError("forbidden", 403, "Tenant context does not match request headers.");
+    }
+  }
+  return context;
+}
+
 type ParsedMutationRequest = Readonly<{
   values: readonly MutationInput[];
   filterQuery: string;
   upsert: boolean;
+  returnColumns: readonly string[] | null;
 }>;
 
-function parseMutationPreference(headers: Headers): Readonly<{ returnRepresentation: boolean }> {
+function parseMutationPreference(headers: Headers): MutationPreference {
   const values = (headers.get("prefer") ?? "")
     .split(",")
     .map((value) => value.trim())
@@ -364,11 +481,17 @@ function parseMutationPreference(headers: Headers): Readonly<{ returnRepresentat
   ) {
     throw new GatewayError("unsupported", 400, "Only resolution=merge-duplicates is supported.");
   }
-  return Object.freeze({ returnRepresentation: returnValues[0] === "return=representation" });
+  const countExact = parseCountPreference(headers);
+  return Object.freeze({
+    returnRepresentation: returnValues[0] === "return=representation",
+    countExact,
+    mergeDuplicates: values.includes("resolution=merge-duplicates"),
+  });
 }
 
-function parseIdempotencyKey(headers: Headers): string {
+function parseIdempotencyKey(headers: Headers, compatibility: boolean): string {
   const key = headers.get("idempotency-key");
+  if (key === null && compatibility) return `supabase-${crypto.randomUUID()}`;
   if (key === null || !/^[A-Za-z0-9_-]{16,128}$/.test(key)) {
     throw new GatewayError("validation", 400, "A valid Idempotency-Key header is required.");
   }
@@ -383,12 +506,23 @@ async function parseMutationRequest(
   context: TenantContext,
   maxRows: number,
   now: () => number,
+  preference: MutationPreference,
+  compatibility: boolean,
 ): Promise<ParsedMutationRequest> {
-  const preference = request.headers.get("prefer") ?? "";
-  const upsert =
-    action === "insert" &&
-    preference.split(",").some((value) => value.trim() === "resolution=merge-duplicates");
-  const filterQuery = new URL(request.url).search;
+  const url = new URL(request.url);
+  const returnColumns = preference.returnRepresentation
+    ? parseMutationReturnColumns(manifest, tableName, url.searchParams.get("select"))
+    : null;
+  const onConflict = url.searchParams.get("on_conflict");
+  const columns = url.searchParams.get("columns");
+  url.searchParams.delete("select");
+  url.searchParams.delete("on_conflict");
+  url.searchParams.delete("columns");
+  const filterQuery = url.search;
+  const upsert = action === "insert" && preference.mergeDuplicates;
+  if (preference.mergeDuplicates && action !== "insert") {
+    throw new GatewayError("unsupported", 400, "Merge resolution is supported only for upsert.");
+  }
   if (
     (action === "update" || action === "delete") &&
     filterQuery.length === 0 &&
@@ -401,7 +535,15 @@ async function parseMutationRequest(
     );
   }
   if (action === "delete") {
-    return Object.freeze({ values: Object.freeze([]), filterQuery, upsert: false });
+    if (onConflict !== null || columns !== null) {
+      throw new GatewayError("unsupported", 400, "Mutation query option is not supported.");
+    }
+    return Object.freeze({
+      values: Object.freeze([]),
+      filterQuery,
+      upsert: false,
+      returnColumns,
+    });
   }
   if (
     request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !==
@@ -443,6 +585,17 @@ async function parseMutationRequest(
   const normalized = values.map((value) => normalizeMutationInput(value));
   const table = requireTable(manifest, tableName);
   const primaryKey = primaryKeyColumns(table);
+  if (compatibility) {
+    validateSupabaseMutationQuery(
+      action,
+      upsert,
+      filterQuery,
+      onConflict,
+      columns,
+      normalized,
+      primaryKey,
+    );
+  }
   if (upsert && primaryKey.length === 0) {
     throw new GatewayError("unsupported", 400, "Upsert requires a primary key.");
   }
@@ -454,7 +607,82 @@ async function parseMutationRequest(
       createMutationAst(manifest, "insert", tableName, input);
     }
   }
-  return Object.freeze({ values: Object.freeze(normalized), filterQuery, upsert });
+  return Object.freeze({
+    values: Object.freeze(normalized),
+    filterQuery,
+    upsert,
+    returnColumns,
+  });
+}
+
+function parseMutationReturnColumns(
+  manifest: SchemaManifest,
+  tableName: string,
+  select: string | null,
+): readonly string[] | null {
+  if (select === null || select === "*") return null;
+  const ast = parseQuery(manifest, tableName, `?select=${encodeURIComponent(select)}`);
+  return ast.select.kind === "all" ? null : ast.select.columns;
+}
+
+function validateSupabaseMutationQuery(
+  action: "insert" | "update" | "delete",
+  upsert: boolean,
+  filterQuery: string,
+  onConflict: string | null,
+  columns: string | null,
+  values: readonly MutationInput[],
+  primaryKey: readonly string[],
+): void {
+  if (action === "insert" && filterQuery.length > 0) {
+    throw new GatewayError("unsupported", 400, "Insert filters are not supported.");
+  }
+  const filterParameters = new URLSearchParams(filterQuery);
+  if (["order", "limit", "offset"].some((name) => filterParameters.has(name))) {
+    throw new GatewayError("unsupported", 400, "Mutation ordering and pagination are unsupported.");
+  }
+  if (action !== "insert" && (onConflict !== null || columns !== null)) {
+    throw new GatewayError("unsupported", 400, "Mutation query option is not supported.");
+  }
+  if (onConflict !== null && !upsert) {
+    throw new GatewayError("unsupported", 400, "on_conflict requires merge upsert.");
+  }
+  if (onConflict !== null) {
+    const conflictColumns = onConflict.split(",").map((column) => column.trim());
+    if (
+      conflictColumns.length !== primaryKey.length ||
+      conflictColumns.some((column, index) => column !== primaryKey[index])
+    ) {
+      throw new GatewayError(
+        "unsupported",
+        400,
+        "Only the complete primary key is supported as an upsert conflict target.",
+      );
+    }
+  }
+  const firstColumns = Object.keys(values[0] ?? {}).sort();
+  if (values.some((value) => !sameStrings(Object.keys(value).sort(), firstColumns))) {
+    throw new GatewayError("validation", 400, "All mutation object keys must match.");
+  }
+  if (columns !== null) {
+    const declared = parseColumnsParameter(columns).sort();
+    if (!sameStrings(declared, firstColumns)) {
+      throw new GatewayError("validation", 400, "Mutation columns do not match the payload.");
+    }
+  }
+}
+
+function parseColumnsParameter(value: string): string[] {
+  if (value.length === 0) throw new GatewayError("validation", 400, "columns must not be empty.");
+  return value.split(",").map((column) => {
+    const match = /^"([A-Za-z_][A-Za-z0-9_]*)"$/.exec(column);
+    if (!match?.[1]) throw new GatewayError("validation", 400, "columns is invalid.");
+    return match[1];
+  });
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function executeMutation(
@@ -465,7 +693,11 @@ function executeMutation(
   tableName: string,
   request: ParsedMutationRequest,
   returnRepresentation: boolean,
+  countExact: boolean,
+  returnColumns: readonly string[] | null,
+  compatibility: boolean,
   maxRows: number,
+  maxResponseBytes: number,
   transactionId: string,
   occurredAt: number,
 ): Readonly<{ response: MutationResponse; rowCount: number }> {
@@ -586,21 +818,40 @@ function executeMutation(
   }
 
   const body = returnRepresentation
-    ? JSON.stringify(projectMutationRows(manifest, project.policies, context, tableName, rows))
+    ? JSON.stringify(
+        projectMutationRows(manifest, project.policies, context, tableName, rows, returnColumns),
+      )
     : null;
-  const status = returnRepresentation ? (action === "insert" ? 201 : 200) : 204;
+  if (body !== null && new TextEncoder().encode(body).byteLength > maxResponseBytes) {
+    throw new GatewayError("quota", 413, "Response size limit exceeded.");
+  }
+  const status = returnRepresentation
+    ? action === "insert"
+      ? 201
+      : 200
+    : compatibility && action === "insert"
+      ? 201
+      : 204;
+  const appliedPreferences = [
+    returnRepresentation ? "return=representation" : "return=minimal",
+    ...(countExact ? ["count=exact"] : []),
+    ...(request.upsert ? ["resolution=merge-duplicates"] : []),
+  ];
   return Object.freeze({
     rowCount: rows.length,
     response: Object.freeze({
       status,
       body,
       headers: Object.freeze({
+        ...(compatibility || countExact
+          ? { "content-range": countExact ? `*/${rows.length}` : "*/*" }
+          : {}),
         ...(returnRepresentation
           ? {
               "content-type": "application/json; charset=utf-8",
-              "preference-applied": "return=representation",
+              "preference-applied": appliedPreferences.join(", "),
             }
-          : { "preference-applied": "return=minimal" }),
+          : { "preference-applied": appliedPreferences.join(", ") }),
       }),
     }),
   });
@@ -713,15 +964,18 @@ function projectMutationRows(
   context: TenantContext,
   table: string,
   rows: readonly Record<string, StorageValue>[],
+  requestedColumns: readonly string[] | null,
 ): readonly Record<string, StorageValue>[] {
   return rows.map((row) => {
     const decision = simulatePolicy(manifest, policies, { context, action: "select", table, row });
     if (decision.allowedFields.length === 0) {
       throw new GatewayError("forbidden", 403, "Mutation representation is denied by policy.");
     }
-    return Object.freeze(
-      Object.fromEntries(decision.allowedFields.map((field) => [field, row[field] ?? null])),
-    );
+    const columns = requestedColumns ?? decision.allowedFields;
+    if (columns.some((column) => !decision.allowedFields.includes(column))) {
+      throw new GatewayError("forbidden", 403, "Mutation representation is denied by policy.");
+    }
+    return Object.freeze(Object.fromEntries(columns.map((field) => [field, row[field] ?? null])));
   });
 }
 
@@ -951,13 +1205,18 @@ function readExactCount(result: StorageResult): number {
   return value;
 }
 
-function toErrorResponse(error: unknown, headers: Headers): Response {
+function toErrorResponse(error: unknown, headers: Headers, compatibility = false): Response {
   const correlationId = safeCorrelationId(headers);
   const gatewayError = toGatewayError(error);
-  return Response.json(createErrorEnvelope(gatewayError.code, correlationId), {
-    status: gatewayError.status,
-    headers: { "x-correlation-id": correlationId },
-  });
+  return Response.json(
+    compatibility
+      ? createSupabaseErrorBody(gatewayError.code)
+      : createErrorEnvelope(gatewayError.code, correlationId),
+    {
+      status: gatewayError.status,
+      headers: { "x-correlation-id": correlationId },
+    },
+  );
 }
 
 function safeCorrelationId(headers: Headers): TenantContext["correlationId"] {

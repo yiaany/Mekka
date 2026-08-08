@@ -23,7 +23,7 @@ import {
   type SchemaManifestCache,
   type SchemaTable,
 } from "@mekka/schema-manifest";
-import type { StorageAdapter, StorageValue } from "@mekka/storage-core";
+import type { StorageAdapter, StorageExecutor, StorageValue } from "@mekka/storage-core";
 
 export type SqliteMetaColumn = Readonly<{
   name: string;
@@ -104,6 +104,9 @@ type ColumnInput = Readonly<{
 type RowValue = string | number | null;
 type RowInput = Readonly<Record<string, RowValue>>;
 type SqlOperation = "read" | "write";
+type RowMutationResponse = Readonly<{ changes: number; idempotencyKey: string }>;
+type IdempotencyLedgerRow = Readonly<{ request_hash: string; response_payload: string }>;
+type AuditOutboxRow = Readonly<{ id: number; payload: string }>;
 
 const identifierPattern = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const idempotencyKeyPattern = /^[A-Za-z0-9_-]{16,128}$/;
@@ -182,12 +185,19 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
         const values = readRowValues(await readBody(request), definition, true);
         const idempotencyKey = readIdempotencyKey(request.headers);
         const columns = Object.keys(values);
-        const result = project.storage.execute({
-          sql: `INSERT INTO ${quote(table)} (${columns.map(quote).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-          parameters: columns.map((column) => values[column] as StorageValue),
-        });
-        recordDataAudit(dependencies, context, "create_row", `INSERT ${table}`, result.changes);
-        return Object.freeze({ changes: result.changes, idempotencyKey });
+        return mutateRowIdempotently(
+          project,
+          context,
+          dependencies,
+          idempotencyKey,
+          { operation: "create_row", table, values },
+          `INSERT ${table}`,
+          (transaction) =>
+            transaction.execute({
+              sql: `INSERT INTO ${quote(table)} (${columns.map(quote).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+              parameters: columns.map((column) => values[column] as StorageValue),
+            }).changes,
+        );
       }),
     )
     .patch("/rows/:table", async ({ request, params }) =>
@@ -201,12 +211,19 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
         const columns = Object.keys(values);
         if (columns.length === 0)
           throw new MetaError("validation", "At least one row value is required.");
-        const result = project.storage.execute({
-          sql: `UPDATE ${quote(table)} SET ${columns.map((column) => `${quote(column)} = ?`).join(", ")} WHERE ${quote(key.column)} IS ?`,
-          parameters: [...columns.map((column) => values[column] as StorageValue), key.value],
-        });
-        recordDataAudit(dependencies, context, "update_row", `UPDATE ${table}`, result.changes);
-        return Object.freeze({ changes: result.changes, idempotencyKey });
+        return mutateRowIdempotently(
+          project,
+          context,
+          dependencies,
+          idempotencyKey,
+          { operation: "update_row", table, key, values },
+          `UPDATE ${table}`,
+          (transaction) =>
+            transaction.execute({
+              sql: `UPDATE ${quote(table)} SET ${columns.map((column) => `${quote(column)} = ?`).join(", ")} WHERE ${quote(key.column)} IS ?`,
+              parameters: [...columns.map((column) => values[column] as StorageValue), key.value],
+            }).changes,
+        );
       }),
     )
     .delete("/rows/:table", async ({ request, params }) =>
@@ -215,12 +232,19 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
         const definition = requireTable(manifest(project), table);
         const key = readDeleteRowKey(request, definition);
         const idempotencyKey = readIdempotencyKey(request.headers);
-        const result = project.storage.execute({
-          sql: `DELETE FROM ${quote(table)} WHERE ${quote(key.column)} IS ?`,
-          parameters: [key.value],
-        });
-        recordDataAudit(dependencies, context, "delete_row", `DELETE ${table}`, result.changes);
-        return Object.freeze({ changes: result.changes, idempotencyKey });
+        return mutateRowIdempotently(
+          project,
+          context,
+          dependencies,
+          idempotencyKey,
+          { operation: "delete_row", table, key },
+          `DELETE ${table}`,
+          (transaction) =>
+            transaction.execute({
+              sql: `DELETE FROM ${quote(table)} WHERE ${quote(key.column)} IS ?`,
+              parameters: [key.value],
+            }).changes,
+        );
       }),
     )
     .post("/sql", async ({ request }) => handleSql(request, dependencies, now))
@@ -512,6 +536,13 @@ function sqlOperation(sql: string): SqlOperation {
 }
 
 function assertSqlTables(sql: string, schema: SchemaManifest): void {
+  if (
+    /\bjoin\b/i.test(sql) ||
+    /\bfrom\s*\(/i.test(sql) ||
+    /\bfrom\s+"?[A-Za-z_][A-Za-z0-9_]*"?\s*,/i.test(sql)
+  ) {
+    throw new MetaError("unsupported", "SQL joins and subqueries are not supported.");
+  }
   const references = sql.matchAll(/\b(?:from|into|update)\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/gi);
   for (const reference of references) {
     const table = reference[1];
@@ -660,6 +691,169 @@ function recordDataAudit(
     statementHash: createHash("sha256").update(statement).digest("hex"),
     rowCount,
   });
+}
+
+function mutateRowIdempotently(
+  project: SqliteMetaProject,
+  context: TenantContext,
+  dependencies: SqliteMetaDependencies,
+  idempotencyKey: string,
+  request: Readonly<Record<string, unknown>>,
+  statement: string,
+  mutation: (transaction: StorageExecutor) => number,
+): RowMutationResponse {
+  const requestHash = createHash("sha256").update(stableJson(request)).digest("hex");
+  const response = project.storage.transaction((transaction) => {
+    initializeRowMutationTables(transaction);
+    const tenant = tenantParameters(context.tenant);
+    const existing = transaction.execute<IdempotencyLedgerRow>({
+      sql: `SELECT request_hash, response_payload FROM _mekka_idempotency_ledger
+        WHERE organization_id = ? AND project_id = ? AND environment_id = ?
+          AND branch_id = ? AND generation = ? AND actor_kind = ? AND actor_id = ?
+          AND idempotency_key = ?`,
+      parameters: [...tenant, context.actor.kind, context.actor.id, idempotencyKey],
+    }).rows[0];
+    if (existing !== undefined) {
+      if (existing.request_hash !== requestHash) {
+        throw new MetaError("conflict", "Idempotency key was reused with a different request.");
+      }
+      return parseRowMutationResponse(existing.response_payload);
+    }
+    const changes = mutation(transaction);
+    const result = Object.freeze({ changes, idempotencyKey });
+    const audit = Object.freeze({
+      action: request.operation as SqliteMetaAuditEvent["action"],
+      actorId: context.actor.id,
+      statementHash: createHash("sha256").update(statement).digest("hex"),
+      rowCount: changes,
+    });
+    transaction.execute({
+      sql: `INSERT INTO _mekka_idempotency_ledger (
+          organization_id, project_id, environment_id, branch_id, generation,
+          actor_kind, actor_id, idempotency_key, request_hash, status, response_payload
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'committed', ?)`,
+      parameters: [
+        ...tenant,
+        context.actor.kind,
+        context.actor.id,
+        idempotencyKey,
+        requestHash,
+        JSON.stringify(result),
+      ],
+    });
+    transaction.execute({
+      sql: `INSERT INTO _mekka_audit_outbox (
+          organization_id, project_id, environment_id, branch_id, generation, payload
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
+      parameters: [...tenant, JSON.stringify(audit)],
+    });
+    return result;
+  });
+  flushAuditOutbox(project.storage, dependencies, context.tenant);
+  return response;
+}
+
+function initializeRowMutationTables(storage: Pick<StorageAdapter, "execute">): void {
+  storage.execute({
+    sql: `CREATE TABLE IF NOT EXISTS _mekka_idempotency_ledger (
+      organization_id TEXT NOT NULL, project_id TEXT NOT NULL, environment_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL, generation INTEGER NOT NULL, actor_kind TEXT NOT NULL,
+      actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status = 'committed'), response_payload TEXT NOT NULL,
+      PRIMARY KEY (organization_id, project_id, environment_id, branch_id, generation, actor_kind, actor_id, idempotency_key)
+    ) STRICT`,
+  });
+  storage.execute({
+    sql: `CREATE TABLE IF NOT EXISTS _mekka_audit_outbox (
+      id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, project_id TEXT NOT NULL,
+      environment_id TEXT NOT NULL, branch_id TEXT NOT NULL, generation INTEGER NOT NULL,
+      payload TEXT NOT NULL
+    ) STRICT`,
+  });
+}
+
+function flushAuditOutbox(
+  storage: StorageAdapter,
+  dependencies: SqliteMetaDependencies,
+  tenant: TenantIdentity,
+): void {
+  initializeRowMutationTables(storage);
+  const rows = storage.execute<AuditOutboxRow>({
+    sql: `SELECT id, payload FROM _mekka_audit_outbox
+      WHERE organization_id = ? AND project_id = ? AND environment_id = ?
+        AND branch_id = ? AND generation = ? ORDER BY id LIMIT 100`,
+    parameters: tenantParameters(tenant),
+  }).rows;
+  for (const row of rows) {
+    let audit: SqliteMetaAuditEvent;
+    try {
+      audit = parseAuditEvent(row.payload);
+      dependencies.recordAudit(audit);
+    } catch {
+      return;
+    }
+    storage.execute({ sql: "DELETE FROM _mekka_audit_outbox WHERE id = ?", parameters: [row.id] });
+  }
+}
+
+function parseRowMutationResponse(payload: string): RowMutationResponse {
+  try {
+    const value = readRecord(JSON.parse(payload), "idempotency response");
+    if (
+      typeof value.changes !== "number" ||
+      !Number.isSafeInteger(value.changes) ||
+      value.changes < 0
+    ) {
+      throw new Error("invalid changes");
+    }
+    if (
+      typeof value.idempotencyKey !== "string" ||
+      !idempotencyKeyPattern.test(value.idempotencyKey)
+    ) {
+      throw new Error("invalid idempotency key");
+    }
+    return Object.freeze({ changes: value.changes, idempotencyKey: value.idempotencyKey });
+  } catch {
+    throw new MetaError("infrastructure", "Idempotency ledger is invalid.");
+  }
+}
+
+function parseAuditEvent(payload: string): SqliteMetaAuditEvent {
+  const value = readRecord(JSON.parse(payload), "audit outbox");
+  if (
+    typeof value.action !== "string" ||
+    typeof value.actorId !== "string" ||
+    typeof value.statementHash !== "string" ||
+    typeof value.rowCount !== "number"
+  ) {
+    throw new MetaError("infrastructure", "Audit outbox is invalid.");
+  }
+  return Object.freeze({
+    action: value.action as SqliteMetaAuditEvent["action"],
+    actorId: value.actorId,
+    statementHash: value.statementHash,
+    rowCount: value.rowCount,
+  });
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function tenantParameters(tenant: TenantIdentity): readonly StorageValue[] {
+  return Object.freeze([
+    tenant.organizationId,
+    tenant.projectId,
+    tenant.environmentId,
+    tenant.branchId,
+    tenant.generation,
+  ]);
 }
 
 function mutate(

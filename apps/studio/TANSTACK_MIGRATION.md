@@ -1,24 +1,26 @@
 # TanStack Start migration — route checklist
 
-Temporary tracking doc. Delete once migration is done.
+Temporary tracking doc. Delete once the remaining legacy implementation bodies,
+API handlers, Next compat layer, rollback runtime, and Pages Router tests are removed.
 
 **Runtime model — Next.js and TanStack Start run side-by-side**
 
-Throughout this migration both runtimes coexist in the same workspace:
+TanStack Start is the default runtime while the Next.js Pages Router remains an explicit rollback path during final cleanup:
 
 - The Next.js pages router (`pages/...`) and the TanStack route tree
-  (`routes/...`) ship **at the same time**. The Vite/TanStack build is
-  what we run today; the Next build (`build:next` / `dev:next` scripts
-  in `apps/studio/package.json`) stays alive as a fallback so we can
-  bisect regressions and ship either runtime if needed.
+  (`routes/...`) still ship side-by-side. `dev`, `build`, and `start`
+  dispatch to TanStack by default. `STUDIO_FRAMEWORK=next` selects the
+  legacy runtime only for rollback while its remaining implementation
+  dependencies are retired.
 - **Do not delete any `apps/studio/pages/...` file during the per-route
   migration.** Path A pages re-export their `pages/` default export, so
   the Next file is load-bearing for both runtimes. Removing it breaks
   the Next build and breaks the TanStack route too.
 - Body-moves and `pages/...` deletion happen **only in the final
   cleanup pass**, after every route is represented in `routes/...` and
-  we're ready to retire the Next runtime entirely. That's a separate,
-  deliberate phase — not something to fold into individual route PRs.
+  the explicit Next rollback runtime is ready to retire. This is a
+  separate, deliberate phase — not something to fold into individual
+  route PRs.
 - Same rule for the Next compat shims (`apps/studio/compat/next/`):
   they stay until the cleanup pass, regardless of how many routes have
   moved.
@@ -344,8 +346,7 @@ These are the layout-only TanStack files. Most hold a single product layout comp
 
 ### Error pages (handled at root)
 
-- [x] A `__root.tsx` — wired `notFoundComponent` to `pages/404.tsx`
-- [x] `__root.tsx` — wired `errorComponent` to `pages/500.tsx`. Mirrors the in-tree `react-error-boundary` Sentry capture (`scope.setTag('routerErrorComponent', true)`) so router-level errors (loader/component-render failures before the in-tree boundary mounts) still report. `pages/_error.jsx` stays load-bearing under Next but isn't reached at runtime under TanStack — it's the pages-router catch-all that has no TanStack equivalent.
+- [x] `__root.tsx` — owns TanStack-native 404/500 bodies in `components/interfaces/App/RouterErrorPages.tsx`. They mirror the existing JSX/classes and the in-tree `react-error-boundary` Sentry capture (`scope.setTag('routerErrorComponent', true)`) so router-level errors (loader/component-render failures before the in-tree boundary mounts) still report. `pages/404.tsx` and `pages/500.tsx` remain only for the explicit `STUDIO_FRAMEWORK=next` rollback path.
 
 ---
 
@@ -595,7 +596,7 @@ for the Vite pipeline:
 - Remove `RouteValidationWrapper` + `next/router` compat shim usage from `__root.tsx`.
 - Remove `compat/next/` directory entirely once no `next/*` import remains in workspace source.
 - Lift `manualChunks` pins (`class-variance-authority`, `lucide-react`, `react-vendor`) once the structural fix in `packages/ui` lands — see CIRCULAR_IMPORTS.md. Keep `assertNoChunkCycles`; just clear `KNOWN_CHUNK_CYCLES`.
-- Delete `pages/_app.tsx`, `pages/_document.tsx`, `pages/_error.jsx`, `pages/500.tsx`, `pages/404.tsx` (Next-only catch-alls; TanStack equivalents on `__root.tsx`).
+- Delete `pages/_app.tsx`, `pages/_document.tsx`, `_error.jsx`, `404.tsx`, and `500.tsx` only after the explicit Next rollback runtime is removed. TanStack already owns equivalent 404/500 bodies in `RouterErrorPages.tsx`.
 - Drop the `dev:next` / `build:next` / `start:next` scripts from `apps/studio/package.json` once we're committed to TanStack.
 - Remove the `apps/studio/pages/**` `path_instructions` guardrail entry from `.coderabbit.yaml` (added in FE-3423; remove it as part of this FE-3106 cleanup) — it's only useful while both runtimes coexist.
 - Remove the "TanStack Start migration" section from `apps/studio/CLAUDE.md` — it only applies while both runtimes coexist.

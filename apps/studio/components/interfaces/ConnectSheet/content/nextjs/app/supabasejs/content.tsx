@@ -8,10 +8,10 @@ const ContentFile = ({ projectKeys }: StepContentProps) => {
       name: '.env.local',
       language: 'bash',
       code: [
-        `NEXT_PUBLIC_SUPABASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
+        `NEXT_PUBLIC_LITEBASE_URL=${projectKeys.apiUrl ?? 'your-project-url'}`,
         projectKeys?.publishableKey
-          ? `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
-          : `NEXT_PUBLIC_SUPABASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
+          ? `NEXT_PUBLIC_LITEBASE_PUBLISHABLE_KEY=${projectKeys.publishableKey}`
+          : `LITEBASE_ANON_KEY=${projectKeys.anonKey ?? 'your-anon-key'}`,
         '',
       ].join('\n'),
     },
@@ -19,14 +19,14 @@ const ContentFile = ({ projectKeys }: StepContentProps) => {
       name: 'page.tsx',
       language: 'tsx',
       code: `
-import { createClient } from '@/utils/supabase/server'
+import { createClient } from '@/utils/litebase/server'
 import { cookies } from 'next/headers'
 
 export default async function Page() {
   const cookieStore = await cookies()
-  const supabase = createClient(cookieStore)
+  const litebase = createClient(cookieStore)
 
-  const { data: todos } = await supabase.from('todos').select()
+  const { data: todos } = await litebase.from('todos').select()
 
   return (
     <ul>
@@ -39,19 +39,19 @@ export default async function Page() {
 `,
     },
     {
-      name: 'utils/supabase/server.ts',
+      name: 'utils/litebase/server.ts',
       language: 'ts',
       code: `
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY' : 'NEXT_PUBLIC_SUPABASE_ANON_KEY'};
+const litebaseUrl = process.env.NEXT_PUBLIC_LITEBASE_URL;
+const litebaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_LITEBASE_PUBLISHABLE_KEY' : 'LITEBASE_ANON_KEY'};
 
 export const createClient = (cookieStore: Awaited<ReturnType<typeof cookies>>) => {
   return createServerClient(
-    supabaseUrl!,
-    supabaseKey!,
+    litebaseUrl!,
+    litebaseKey!,
     {
       cookies: {
         getAll() {
@@ -73,42 +73,42 @@ export const createClient = (cookieStore: Awaited<ReturnType<typeof cookies>>) =
 `,
     },
     {
-      name: 'utils/supabase/client.ts',
+      name: 'utils/litebase/client.ts',
       language: 'ts',
       code: `
 import { createBrowserClient } from "@supabase/ssr";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY' : 'NEXT_PUBLIC_SUPABASE_ANON_KEY'};
+const litebaseUrl = process.env.NEXT_PUBLIC_LITEBASE_URL;
+const litebaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_LITEBASE_PUBLISHABLE_KEY' : 'LITEBASE_ANON_KEY'};
 
 export const createClient = () =>
   createBrowserClient(
-    supabaseUrl!,
-    supabaseKey!,
+    litebaseUrl!,
+    litebaseKey!,
   );
 `,
     },
     {
-      name: 'utils/supabase/middleware.ts',
+      name: 'utils/litebase/middleware.ts',
       language: 'ts',
       code: `
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const supabaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY' : 'NEXT_PUBLIC_SUPABASE_ANON_KEY'};
+const litebaseUrl = process.env.NEXT_PUBLIC_LITEBASE_URL;
+const litebaseKey = process.env.${projectKeys?.publishableKey ? 'NEXT_PUBLIC_LITEBASE_PUBLISHABLE_KEY' : 'LITEBASE_ANON_KEY'};
 
 export const createClient = (request: NextRequest) => {
   // Create an unmodified response
-  let supabaseResponse = NextResponse.next({
+  let litebaseResponse = NextResponse.next({
     request: {
       headers: request.headers,
     },
   });
 
   const supabase = createServerClient(
-    supabaseUrl!,
-    supabaseKey!,
+    litebaseUrl!,
+    litebaseKey!,
     {
       cookies: {
         getAll() {
@@ -116,18 +116,18 @@ export const createClient = (request: NextRequest) => {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({
+            litebaseResponse = NextResponse.next({
             request,
           })
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            litebaseResponse.cookies.set(name, value, options)
           )
         },
       },
     },
   );
 
-  return supabaseResponse
+  return litebaseResponse
 };
 `,
     },

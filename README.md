@@ -5,14 +5,14 @@
 
   **BACKEND INFRASTRUCTURE THAT FITS IN YOUR HEAD.**
 
-  SQLite data plane. Embedded Studio. Scoped Agent Access. No mystery meat control plane.
+  SQLite through Bun's native driver. Embedded Studio. Scoped Agent Access. No mystery meat control plane.
 
   `DATABASE` · `AUTH` · `STORAGE` · `REALTIME` · `STUDIO` · `SAFE AGENTS`
 
   [![CI](https://github.com/yiaany/mekka/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yiaany/mekka/actions/workflows/ci.yml)
   ![Bun](https://img.shields.io/badge/Bun-1.3.14-242424?style=flat-square&logo=bun&logoColor=fff)
   ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=fff)
-  ![SQLite](https://img.shields.io/badge/data-SQLite--compatible-0f80cc?style=flat-square&logo=sqlite&logoColor=fff)
+  ![SQLite](https://img.shields.io/badge/data-SQLite--native-0f80cc?style=flat-square&logo=sqlite&logoColor=fff)
   ![MCP](https://img.shields.io/badge/MCP-scoped-090909?style=flat-square)
   ![License](https://img.shields.io/badge/license-Mekka%20Business%202.0-090909?style=flat-square)
 
@@ -21,62 +21,48 @@
 
 <br />
 
-<table>
-  <thead>
-    <tr>
-      <th align="left">MEKKA / STUDIO</th>
-      <th align="left">Agent workspace</th>
-      <th align="right"><code>main</code></th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td width="190" valign="top">
-        <sub>PROJECT</sub><br />
-        <strong>mekka-production</strong><br /><br />
-        <strong>Table Editor</strong><br />
-        <span>SQL Editor</span><br />
-        <span>Auth</span><br />
-        <span>Storage</span><br />
-        <span>Realtime</span><br />
-        <span>Agent Access</span>
-      </td>
-      <td colspan="2" valign="top">
-        <sub>AGENT REQUEST</sub><br />
-        <strong>Add a status field to tasks and make status filters fast.</strong><br /><br />
-        <sub>Validated in an isolated preview. Production is unchanged.</sub><br /><br />
-        <pre><code>ALTER TABLE tasks
-ADD COLUMN status TEXT NOT NULL DEFAULT 'todo';
+<p align="center">
+  <img src="docs/assets/studio/table-editor.jpg" alt="Mekka Studio table editor running against a local SQLite project" width="100%" />
+  <sub>Real Studio, real local SQLite project. No mockup.</sub>
+</p>
 
-CREATE INDEX tasks_status_idx ON tasks (status);</code></pre>
-        <kbd>Preview ready</kbd>&nbsp; <kbd>Exact SQL</kbd>&nbsp; <kbd>Approval required</kbd>
-      </td>
-    </tr>
-    <tr>
-      <td><sub>DATA PLANE</sub><br /><strong>SQLite-compatible</strong></td>
-      <td><sub>AGENT SCOPE</sub><br /><strong>Preview only</strong></td>
-      <td><sub>PRODUCTION</sub><br /><strong>Protected</strong></td>
-    </tr>
-  </tbody>
+<table>
+  <tr>
+    <td width="50%"><img src="docs/assets/studio/sql-editor.jpg" alt="Mekka SQL editor" /></td>
+    <td width="50%"><img src="docs/assets/studio/auth-users.jpg" alt="Mekka Auth users administration" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><strong>SQL EDITOR</strong></sub></td>
+    <td align="center"><sub><strong>AUTH USERS</strong></sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/studio/agent-access.jpg" alt="Mekka Agent Access registration and token controls" /></td>
+    <td width="50%"><img src="docs/assets/studio/auth-providers.jpg" alt="Mekka authentication provider configuration" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><strong>AGENT ACCESS</strong></sub></td>
+    <td align="center"><sub><strong>AUTH PROVIDERS</strong></sub></td>
+  </tr>
 </table>
 
 ---
 
 ## The Short Version
 
-Modern backend platforms are powerful. They are also becoming platforms you need another platform
-team to understand.
+Most products do not need PostgreSQL infrastructure as a lifestyle. They need durable data, auth,
+files, realtime events, a good control surface, and a safe way for humans and agents to change the
+system.
 
 **Mekka takes the opposite position.**
 
-It is a direct Supabase alternative with a different center of gravity: less platform, more
-product. Less operational theater, more backend you can actually hold in your head.
+Mekka is the Supabase killer for that majority: less platform, more product. Less operational
+theater, more backend you can actually hold in your head.
 
-Keep the database, Auth, Storage, Realtime, Studio, and agent workflows. Cut the machinery most
-projects never touch. Put the result into a compact SQLite-native stack that is lighter to run,
-easier to reason about, and faster to move from an idea to a working backend.
+Keep the database, Auth, Storage, Realtime, Studio, and agent workflows. Cut the PostgreSQL fleet
+and the machinery most projects never touch. Put the result into a compact SQLite stack powered by
+Bun's native driver: lighter to run, easier to reason about, and faster from idea to working backend.
 
-**One runtime shape.** Bun/Node services backed by SQLite-compatible state.
+**One data plane.** Bun's native SQLite driver backed by ordinary SQLite database files.
 
 **One control surface.** A private Studio fork for data, users, files, branches, and approvals.
 
@@ -138,13 +124,17 @@ last boundary.
 
 ## Why Mekka
 
-Supabase is broad by design. Mekka is opinionated by design. If the full PostgreSQL ecosystem is
-the requirement, use it. If the goal is a compact backend with a smaller operational footprint and
-an agent model built around verification instead of blind trust, that is Mekka's lane.
+Supabase gives every project a PostgreSQL platform. Mekka starts from the harder question: does this
+product actually need one? For most application backends, the answer is no. They need a dependable
+database and the product surfaces around it, not a database operations program.
+
+Mekka keeps those surfaces, replaces the heavyweight center with SQLite through Bun's native
+driver, and makes guarded agent changes a first-class workflow. If deep PostgreSQL compatibility is
+the requirement, use Supabase. If shipping the product is the requirement, use less infrastructure.
 
 | | **Mekka** | **Supabase** | **Plain SQLite** |
 | --- | --- | --- | --- |
-| Primary database | SQLite-compatible data plane | Full PostgreSQL database | SQLite file / embedded engine |
+| Primary database | SQLite through Bun's native driver | Full PostgreSQL database | SQLite file / embedded engine |
 | Visual control surface | Bundled private Studio fork | Hosted and self-hosted Studio | Bring your own tooling |
 | Agent protocol | Native MCP with tenant-bound capabilities | Official MCP with project and feature scopes | None built in |
 | Default agent access | Read-only | Configurable; hosted MCP supports read-only mode | Application-defined |
@@ -152,11 +142,11 @@ an agent model built around verification instead of blind trust, that is Mekka's
 | Agent credentials | Derived opaque token, maximum 5-minute TTL | Hosted OAuth or access-token based flows | Application-defined |
 | Schema branches | Verified SQLite snapshots with replay-safe promotion | Platform branching is available; MCP branching is experimental | Manual file copies / custom workflow |
 | API compatibility | Native typed API plus tested Supabase subset | Native Supabase APIs | None built in |
-| Self-host shape | Bun/Node services plus SQLite state | Multi-service Postgres stack | Single embedded database |
+| Self-host shape | Bun/Node services plus SQLite database files | Multi-service Postgres stack | Single embedded database |
 
-> Supabase is broader. Mekka is deliberately sharper. If you need the full PostgreSQL ecosystem,
-> use Supabase. If you want a compact self-hosted backend with less machinery, a smaller operational
-> footprint, and guarded AI-agent workflows, Mekka removes the weight instead of hiding it.
+> Supabase is broader. Mekka is deliberately lighter. Most projects should not pay the operational
+> and cognitive tax of a full PostgreSQL platform just to get a productive backend. Mekka removes
+> that weight instead of hiding it behind another control plane.
 
 Supabase comparison references: [Database](https://supabase.com/docs/guides/database/overview),
 [MCP Server](https://supabase.com/docs/guides/ai-tools/mcp), and

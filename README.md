@@ -5,7 +5,7 @@
 
   **BACKEND INFRASTRUCTURE THAT FITS IN YOUR HEAD.**
 
-  SQLite through Bun's native driver. Embedded Studio. Scoped Agent Access.
+  One command. Bun-native SQLite. Embedded Studio. Scoped Agent Access.
 
   `DATABASE` · `AUTH` · `STORAGE` · `REALTIME` · `STUDIO` · `SAFE AGENTS`
 
@@ -18,6 +18,13 @@
 
   [Why Mekka](#why-mekka) · [Architecture](#architecture) · [Studio](#studio) · [Roadmap](#ecosystem-roadmap) · [Run it](#run-it) · [Security](#security)
 </div>
+
+```bash
+npx mekka
+```
+
+<p align="center"><strong>One command downloads Mekka, creates the project folder, installs every dependency, and starts the complete local backend.</strong></p>
+<p align="center"><sub>Data, Auth, Storage, Realtime, Studio, and scoped MCP open locally at <code>127.0.0.1:8082</code>.</sub></p>
 
 <br />
 
@@ -60,6 +67,18 @@ the machinery most projects never touch, and make agent safety part of the archi
 **Choose Supabase** when deep PostgreSQL compatibility is the requirement.
 
 **Choose Mekka** when shipping with less infrastructure is the requirement.
+
+## Built For Builders. Protected From Cloud Resale.
+
+The complete Mekka source is public. Individuals can inspect it, modify it, test it, learn from it,
+and use it for non-production development. Qualifying small organizations can use Mekka inside their
+own products under the additional grant in the Mekka Business License 2.0.
+
+What the license prevents is extraction: a large company, cloud vendor, or other third party cannot
+take Mekka, rebrand it, and sell it as a competing hosted backend or cloud service without a
+commercial agreement. Builders get access to the code. Cloud resellers do not get a free product.
+
+See [`LICENSE.md`](LICENSE.md) for the exact eligibility conditions and controlling terms.
 
 <details>
 <summary><strong>Comparison notes and sources</strong></summary>
@@ -208,24 +227,30 @@ One control surface for the backend paths people actually use.
 
 ## Run It
 
-Four commands. Two local services. No external database to provision.
+### Download and start everything with one command
 
 ```bash
-git clone https://github.com/yiaany/mekka.git
-cd mekka
-bun install --frozen-lockfile
-bun run dev
+npx mekka
 ```
 
-Open **`http://127.0.0.1:8082`**.
+That single command:
+
+1. Downloads the latest Mekka source into a new `mekka` folder.
+2. Installs the complete workspace with Bun.
+3. Starts the SQLite backend and embedded Studio.
+4. Opens the local stack for Data, Auth, Storage, Realtime, branches, approvals, and scoped MCP.
+
+Open **`http://127.0.0.1:8082`**. No external database or multi-service PostgreSQL stack is required.
+
+Choose the project directory with `npx mekka my-app`. Inside an existing Mekka checkout, `npx mekka`
+installs dependencies and starts the current project. Requires Node.js 20+, Bun `1.3.14`+, and Git.
 
 | Service | Address | Purpose |
 | --- | --- | --- |
 | Studio | `127.0.0.1:8082` | Browser control surface and same-origin API |
 | sqlite-meta | `127.0.0.1:3001` | Data, Auth, branches, approvals, and MCP backend |
 
-Requires Bun `1.3.14`, Git, and a current browser. Local state lives in `apps/studio/.local/` and is
-ignored by Git and Docker contexts.
+Local state lives in `apps/studio/.local/` and is ignored by Git and Docker contexts.
 
 <details>
 <summary><strong>Production deployment</strong></summary>
@@ -325,20 +350,20 @@ optional, then taking the control plane, the agent workflow, and the developer e
     <td width="25%" valign="top">
       <sub>PHASE 1.5</sub><br />
       <kbd>COMING NEXT</kbd><br /><br />
-      <strong>PGLITE TRACK</strong><br /><br />
-      In-process Postgres<br />
-      WASM portability<br />
-      JSONB workflows<br />
-      pgvector target
-    </td>
-    <td width="25%" valign="top">
-      <sub>PHASE 2.0</sub><br />
-      <kbd>ADAPTER TRACK</kbd><br /><br />
       <strong>LIBSQL PLANE</strong><br /><br />
       Remote adapter<br />
       Replicated reads<br />
       Primary write routing<br />
       Managed clones
+    </td>
+    <td width="25%" valign="top">
+      <sub>PHASE 2.0</sub><br />
+      <kbd>COMPATIBILITY TRACK</kbd><br /><br />
+      <strong>PGLITE ENGINE</strong><br /><br />
+      In-process Postgres<br />
+      WASM portability<br />
+      JSONB workflows<br />
+      pgvector target
     </td>
     <td width="25%" valign="top">
       <sub>PHASE 3.0</sub><br />
@@ -365,8 +390,8 @@ optional, then taking the control plane, the agent workflow, and the developer e
 | **Engine layer** | **Control layer** | **Execution layer** | **Developer layer** |
 | --- | --- | --- | --- |
 | Bun SQLite today | Tenant-aware orchestration | Isolated TypeScript functions | Studio and CLI workflows |
-| PGlite compatibility track | Branch and replica topology | Realtime mutation streams | PR preview databases |
-| libSQL/Turso adapter track | Autosuspend and placement | Agent-safe plugin runtime | Engine choice per project |
+| libSQL/Turso adapter next | Branch and replica topology | Realtime mutation streams | PR preview databases |
+| PGlite compatibility track | Autosuspend and placement | Agent-safe plugin runtime | Engine choice per project |
 
 <details>
 <summary><strong>libSQL distributed data plane</strong></summary>
@@ -495,5 +520,8 @@ provenance and the reproduced license remain in `apps/studio/UPSTREAM.md` and
 Mekka is under active development. Passing tests cover reviewed paths; production deployments still
 require monitoring, backups, restore tests, and independent security review.
 
-Source is available under the **Mekka Business License 2.0**. This is not an OSI-approved open-source
-license. See [`LICENSE.md`](LICENSE.md) for the controlling terms.
+Mekka is built in public under the **Mekka Business License 2.0**. Individuals can inspect, modify,
+test, and learn from the complete source, while qualifying small organizations can use Mekka inside
+their own products. The license prevents third parties, including large cloud companies, from
+repackaging Mekka as a competing hosted backend or cloud service without a commercial agreement.
+See [`LICENSE.md`](LICENSE.md) for the controlling terms.

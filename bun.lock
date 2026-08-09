@@ -449,6 +449,13 @@
         "react": "catalog:",
       },
     },
+    "packages/mekka-cli": {
+      "name": "mekka",
+      "version": "0.1.0",
+      "bin": {
+        "mekka": "bin/mekka.js",
+      },
+    },
     "packages/migration-engine": {
       "name": "@mekka/migration-engine",
       "version": "0.1.0",
@@ -3687,6 +3694,8 @@
     "mdurl": ["mdurl@2.1.0", "", {}, "sha512-1+HBaOx0zi/dQWht8rNv9MYf9qqpqL/kxI0hXImU6Y547zM6Sni8BQibt7ifgMcYtQg41ao3Ivd6cnSM86inpg=="],
 
     "media-typer": ["media-typer@0.3.0", "", {}, "sha512-dq+qelQ9akHpcOl/gUVRTxVIOkAJ1wR3QAvb4RsVjS8oVoFjDGTc679wJYmUmknUF5HwMLOgb5O+a3KxfWapPQ=="],
+
+    "mekka": ["mekka@workspace:packages/mekka-cli"],
 
     "memoirist": ["memoirist@0.4.0", "", {}, "sha512-zxTgA0mSYELa66DimuNQDvyLq36AwDlTuVRbnQtB+VuTcKWm5Qc4z3WkSpgsFWHNhexqkIooqpv4hdcqrX5Nmg=="],
 

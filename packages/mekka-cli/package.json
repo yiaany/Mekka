@@ -1,0 +1,41 @@
+{
+  "name": "mekka",
+  "version": "0.1.0",
+  "description": "Run the agent-native backend on Bun and SQLite with one command.",
+  "license": "LicenseRef-Mekka-Business-2.0",
+  "type": "module",
+  "bin": {
+    "mekka": "bin/mekka.js"
+  },
+  "files": [
+    "bin/mekka.js",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yiaany/Mekka.git",
+    "directory": "packages/mekka-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/yiaany/Mekka/issues"
+  },
+  "homepage": "https://github.com/yiaany/Mekka#readme",
+  "keywords": [
+    "backend",
+    "bun",
+    "sqlite",
+    "mcp",
+    "supabase",
+    "self-hosted"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

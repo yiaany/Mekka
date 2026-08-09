@@ -10,6 +10,8 @@
   ],
   "scripts": {
     "dev": "bun run dev:studio",
+    "cli:test": "node --test packages/mekka-cli/bin/mekka.test.js",
+    "cli:pack": "npm pack --dry-run --workspace mekka",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint .",

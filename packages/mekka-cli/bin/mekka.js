@@ -47,6 +47,25 @@ export function resolveTargetDirectory(cwd, requestedDirectory) {
   return isMekkaRepository(cwd) ? cwd : resolve(cwd, "mekka");
 }
 
+export function missingBunMessage(platform = process.platform) {
+  const installCommand =
+    platform === "win32"
+      ? 'powershell -c "irm bun.sh/install.ps1 | iex"'
+      : "curl -fsSL https://bun.sh/install | bash";
+
+  return `Bun is not installed.
+
+Mekka uses Bun's native SQLite driver and cannot start without Bun 1.3.14 or newer.
+
+Install Bun:
+  ${installCommand}
+
+Then open a new terminal and run:
+  npx mekka
+
+Installation guide: https://bun.sh/docs/installation`;
+}
+
 function printHelp() {
   console.log(`Mekka
 
@@ -130,10 +149,8 @@ export async function main(args = process.argv.slice(2), cwd = process.cwd()) {
     console.log(JSON.parse(readFileSync(packagePath, "utf8")).version);
     return;
   }
+  if (!commandExists("bun")) throw new Error(missingBunMessage());
   if (!commandExists("git")) throw new Error("Git is required to download Mekka.");
-  if (!commandExists("bun")) {
-    throw new Error("Bun 1.3.14 or newer is required: https://bun.sh/docs/installation");
-  }
 
   const targetDirectory = resolveTargetDirectory(cwd, options.directory);
   const existingProject = isMekkaRepository(targetDirectory);

@@ -23,8 +23,9 @@
 npx mekka
 ```
 
-<p align="center"><strong>One command downloads Mekka, creates the project folder, installs every dependency, and starts the complete local backend.</strong></p>
+<p align="center"><strong>With Bun installed, one command downloads Mekka, creates the project folder, installs every dependency, and starts the complete local backend.</strong></p>
 <p align="center"><sub>Data, Auth, Storage, Realtime, Studio, and scoped MCP open locally at <code>127.0.0.1:8082</code>.</sub></p>
+<p align="center"><sub>No Bun yet? The CLI stops safely and prints the exact official installation command for Windows, macOS, or Linux.</sub></p>
 
 <br />
 
@@ -229,6 +230,9 @@ One control surface for the backend paths people actually use.
 
 ### Download and start everything with one command
 
+Prerequisites: Node.js 20+, Git, and Bun `1.3.14`+. If Bun is missing, `npx mekka` does not clone or
+partially install the project. It exits with the official platform-specific Bun installation command.
+
 ```bash
 npx mekka
 ```
@@ -243,7 +247,7 @@ That single command:
 Open **`http://127.0.0.1:8082`**. No external database or multi-service PostgreSQL stack is required.
 
 Choose the project directory with `npx mekka my-app`. Inside an existing Mekka checkout, `npx mekka`
-installs dependencies and starts the current project. Requires Node.js 20+, Bun `1.3.14`+, and Git.
+installs dependencies and starts the current project.
 
 | Service | Address | Purpose |
 | --- | --- | --- |

@@ -252,19 +252,19 @@ It should not receive unrestricted production execution. Mekka gives agents shor
 
 ### Title Concept
 
-Show HN: Mekka - a Supabase-style backend on Bun and SQLite
+Show HN: Mekka - A self-hosted Bun + SQLite backend with agent-safe database previews
 
 Write the final title yourself too. Keep the required `Show HN:` prefix, the product name, and one concrete technical distinction.
 
 ### Title Alternatives
 
-1. Show HN: Mekka - Data, Auth, Storage, Realtime, and MCP on SQLite
-2. Show HN: Mekka - a backend platform without a PostgreSQL fleet
-3. Show HN: Mekka - preview-first database access for coding agents
-4. Show HN: Mekka - a self-hosted backend built around bun:sqlite
-5. Show HN: Mekka - Supabase-like product surfaces on ordinary SQLite files
+1. Show HN: Mekka - A self-hosted backend built around bun:sqlite
+2. Show HN: Mekka - Preview-first database access for coding agents
+3. Show HN: Mekka - Data, Auth, Storage, Realtime, and MCP on SQLite
+4. Show HN: Mekka - Guarded schema changes for agents on Bun and SQLite
+5. Show HN: Mekka - A local backend with isolated database previews
 
-Avoid "Supabase killer" in the Hacker News title. It creates a credibility tax before technical readers have seen the architecture.
+Do not use "Supabase," "Supabase-style," or "Supabase killer" in the Hacker News title or opening line. Lead with the implementation and the preview-first safety model.
 
 ### Submission URL
 

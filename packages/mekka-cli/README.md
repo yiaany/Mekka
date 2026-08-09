@@ -6,8 +6,8 @@ Run Mekka with one command:
 npx mekka
 ```
 
-This creates a `mekka` directory, installs dependencies with Bun, and starts the local Studio at
-`http://127.0.0.1:8082`.
+With Bun already installed, this creates a `mekka` directory, installs every dependency, and starts
+the complete local backend and Studio at `http://127.0.0.1:8082`.
 
 Choose a different directory:
 
@@ -21,7 +21,8 @@ Prepare the project without starting it:
 npx mekka my-app --no-start
 ```
 
-Requires Node.js 20 or newer, Bun 1.3.14 or newer, and Git.
+Requires Node.js 20 or newer, Bun 1.3.14 or newer, and Git. If Bun is missing, the CLI stops before
+downloading anything and prints the exact official installation command for the current platform.
 
 Mekka is built in public under the Mekka Business License 2.0. The license gives qualifying small
 organizations room to build while preventing third parties from repackaging Mekka as a competing

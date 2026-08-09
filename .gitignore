@@ -68,6 +68,7 @@ MASTER_PROMPT*
 .opencode/
 session-prompts/
 docs/session-logs/
+docs/marketing/
 *.prompt.md
 *.prompts.md
 *.session.md

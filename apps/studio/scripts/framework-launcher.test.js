@@ -35,6 +35,7 @@ test('builds cross-platform Next and Vite arguments from environment values', ()
     '-p',
     '9002',
   ])
+  assert.deepEqual(frameworkCommand('typegen', {}).args, ['typegen'])
   assert.deepEqual(frameworkCommand('build:tanstack', {}).args, [
     'build',
     '--mode',

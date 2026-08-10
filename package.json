@@ -19,6 +19,7 @@
     "lint": "biome lint .",
     "typecheck": "tsc --build --pretty false",
     "repo:check": "node scripts/workspace-tests.mjs --check",
+    "pretest": "node scripts/ensure-core-build.mjs",
     "test": "node scripts/workspace-tests.mjs --bun",
     "test:workspaces": "node scripts/workspace-tests.mjs --workspaces",
     "test:supabase-data": "bun test apps/gateway/test/supabase-data-compat.test.ts",

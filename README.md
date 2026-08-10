@@ -256,6 +256,9 @@ For contributors, `bun install --frozen-lockfile && bun run dev` is also support
 incrementally builds required workspace outputs before starting Studio, so a clean checkout does not
 need a manual `bun run build:core` workaround.
 
+The same bootstrap runs before `bun run test` and Studio typechecking, so those commands also work
+immediately after a clean `bun install --frozen-lockfile`.
+
 | Service | Address | Purpose |
 | --- | --- | --- |
 | Studio | `127.0.0.1:8082` | Browser control surface and same-origin API |

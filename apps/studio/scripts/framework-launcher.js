@@ -28,6 +28,8 @@ export function frameworkCommand(target, env = process.env, platform = process.p
       return { command: binary('next'), args: ['dev', '-p', port] }
     case 'start:next':
       return { command: binary('next'), args: ['start', '-p', port] }
+    case 'typegen':
+      return { command: binary('next'), args: ['typegen'] }
     case 'build:tanstack':
       return { command: binary('vite'), args: ['build', '--mode', mode], smoke: true }
     default:

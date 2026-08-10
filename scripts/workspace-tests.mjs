@@ -58,17 +58,28 @@ function readPackage(directory) {
 }
 
 function workspaceDirectories() {
-  return rootPackage.workspaces.flatMap((workspacePattern) => {
-    if (!workspacePattern.endsWith("/*")) {
-      throw new Error(`Unsupported workspace pattern: ${workspacePattern}`);
-    }
+  const excludedWorkspaces = new Set(
+    rootPackage.workspaces
+      .filter((workspacePattern) => workspacePattern.startsWith("!"))
+      .map((workspacePattern) => workspacePattern.slice(1)),
+  );
+  return rootPackage.workspaces
+    .filter((workspacePattern) => !workspacePattern.startsWith("!"))
+    .flatMap((workspacePattern) => {
+      if (!workspacePattern.endsWith("/*")) {
+        throw new Error(`Unsupported workspace pattern: ${workspacePattern}`);
+      }
 
-    const parent = path.join(root, workspacePattern.slice(0, -2));
-    return readdirSync(parent, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.posix.join(workspacePattern.slice(0, -2), entry.name))
-      .filter((workspace) => existsSync(path.join(root, workspace, "package.json")));
-  });
+      const parent = path.join(root, workspacePattern.slice(0, -2));
+      return readdirSync(parent, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.posix.join(workspacePattern.slice(0, -2), entry.name))
+        .filter(
+          (workspace) =>
+            !excludedWorkspaces.has(workspace) &&
+            existsSync(path.join(root, workspace, "package.json")),
+        );
+    });
 }
 
 function testFiles(directory, prefix = "") {

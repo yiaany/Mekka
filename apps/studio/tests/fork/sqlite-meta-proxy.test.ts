@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { test } from "vitest";
 
 import { toWebHandler } from "@/compat/next/api";
 import nextHandler from "@/pages/api/platform/sqlite-meta/[ref]/[...path]";
@@ -78,6 +79,43 @@ try {
   );
   assert.equal(upstreamIdempotencyKey, "sqlite-proxy-delete-001");
 
+  const fetchBeforeInvalidBackend = upstreamUrl;
+  for (const invalidBackend of [
+    "not a url",
+    "file:///tmp/sqlite-meta",
+    "https://user:password@backend.example.test",
+    "https://backend.example.test?target=sqlite-meta",
+    "http://studio.local/api/platform/sqlite-meta/local",
+    "http://studio.local",
+    "https://studio.local",
+    "http://localhost:8082",
+  ]) {
+    process.env.STUDIO_BACKEND_API_URL = invalidBackend;
+    const invalid = await handleRequest({
+      request: new Request(
+        "http://studio.local/api/platform/sqlite-meta/local/schema/health",
+        invalidBackend === "http://localhost:8082" || invalidBackend === "https://studio.local"
+          ? { headers: { "x-forwarded-host": "localhost:8082" } }
+          : undefined,
+      ),
+      params: { ref: "local", path: "schema/health" },
+    });
+    assert.equal(invalid.status, 503, invalidBackend);
+    assert.equal(upstreamUrl, fetchBeforeInvalidBackend, invalidBackend);
+  }
+
+  process.env.STUDIO_BACKEND_API_URL = "http://127.0.0.1:3001";
+  const loopbackBackend = await handleRequest({
+    request: new Request(
+      "http://127.0.0.1:8082/api/platform/sqlite-meta/local/schema/health",
+    ),
+    params: { ref: "local", path: "schema/health" },
+  });
+  assert.equal(loopbackBackend.status, 200);
+  assert.equal(upstreamUrl, "http://127.0.0.1:3001/schema/health");
+
+  process.env.STUDIO_BACKEND_API_URL = "https://sqlite-meta.example.test";
+
   Reflect.set(process.env, "NODE_ENV", "production");
   process.env.MEKKA_INTERNAL_PROXY_TOKEN = "sqlite-proxy-production-token";
   const unauthorized = await handleRequest({
@@ -116,3 +154,5 @@ try {
   if (originalNodeEnv === undefined) Reflect.deleteProperty(process.env, "NODE_ENV");
   else Reflect.set(process.env, "NODE_ENV", originalNodeEnv);
 }
+
+test("sqlite-meta proxy assertions completed", () => {});

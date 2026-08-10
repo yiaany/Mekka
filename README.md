@@ -230,8 +230,9 @@ One control surface for the backend paths people actually use.
 
 ### Download and start everything with one command
 
-Prerequisites: Node.js 20+, Git, and Bun `1.3.14`+. If Bun is missing, `npx mekka` does not clone or
-partially install the project. It exits with the official platform-specific Bun installation command.
+Prerequisite: Node.js 20+. If Bun is missing, `npx mekka` runs the official platform installer,
+locates the new executable without requiring a terminal restart, and only then downloads the project.
+Git is optional; without it the CLI securely downloads the GitHub archive over HTTPS.
 
 ```bash
 npx mekka
@@ -241,13 +242,19 @@ That single command:
 
 1. Downloads the latest Mekka source into a new `mekka` folder.
 2. Installs the complete workspace with Bun.
-3. Starts the SQLite backend and embedded Studio.
-4. Opens the local stack for Data, Auth, Storage, Realtime, branches, approvals, and scoped MCP.
+3. Builds the required workspace packages.
+4. Starts the SQLite backend and embedded Studio.
+5. Opens the local stack for Data, Auth, Storage, Realtime, branches, approvals, and scoped MCP.
 
 Open **`http://127.0.0.1:8082`**. No external database or multi-service PostgreSQL stack is required.
 
 Choose the project directory with `npx mekka my-app`. Inside an existing Mekka checkout, `npx mekka`
-installs dependencies and starts the current project.
+skips installation when dependencies are already present, rebuilds the required core outputs, and starts
+the current project. Use `npx mekka --install` to force a reinstall.
+
+For contributors, `bun install --frozen-lockfile && bun run dev` is also supported. The dev bootstrap
+incrementally builds required workspace outputs before starting Studio, so a clean checkout does not
+need a manual `bun run build:core` workaround.
 
 | Service | Address | Purpose |
 | --- | --- | --- |

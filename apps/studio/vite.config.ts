@@ -15,6 +15,12 @@ import { defineConfig, loadEnv, type Plugin } from 'vite'
 const rootDir = path.dirname(fileURLToPath(import.meta.url))
 const compatRoot = path.resolve(rootDir, 'compat/next')
 
+export const studioRouterGeneratorConfig = {
+  // Route tests are colocated under routes/, but are not route modules. Keep
+  // them out of every startup crawl and generation pass.
+  routeFileIgnorePattern: '\\.(test|spec)\\.[cm]?[jt]sx?$',
+} as const
+
 // Absolute dir of lodash-es, for the SSR-only lodash alias below. Resolved
 // here (not left as a bare 'lodash-es' replacement) because rollup-alias
 // rewrites the id but resolution still runs from the ORIGINAL importer —
@@ -837,9 +843,12 @@ export default defineConfig(({ command, mode }) => {
         spa: {
           enabled: true,
         },
-        // Set `configuredBasepath` so `deriveRouterBasepath` short-circuits
-        // its slash-stripping branch. See the basePath comment above.
-        ...(basePath && { router: { basepath: basePath } }),
+        router: {
+          ...studioRouterGeneratorConfig,
+          // Set `configuredBasepath` so `deriveRouterBasepath` short-circuits
+          // its slash-stripping branch. See the basePath comment above.
+          ...(basePath && { basepath: basePath }),
+        },
       }),
       viteReact(),
       // Skew protection parts 2 + 3. Registered after tanstackStart() so the

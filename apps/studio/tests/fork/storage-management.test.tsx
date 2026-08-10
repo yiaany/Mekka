@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { test } from 'vitest'
 
 import {
   StorageObjectRow,
@@ -47,3 +48,5 @@ const unsupportedHtml = renderToStaticMarkup(<StorageUnsupportedControlsNotice /
 assert.match(unsupportedHtml, /Image transforms/)
 assert.match(unsupportedHtml, /advanced CDN settings/)
 assert.match(unsupportedHtml, /not supported/)
+
+test('Storage management assertions completed', () => {})

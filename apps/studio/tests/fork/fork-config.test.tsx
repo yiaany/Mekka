@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { IS_PLATFORM as IS_COMMON_PLATFORM } from "common";
+import { test } from "vitest";
 
 import {
   generateOtherRoutes,
@@ -168,3 +169,5 @@ assert.throws(
 );
 
 console.log("Mekka Studio fork assertions passed");
+
+test("fork configuration assertions completed", () => {});

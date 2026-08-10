@@ -1,6 +1,6 @@
 {
   "name": "mekka",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Run the agent-native backend on Bun and SQLite with one command.",
   "license": "LicenseRef-Mekka-Business-2.0",
   "type": "module",
@@ -9,6 +9,7 @@
   },
   "files": [
     "bin/mekka.js",
+    "bin/mcp-stdio.js",
     "README.md"
   ],
   "scripts": {
@@ -17,6 +18,11 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "tar": "7.5.22",
+    "zod": "3.25.76"
   },
   "repository": {
     "type": "git",

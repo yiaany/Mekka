@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { test } from 'vitest'
 
 import { toWebHandler } from '@/compat/next/api'
 import { handleStorageAdminWebRequest } from '@/lib/storage-admin-web-proxy'
@@ -106,3 +107,5 @@ try {
   if (originalBackendUrl === undefined) delete process.env.STUDIO_BACKEND_API_URL
   else process.env.STUDIO_BACKEND_API_URL = originalBackendUrl
 }
+
+test('Storage proxy assertions completed', () => {})

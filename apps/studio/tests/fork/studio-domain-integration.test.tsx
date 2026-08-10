@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { StudioDomainError } from '@mekka/studio-domain-sdk'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { test } from 'vitest'
 
 import { StudioDomainEntityListItem } from '../../components/layouts/TableEditorLayout/StudioDomainEntityListItem'
 import { StudioDomainErrorPanel } from '../../components/layouts/TableEditorLayout/StudioDomainErrorPanel'
@@ -41,7 +42,7 @@ assert.doesNotMatch(tableHtml, /columnCount|primaryKey/)
 
 for (const [code, status, message] of [
   ['auth', 401, 'session has expired'],
-  ['conflict', 409, 'schema changed'],
+  ['conflict', 409, 'resource changed'],
   ['infrastructure', 503, 'temporarily unavailable'],
 ] as const) {
   const errorHtml = renderToStaticMarkup(
@@ -51,3 +52,5 @@ for (const [code, status, message] of [
   assert.ok(errorHtml.includes(message))
   assert.ok(errorHtml.includes(correlationId))
 }
+
+test('Studio domain integration assertions completed', () => {})

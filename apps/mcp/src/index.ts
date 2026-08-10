@@ -1207,7 +1207,16 @@ async function safeMcpOperation<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+class CrossPreviewProposalError extends ProtocolError {
+  constructor() {
+    super("forbidden");
+    this.message =
+      "This proposal belongs to another preview. Use the original Agent Access token or start a new proposal.";
+  }
+}
+
 function sanitizeMcpError(error: unknown): ProtocolError {
+  if (error instanceof CrossPreviewProposalError) return new CrossPreviewProposalError();
   return error instanceof ProtocolError
     ? new ProtocolError(error.code)
     : new ProtocolError("infrastructure");
@@ -1235,8 +1244,8 @@ function requireProposal(
     .get(proposalId);
   if (!row) throw new ProtocolError("conflict");
   const proposal = proposalFromRow(row);
-  if (!sameTenant(proposal.tenant, context.tenant) || proposal.actorId !== context.actor.id)
-    throw new ProtocolError("forbidden");
+  if (!sameTenant(proposal.tenant, context.tenant)) throw new CrossPreviewProposalError();
+  if (proposal.actorId !== context.actor.id) throw new ProtocolError("forbidden");
   return proposal;
 }
 

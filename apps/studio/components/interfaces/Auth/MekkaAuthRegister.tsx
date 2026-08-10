@@ -9,6 +9,7 @@ const organizationId = process.env.NEXT_PUBLIC_STUDIO_ORGANIZATION_ID ?? 'org-lo
 const environmentId = process.env.NEXT_PUBLIC_STUDIO_ENVIRONMENT_ID ?? 'env-local'
 const branchId = process.env.NEXT_PUBLIC_STUDIO_BRANCH_ID ?? 'branch-main'
 const generation = process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? '1'
+const applicationAccessTokenStoragePrefix = 'mekka:application-access-token'
 
 export function MekkaAuthRegister() {
   const { ref = 'local' } = useParams()
@@ -23,9 +24,19 @@ export function MekkaAuthRegister() {
   const [applicationAccessToken, setApplicationAccessToken] = useState<string | null>(null)
   const [mcpToken, setMcpToken] = useState<string | null>(null)
   const [mcpTokenExpiresAt, setMcpTokenExpiresAt] = useState<number | null>(null)
+  const [mcpWriteBranchId, setMcpWriteBranchId] = useState<string | null>(null)
   const [allowMcpWrite, setAllowMcpWrite] = useState(false)
   const [approvals, setApprovals] = useState<McpApproval[]>([])
   const authBase = `/auth/${organizationId}/${ref}/${environmentId}/${branchId}/${generation}`
+  const applicationAccessTokenStorageKey = [
+    applicationAccessTokenStoragePrefix,
+    organizationId,
+    ref,
+    environmentId,
+    branchId,
+    generation,
+  ].join(':')
+  const blockingApproval = approvals.find(isUnconsumedWriteApproval)
 
   const run = async (operation: () => Promise<void>) => {
     setIsPending(true)
@@ -50,20 +61,11 @@ export function MekkaAuthRegister() {
     return payload
   }
 
-  useEffect(() => {
-    if (mcpTokenExpiresAt === null) return
-    const timeout = window.setTimeout(
-      () => {
-        setMcpToken(null)
-        setMcpTokenExpiresAt(null)
-      },
-      Math.max(0, mcpTokenExpiresAt - Date.now())
-    )
-    return () => window.clearTimeout(timeout)
-  }, [mcpTokenExpiresAt])
-
   const issueAgentToken = async () => {
     if (applicationAccessToken === null) throw new Error('Sign in before issuing Agent Access.')
+    if (allowMcpWrite && blockingApproval !== undefined) {
+      throw new Error('Resolve or consume the existing write approval before issuing another write token.')
+    }
     const response = await fetch(`/api/platform/project-auth/${ref}/agent-token`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -73,11 +75,19 @@ export function MekkaAuthRegister() {
       }),
     })
     const payload: unknown = await response.json().catch(() => ({}))
-    if (!response.ok || !hasAgentToken(payload)) {
-      throw new Error('Temporary Agent Access token was not issued.')
+    if (response.status === 401 || response.status === 403) {
+      clearApplicationSession(applicationAccessTokenStorageKey)
+      setApplicationAccessToken(null)
+      setIsSignedIn(false)
+      setMcpToken(null)
+      setMcpTokenExpiresAt(null)
+      setMcpWriteBranchId(null)
+      throw new Error('Your application session is no longer valid. Sign in again.')
     }
+    if (!response.ok || !hasAgentToken(payload)) throw new Error(readAgentTokenError(payload))
     setMcpToken(payload.token)
     setMcpTokenExpiresAt(payload.expiresAt)
+    setMcpWriteBranchId(payload.mode === 'write' ? payload.tenant.branchId : null)
     setMessage(
       payload.mode === 'write'
         ? 'Read-write Agent Access issued for an isolated preview branch.'
@@ -86,16 +96,52 @@ export function MekkaAuthRegister() {
   }
 
   const refreshApprovals = async () => {
-    const response = await fetch('/api/platform/mcp/approvals', { cache: 'no-store' })
+    if (applicationAccessToken === null) throw new Error('Sign in before reviewing approvals.')
+    const response = await fetch('/api/platform/mcp/approvals', {
+      cache: 'no-store',
+      headers: { 'x-mekka-application-authorization': `Bearer ${applicationAccessToken}` },
+    })
     const payload: unknown = await response.json().catch(() => ({}))
     if (!response.ok || !hasApprovals(payload)) throw new Error('MCP approvals are unavailable.')
     setApprovals(payload.approvals)
   }
 
+  useEffect(() => {
+    const storedToken = readFreshApplicationAccessToken(applicationAccessTokenStorageKey)
+    setApplicationAccessToken(storedToken)
+    setIsSignedIn(storedToken !== null)
+    setMcpToken(null)
+    setMcpTokenExpiresAt(null)
+    setMcpWriteBranchId(null)
+    setApprovals([])
+  }, [applicationAccessTokenStorageKey])
+
+  useEffect(() => {
+    if (!isSignedIn) return
+    void refreshApprovals().catch(() => setMessage('MCP approvals are unavailable.'))
+  }, [isSignedIn, ref])
+
+  useEffect(() => {
+    if (mcpTokenExpiresAt === null) return
+    const timeout = window.setTimeout(
+      () => {
+        setMcpToken(null)
+        setMcpTokenExpiresAt(null)
+        setMcpWriteBranchId(null)
+      },
+      Math.max(0, mcpTokenExpiresAt - Date.now())
+    )
+    return () => window.clearTimeout(timeout)
+  }, [mcpTokenExpiresAt])
+
   const decideApproval = async (approvalId: string, state: 'approved' | 'rejected') => {
+    if (applicationAccessToken === null) throw new Error('Sign in before deciding approvals.')
     const response = await fetch(`/api/platform/mcp/approvals/${encodeURIComponent(approvalId)}`, {
       method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'x-mekka-application-authorization': `Bearer ${applicationAccessToken}`,
+        'content-type': 'application/json',
+      },
       body: JSON.stringify({ state }),
     })
     const payload: unknown = await response.json().catch(() => ({}))
@@ -140,7 +186,12 @@ export function MekkaAuthRegister() {
               </span>
             </label>
             <div className="flex flex-wrap gap-2">
-              <Button size="tiny" variant={allowMcpWrite ? 'warning' : 'default'} onClick={() => void run(issueAgentToken)}>
+              <Button
+                size="tiny"
+                variant={allowMcpWrite ? 'warning' : 'default'}
+                disabled={isPending || (allowMcpWrite && blockingApproval !== undefined)}
+                onClick={() => void run(issueAgentToken)}
+              >
                 Generate {allowMcpWrite ? 'read-write' : 'read-only'} token
               </Button>
               {mcpToken !== null && (
@@ -153,6 +204,23 @@ export function MekkaAuthRegister() {
               </Button>
             </div>
           </div>
+        </Admonition>
+      )}
+
+      {isSignedIn && blockingApproval !== undefined && (
+        <Admonition
+          type="warning"
+          title="An isolated preview already has an active write grant"
+          description="Another write token would create a different isolated preview. Resolve or consume the existing approval before issuing a new write token. Read-only Agent Access remains available."
+        >
+          <p className="text-sm">
+            Approval preview: <code>{blockingApproval.tenant.branchId}</code>.{' '}
+            {mcpWriteBranchId === null
+              ? 'The current write token preview is not known in this page session.'
+              : mcpWriteBranchId === blockingApproval.tenant.branchId
+                ? 'This approval belongs to the current write token preview.'
+                : 'This approval belongs to a different preview than the current write token.'}
+          </p>
         </Admonition>
       )}
 
@@ -172,6 +240,10 @@ export function MekkaAuthRegister() {
                   <p className="text-sm">
                     {approval.destructive ? 'Destructive schema change' : 'Schema change'} ·{' '}
                     {approval.state}
+                  </p>
+                  <p className="text-sm text-foreground-light">
+                    Preview branch <code>{approval.tenant.branchId}</code> · Proposal{' '}
+                    <code>{approval.proposalId}</code>
                   </p>
                 </div>
                 {approval.state === 'pending' && (
@@ -286,10 +358,12 @@ export function MekkaAuthRegister() {
               void run(async () => {
                 const body = await post('/sign-in/email', { email, password })
                 if (!hasTokens(body)) throw new Error('Auth tokens were not returned.')
+                persistApplicationAccessToken(applicationAccessTokenStorageKey, body.accessToken)
                 setIsSignedIn(true)
                 setApplicationAccessToken(body.accessToken)
                 setMcpToken(null)
                 setMcpTokenExpiresAt(null)
+                setMcpWriteBranchId(null)
                 setMessage('Signed in successfully.')
                 await queryClient.invalidateQueries({ queryKey: ['mekka-auth', ref, 'users'] })
               })
@@ -367,9 +441,12 @@ function hasTokens(payload: unknown): payload is { accessToken: string; refreshT
   )
 }
 
-function hasAgentToken(
-  payload: unknown
-): payload is { token: string; expiresAt: number; mode: 'read' | 'write' } {
+function hasAgentToken(payload: unknown): payload is {
+  token: string
+  expiresAt: number
+  mode: 'read' | 'write'
+  tenant: { branchId: string }
+} {
   return (
     typeof payload === 'object' &&
     payload !== null &&
@@ -378,7 +455,12 @@ function hasAgentToken(
     'expiresAt' in payload &&
     typeof payload.expiresAt === 'number' &&
     'mode' in payload &&
-    (payload.mode === 'read' || payload.mode === 'write')
+    (payload.mode === 'read' || payload.mode === 'write') &&
+    'tenant' in payload &&
+    typeof payload.tenant === 'object' &&
+    payload.tenant !== null &&
+    'branchId' in payload.tenant &&
+    typeof payload.tenant.branchId === 'string'
   )
 }
 
@@ -391,12 +473,33 @@ function readExecutionToken(payload: unknown): string | null {
     : null
 }
 
+function readAgentTokenError(payload: unknown): string {
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'message' in payload &&
+    typeof payload.message === 'string'
+  ) {
+    return payload.message
+  }
+  return 'Temporary Agent Access token was not issued.'
+}
+
 type McpApproval = Readonly<{
   approvalId: string
   state: 'pending' | 'approved' | 'rejected'
   expiresAt: number
   sql: string
   destructive: boolean
+  tenant: Readonly<{
+    organizationId: string
+    projectId: string
+    environmentId: string
+    branchId: string
+    generation: number
+  }>
+  proposalId: string
+  executionConsumedAt: number | null
 }>
 
 function hasApprovals(payload: unknown): payload is { approvals: McpApproval[] } {
@@ -420,7 +523,85 @@ function hasApprovals(payload: unknown): payload is { approvals: McpApproval[] }
         'sql' in approval &&
         typeof approval.sql === 'string' &&
         'destructive' in approval &&
-        typeof approval.destructive === 'boolean'
+        typeof approval.destructive === 'boolean' &&
+        'tenant' in approval &&
+        typeof approval.tenant === 'object' &&
+        approval.tenant !== null &&
+        'organizationId' in approval.tenant &&
+        typeof approval.tenant.organizationId === 'string' &&
+        'projectId' in approval.tenant &&
+        typeof approval.tenant.projectId === 'string' &&
+        'environmentId' in approval.tenant &&
+        typeof approval.tenant.environmentId === 'string' &&
+        'branchId' in approval.tenant &&
+        typeof approval.tenant.branchId === 'string' &&
+        'generation' in approval.tenant &&
+        typeof approval.tenant.generation === 'number' &&
+        'proposalId' in approval &&
+        typeof approval.proposalId === 'string' &&
+        'executionConsumedAt' in approval &&
+        (approval.executionConsumedAt === null || typeof approval.executionConsumedAt === 'number')
     )
   )
+}
+
+function isUnconsumedWriteApproval(approval: McpApproval): boolean {
+  return (
+    (approval.state === 'pending' || approval.state === 'approved') &&
+    approval.executionConsumedAt === null
+  )
+}
+
+function readFreshApplicationAccessToken(storageKey: string): string | null {
+  let token: string | null
+  try {
+    token = window.sessionStorage.getItem(storageKey)
+  } catch {
+    return null
+  }
+  if (token === null) return null
+
+  const expiresAt = readJwtExpiresAt(token)
+  if (expiresAt === null || expiresAt <= Date.now()) {
+    clearApplicationSession(storageKey)
+    return null
+  }
+  return token
+}
+
+function persistApplicationAccessToken(storageKey: string, token: string): void {
+  try {
+    window.sessionStorage.setItem(storageKey, token)
+  } catch {
+    // Browser storage can be unavailable; the in-memory session still works.
+  }
+}
+
+function clearApplicationSession(storageKey: string): void {
+  try {
+    window.sessionStorage.removeItem(storageKey)
+  } catch {
+    // Treat inaccessible storage as already cleared.
+  }
+}
+
+function readJwtExpiresAt(token: string): number | null {
+  const parts = token.split('.')
+  if (parts.length !== 3 || parts[1] === undefined) return null
+  try {
+    const encoded = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const payload: unknown = JSON.parse(window.atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=')))
+    if (
+      typeof payload !== 'object' ||
+      payload === null ||
+      !('exp' in payload) ||
+      typeof payload.exp !== 'number' ||
+      !Number.isFinite(payload.exp)
+    ) {
+      return null
+    }
+    return payload.exp * 1_000
+  } catch {
+    return null
+  }
 }

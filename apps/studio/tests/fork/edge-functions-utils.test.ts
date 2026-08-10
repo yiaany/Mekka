@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { test } from 'vitest'
 
 import { formatFunctionBodyToFiles } from '../../components/interfaces/EdgeFunctions/EdgeFunctions.utils'
 
@@ -17,3 +18,5 @@ assert.deepEqual(
   files.map(({ name }) => name),
   ['index.ts', 'lib/message.ts']
 )
+
+test('Edge Functions utility assertions completed', () => {})

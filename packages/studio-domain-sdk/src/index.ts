@@ -13,6 +13,9 @@ import {
 export * from "./storage";
 
 const maxResponseBytes = 2 * 1024 * 1024;
+const defaultMutationTimeoutMs = 10_000;
+
+export type StudioMutationOptions = Readonly<{ signal?: AbortSignal }>;
 
 export type StudioCredential =
   | Readonly<{ kind: "session"; token: string }>
@@ -92,14 +95,17 @@ export type StudioDomainClient = Readonly<{
       expectedSchemaHash: string;
     }>,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<StudioSchemaMutation<StudioTableDefinition>>;
   renameTable(
     input: Readonly<{ table: string; name: string; expectedSchemaHash: string }>,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<StudioSchemaMutation<StudioTableDefinition>>;
   deleteTable(
     input: Readonly<{ table: string; expectedSchemaHash: string }>,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<StudioSchemaMutation<StudioTableDefinition>>;
   addColumn(
     input: Readonly<{
@@ -108,10 +114,12 @@ export type StudioDomainClient = Readonly<{
       expectedSchemaHash: string;
     }>,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<StudioSchemaMutation<StudioTableDefinition>>;
   renameColumn(
     input: Readonly<{ table: string; column: string; name: string; expectedSchemaHash: string }>,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<StudioSchemaMutation<StudioTableDefinition>>;
   listRows(
     table: string,
@@ -126,17 +134,20 @@ export type StudioDomainClient = Readonly<{
     table: string,
     values: StudioRow,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<Readonly<{ changes: number }>>;
   updateRow(
     table: string,
     key: Readonly<{ column: string; value: StudioRowValue }>,
     values: StudioRow,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<Readonly<{ changes: number }>>;
   deleteRow(
     table: string,
     key: Readonly<{ column: string; value: string }>,
     idempotencyKey: string,
+    options?: StudioMutationOptions,
   ): Promise<Readonly<{ changes: number }>>;
   runSql(
     input: Readonly<{ sql: string; signal?: AbortSignal }>,
@@ -258,6 +269,7 @@ export class StudioDomainError extends Error {
     readonly status: number,
     readonly correlationId: CorrelationId,
     message = errorMessage(code),
+    readonly outcomeAmbiguous = false,
   ) {
     super(message);
     this.name = "StudioDomainError";
@@ -268,17 +280,23 @@ export function isStudioDomainError(error: unknown): error is StudioDomainError 
   return error instanceof StudioDomainError;
 }
 
+export function isStudioMutationOutcomeAmbiguous(error: unknown): boolean {
+  return error instanceof StudioDomainError && error.outcomeAmbiguous;
+}
+
 export function createStudioDomainClient(
   input: Readonly<{
     baseUrl: string;
     tenant: TenantIdentity | TenantIdentityInput;
     getCredential?: () => Promise<StudioCredential | undefined> | StudioCredential | undefined;
     fetch?: typeof globalThis.fetch;
+    mutationTimeoutMs?: number;
   }>,
 ): StudioDomainClient {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const tenant = parseTenantIdentity(input.tenant);
   const fetcher = input.fetch ?? globalThis.fetch;
+  const mutationTimeoutMs = readMutationTimeout(input.mutationTimeoutMs);
 
   return Object.freeze({
     async listTables(options = {}) {
@@ -322,7 +340,7 @@ export function createStudioDomainClient(
         ),
       );
     },
-    async createTable(payload, idempotencyKey) {
+    async createTable(payload, idempotencyKey, options = {}) {
       validateCreateTable(payload);
       return parseMutation(
         await mutationRequest(
@@ -334,10 +352,12 @@ export function createStudioDomainClient(
           "POST",
           payload,
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
-    async renameTable(payload, idempotencyKey) {
+    async renameTable(payload, idempotencyKey, options = {}) {
       assertIdentifier(payload.table);
       assertCreatableIdentifier(payload.name);
       assertSchemaHash(payload.expectedSchemaHash);
@@ -351,10 +371,12 @@ export function createStudioDomainClient(
           "PATCH",
           { name: payload.name, expectedSchemaHash: payload.expectedSchemaHash },
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
-    async deleteTable(payload, idempotencyKey) {
+    async deleteTable(payload, idempotencyKey, options = {}) {
       assertIdentifier(payload.table);
       assertSchemaHash(payload.expectedSchemaHash);
       return parseMutation(
@@ -367,10 +389,12 @@ export function createStudioDomainClient(
           "DELETE",
           undefined,
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
-    async addColumn(payload, idempotencyKey) {
+    async addColumn(payload, idempotencyKey, options = {}) {
       assertIdentifier(payload.table);
       validateColumn(payload.column, false);
       assertSchemaHash(payload.expectedSchemaHash);
@@ -388,10 +412,12 @@ export function createStudioDomainClient(
             expectedSchemaHash: payload.expectedSchemaHash,
           },
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
-    async renameColumn(payload, idempotencyKey) {
+    async renameColumn(payload, idempotencyKey, options = {}) {
       assertIdentifier(payload.table);
       assertIdentifier(payload.column);
       assertCreatableIdentifier(payload.name);
@@ -406,6 +432,8 @@ export function createStudioDomainClient(
           "PATCH",
           { name: payload.name, expectedSchemaHash: payload.expectedSchemaHash },
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
@@ -433,7 +461,7 @@ export function createStudioDomainClient(
         ),
       );
     },
-    async createRow(table, values, idempotencyKey) {
+    async createRow(table, values, idempotencyKey, options = {}) {
       assertIdentifier(table);
       validateRow(values, false);
       return parseChanges(
@@ -446,10 +474,12 @@ export function createStudioDomainClient(
           "POST",
           { values },
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
-    async updateRow(table, key, values, idempotencyKey) {
+    async updateRow(table, key, values, idempotencyKey, options = {}) {
       assertIdentifier(table);
       assertIdentifier(key.column);
       validateRowValue(key.value);
@@ -464,10 +494,12 @@ export function createStudioDomainClient(
           "PATCH",
           { key, values },
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
-    async deleteRow(table, key, idempotencyKey) {
+    async deleteRow(table, key, idempotencyKey, options = {}) {
       assertIdentifier(table);
       assertIdentifier(key.column);
       if (key.value.length > 16_384)
@@ -482,6 +514,8 @@ export function createStudioDomainClient(
           "DELETE",
           undefined,
           idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
         ),
       );
     },
@@ -498,6 +532,7 @@ export function createStudioDomainClient(
           { sql: payload.sql },
           idempotencyKey,
           payload.signal,
+          mutationTimeoutMs,
         ),
       );
     },
@@ -689,21 +724,63 @@ async function mutationRequest(
   payload: unknown,
   idempotencyKey: string,
   signal?: AbortSignal,
+  timeoutMs = defaultMutationTimeoutMs,
 ): Promise<unknown> {
   if (!/^[A-Za-z0-9_-]{16,128}$/.test(idempotencyKey)) {
     throw new StudioDomainError("validation", 400, createCorrelationId());
   }
-  return requestWithMethod(
-    fetcher,
-    baseUrl,
-    tenant,
-    getCredential,
-    path,
-    method,
-    payload,
-    signal,
-    idempotencyKey,
-  );
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abortFromCaller();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  let rejectOnAbort: ((reason?: unknown) => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectOnAbort = reject;
+  });
+  const rejectAborted = () =>
+    rejectOnAbort?.(
+      controller.signal.reason ?? new DOMException("Studio mutation cancelled", "AbortError"),
+    );
+  if (controller.signal.aborted) rejectAborted();
+  else controller.signal.addEventListener("abort", rejectAborted, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException("Studio mutation timed out", "TimeoutError"));
+  }, timeoutMs);
+  try {
+    return await Promise.race([
+      requestWithMethod(
+        fetcher,
+        baseUrl,
+        tenant,
+        getCredential,
+        path,
+        method,
+        payload,
+        controller.signal,
+        idempotencyKey,
+        undefined,
+        true,
+      ),
+      aborted,
+    ]);
+  } catch (error) {
+    if (timedOut) {
+      throw new StudioDomainError(
+        "infrastructure",
+        504,
+        createCorrelationId(),
+        "The mutation timed out. Its outcome is not yet confirmed.",
+        true,
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
+    controller.signal.removeEventListener("abort", rejectAborted);
+  }
 }
 
 async function requestWithMethod(
@@ -719,6 +796,7 @@ async function requestWithMethod(
   signal: AbortSignal | undefined,
   idempotencyKey?: string,
   additionalHeaders?: Readonly<Record<string, string>>,
+  transportFailureIsAmbiguous = false,
 ): Promise<unknown> {
   const serialized = serializeTenantIdentity(tenant);
   const correlationId = createCorrelationId();
@@ -751,11 +829,44 @@ async function requestWithMethod(
     });
   } catch (error) {
     if (signal?.aborted === true || isAbortError(error)) throw error;
-    throw new StudioDomainError("infrastructure", 503, correlationId);
+    throw new StudioDomainError(
+      "infrastructure",
+      503,
+      correlationId,
+      errorMessage("infrastructure"),
+      transportFailureIsAmbiguous,
+    );
   }
 
-  const body = await readJson(response, correlationId);
-  if (!response.ok) throw parseError(body, response, correlationId);
+  let body: unknown;
+  try {
+    body = await readJson(response, correlationId);
+  } catch (error) {
+    if (signal?.aborted === true || isAbortError(error)) throw error;
+    if (transportFailureIsAmbiguous && (response.ok || [502, 503, 504].includes(response.status))) {
+      throw new StudioDomainError(
+        "infrastructure",
+        response.status || 503,
+        correlationId,
+        "The mutation response was invalid. Its outcome is not yet confirmed.",
+        true,
+      );
+    }
+    throw error;
+  }
+  if (!response.ok) {
+    const error = parseError(body, response, correlationId);
+    if (transportFailureIsAmbiguous && [502, 503, 504].includes(response.status)) {
+      throw new StudioDomainError(
+        error.code,
+        error.status,
+        error.correlationId,
+        "The mutation outcome is not yet confirmed.",
+        true,
+      );
+    }
+    throw error;
+  }
   return body;
 }
 
@@ -1073,7 +1184,8 @@ async function readJson(response: Response, correlationId: CorrelationId): Promi
     const body = await response.text();
     if (new TextEncoder().encode(body).byteLength > maxResponseBytes) throw malformedResponse();
     return JSON.parse(body) as unknown;
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) throw error;
     throw new StudioDomainError("infrastructure", response.status || 503, correlationId);
   }
 }
@@ -1101,6 +1213,14 @@ function boundedInteger(
     throw new StudioDomainError("validation", 400, createCorrelationId());
   }
   return resolved;
+}
+
+function readMutationTimeout(value: number | undefined): number {
+  const timeout = value ?? defaultMutationTimeoutMs;
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 120_000) {
+    throw new Error("Studio Domain SDK mutationTimeoutMs must be between 1 and 120000.");
+  }
+  return timeout;
 }
 
 function readRecord(value: unknown): Record<string, unknown> {

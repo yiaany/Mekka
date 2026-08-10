@@ -6,7 +6,7 @@ import {
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "common";
 import { useRouter } from "next/router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Checkbox,
@@ -29,6 +29,8 @@ const columnTypes: readonly StudioColumnType[] = [
   "BLOB",
   "NUMERIC",
 ];
+const reconciliationTimeoutMs = 5_000;
+type Reconciliation = "applied" | "not-applied" | "unknown";
 
 export function SqliteTableEditor({ tableName }: { tableName?: string }) {
   const { ref: projectRef } = useParams();
@@ -48,15 +50,25 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
   const [migrationSql, setMigrationSql] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const mounted = useRef(true);
+  const mutationController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      mutationController.current?.abort();
+    };
+  }, []);
 
   const schema = useQuery({
     queryKey: ["sqlite-schema-health", projectRef],
-    queryFn: () => client!.getSchemaHealth(),
+    queryFn: ({ signal }) => client!.getSchemaHealth({ signal }),
     enabled: client !== undefined,
   });
   const table = useQuery({
     queryKey: ["sqlite-table", projectRef, tableName],
-    queryFn: () => client!.getTable(tableName!),
+    queryFn: ({ signal }) => client!.getTable(tableName!, { signal }),
     enabled: client !== undefined && tableName !== undefined,
   });
 
@@ -93,24 +105,40 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
     renameValue.toLowerCase() !== "new";
 
   const runMutation = async <T extends { migrationSql: string }>(
-    operation: () => Promise<T>,
+    operation: (signal: AbortSignal) => Promise<T>,
+    reconcile: (signal: AbortSignal) => Promise<Reconciliation>,
   ) => {
+    const controller = new AbortController();
+    mutationController.current = controller;
     setIsSubmitting(true);
     setErrorMessage(null);
     try {
-      const result = await operation();
+      const result = await operation(controller.signal);
+      if (!mounted.current) return;
       setMigrationSql(result.migrationSql);
-      await Promise.all([
+      setIsSubmitting(false);
+      mutationController.current = null;
+      void Promise.all([
         queryClient.invalidateQueries({
           queryKey: ["sqlite-schema-health", projectRef],
         }),
         queryClient.invalidateQueries({
           queryKey: ["projects", projectRef, "entity-types"],
         }),
-      ]);
+      ]).catch(() => undefined);
       return result;
     } catch (error) {
-      if (isStudioDomainError(error) && error.code === "conflict") {
+      if (controller.signal.aborted || !mounted.current) return;
+      if (isStudioDomainError(error) && error.outcomeAmbiguous) {
+        const result = await reconcileWithTimeout(controller.signal, reconcile);
+        if (!mounted.current) return;
+        setErrorMessage(reconciliationMessage("schema change", result));
+        void Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["sqlite-schema-health", projectRef] }),
+          queryClient.invalidateQueries({ queryKey: ["sqlite-table", projectRef] }),
+          queryClient.invalidateQueries({ queryKey: ["projects", projectRef, "entity-types"] }),
+        ]).catch(() => undefined);
+      } else if (isStudioDomainError(error) && error.code === "conflict") {
         setErrorMessage(
           "The schema changed. Reload it before applying another migration.",
         );
@@ -122,8 +150,15 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
         );
       }
     } finally {
-      setIsSubmitting(false);
+      if (mounted.current) setIsSubmitting(false);
+      if (mutationController.current === controller)
+        mutationController.current = null;
     }
+  };
+
+  const tableExists = async (name: string, signal: AbortSignal) => {
+    const result = await client!.listTables({ search: name, limit: 200, signal });
+    return result.tables.some((candidate) => candidate.name === name);
   };
 
   const reloadSchema = () =>
@@ -211,7 +246,7 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
             disabled={!canCreateTable}
             onClick={() =>
               void (async () => {
-                const result = await runMutation(() =>
+                const result = await runMutation((signal) =>
                   client!.createTable(
                     {
                       name: newTableName,
@@ -219,7 +254,10 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
                       expectedSchemaHash: schemaHash!,
                     },
                     idempotencyKey(),
+                    { signal },
                   ),
+                  async (signal) =>
+                    (await tableExists(newTableName, signal)) ? "applied" : "not-applied",
                 );
                 if (result)
                   await router.push(
@@ -261,7 +299,7 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
               event.preventDefault();
               if (schemaHash && canAddColumn)
                 void (async () => {
-                  const result = await runMutation(() =>
+                  const result = await runMutation((signal) =>
                     client!.addColumn(
                       {
                         table: tableName,
@@ -273,11 +311,18 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
                         expectedSchemaHash: schemaHash,
                       },
                       idempotencyKey(),
+                      { signal },
                     ),
+                    async (signal) => {
+                      const definition = await client!.getTable(tableName, { signal });
+                      return definition.columns.some((column) => column.name === newColumnName)
+                        ? "applied"
+                        : "not-applied";
+                    },
                   );
                   if (result) {
                     setNewColumnName("");
-                    await queryClient.invalidateQueries({
+                    void queryClient.invalidateQueries({
                       queryKey: ["sqlite-table", projectRef, tableName],
                     });
                   }
@@ -309,7 +354,7 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
               event.preventDefault();
               if (schemaHash && canRenameTable)
                 void (async () => {
-                  const result = await runMutation(() =>
+                  const result = await runMutation((signal) =>
                     client!.renameTable(
                       {
                         table: tableName,
@@ -317,10 +362,18 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
                         expectedSchemaHash: schemaHash,
                       },
                       idempotencyKey(),
+                      { signal },
                     ),
+                    async (signal) => {
+                      const [oldExists, newExists] = await Promise.all([
+                        tableExists(tableName, signal),
+                        tableExists(renameValue, signal),
+                      ]);
+                      return newExists && !oldExists ? "applied" : "not-applied";
+                    },
                   );
                   if (result) {
-                    await queryClient.invalidateQueries({
+                    void queryClient.invalidateQueries({
                       queryKey: ["sqlite-table", projectRef, tableName],
                     });
                     await router.replace(
@@ -370,11 +423,14 @@ export function SqliteTableEditor({ tableName }: { tableName?: string }) {
               }
               onClick={() =>
                 void (async () => {
-                  const result = await runMutation(() =>
+                  const result = await runMutation((signal) =>
                     client!.deleteTable(
                       { table: tableName, expectedSchemaHash: schemaHash! },
                       idempotencyKey(),
+                      { signal },
                     ),
+                    async (signal) =>
+                      (await tableExists(tableName, signal)) ? "not-applied" : "applied",
                   );
                   if (result)
                     await router.push(`/project/${projectRef}/editor`);
@@ -545,4 +601,30 @@ function quote(value: string): string {
 }
 function idempotencyKey(): string {
   return `studio-schema-${crypto.randomUUID()}`;
+}
+
+async function reconcileWithTimeout(
+  parentSignal: AbortSignal,
+  reconcile: (signal: AbortSignal) => Promise<Reconciliation>,
+): Promise<Reconciliation> {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parentSignal.reason);
+  parentSignal.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(() => controller.abort(), reconciliationTimeoutMs);
+  try {
+    return await reconcile(controller.signal);
+  } catch {
+    return "unknown";
+  } finally {
+    clearTimeout(timeout);
+    parentSignal.removeEventListener("abort", abort);
+  }
+}
+
+function reconciliationMessage(subject: string, result: Reconciliation): string {
+  if (result === "applied")
+    return `The ${subject} appears applied, but Studio did not receive its response. The latest data is being reloaded.`;
+  if (result === "not-applied")
+    return `The ${subject} does not appear applied. Review the reloaded data before trying again.`;
+  return `Studio could not confirm whether the ${subject} was applied. Review the data before trying again.`;
 }

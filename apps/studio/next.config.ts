@@ -55,6 +55,9 @@ const nextConfig = {
       ...getMaintenanceRedirects(maintenance),
     ]
   },
+  async rewrites() {
+    return [{ source: '/auth/:path*', destination: '/api/auth/:path*' }]
+  },
   async headers() {
     return [
       {

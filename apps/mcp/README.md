@@ -9,6 +9,7 @@
 - Mutation tools: `create_preview_branch`, `propose_migration`, `apply_to_preview`, `validate_changes`, `request_promotion`.
 - Local mode: call `startMcpStdio(context, dependencies)` after the local runtime has already authenticated and created a tenant-bound context.
 - Remote mode: route requests to `createMcpHttpResponse(request, dependencies)`. The MCP endpoint is stateless Streamable HTTP and supports JSON responses.
+- Stdio-only remote clients: launch `npx mekka mcp-stdio --url <endpoint> --token-env <name>`; the published CLI bridges stdio to this Streamable HTTP endpoint with the official SDK transports.
 
 ## Remote configuration
 

@@ -13,6 +13,7 @@ import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
 import { createStudioDomainClient } from "@mekka/studio-domain-sdk";
 import { createSqliteMetaApp, type SqliteMetaAuditEvent } from "../src/app";
 import { openLocalAuthRuntime } from "../src/auth";
+import { isInternalProxyRequest, readInternalProxyToken } from "../src/internal-proxy";
 
 const temporaryDirectories: string[] = [];
 const correlationId = "018e6c28-0000-7000-8000-000000000001";
@@ -825,6 +826,42 @@ test("auth session secret fallback is local-development only", async () => {
     if (secret === undefined) delete process.env.MEKKA_AUTH_SESSION_SECRET;
     else process.env.MEKKA_AUTH_SESSION_SECRET = secret;
   }
+});
+
+test("internal proxy tokens are explicit and exact when configured", () => {
+  const token = "sqlite-meta-internal-token-123456";
+  expect(readInternalProxyToken(undefined, false)).toBe("");
+  expect(() => readInternalProxyToken(undefined, true)).toThrow(
+    "at least 24 visible ASCII characters without whitespace",
+  );
+  expect(() => readInternalProxyToken("too-short", false)).toThrow(
+    "at least 24 visible ASCII characters without whitespace",
+  );
+  expect(() => readInternalProxyToken("long enough but contains spaces", false)).toThrow(
+    "at least 24 visible ASCII characters without whitespace",
+  );
+  expect(readInternalProxyToken(token, true)).toBe(token);
+  expect(isInternalProxyRequest(new Request("http://sqlite-meta.local"), token, true)).toBe(false);
+  expect(
+    isInternalProxyRequest(
+      new Request("http://sqlite-meta.local", {
+        headers: { "x-mekka-internal-proxy": token },
+      }),
+      token,
+      true,
+    ),
+  ).toBe(true);
+  expect(
+    isInternalProxyRequest(
+      new Request("http://sqlite-meta.local", {
+        headers: { "x-mekka-internal-proxy": `${token}-wrong` },
+      }),
+      token,
+      true,
+    ),
+  ).toBe(false);
+  expect(isInternalProxyRequest(new Request("http://sqlite-meta.local"), "", true)).toBe(true);
+  expect(isInternalProxyRequest(new Request("http://sqlite-meta.local"), "", false)).toBe(false);
 });
 
 function createContext(actions: readonly string[] = ["schema:manage"]): TenantContext {

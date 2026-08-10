@@ -391,6 +391,84 @@ describe("Studio Domain SDK", () => {
     ).rejects.toMatchObject({ code: "validation" });
   });
 
+  test("bounds structured mutations and marks timed out outcomes as ambiguous", async () => {
+    let captured: Request | undefined;
+    const client = createStudioDomainClient({
+      baseUrl: "http://studio-backend.local/sqlite-meta",
+      tenant,
+      mutationTimeoutMs: 10,
+      fetch: (input, init) => {
+        captured = new Request(input, init);
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      },
+    });
+
+    await expect(
+      client.createRow("notes", { id: 1 }, "create-row-timeout-001"),
+    ).rejects.toMatchObject({
+      code: "infrastructure",
+      status: 504,
+      outcomeAmbiguous: true,
+    });
+    expect(captured?.signal.aborted).toBe(true);
+    expect(captured?.headers.get("idempotency-key")).toBe("create-row-timeout-001");
+  });
+
+  test("bounds a mutation even if credential resolution hangs", async () => {
+    const client = createStudioDomainClient({
+      baseUrl: "http://studio-backend.local/sqlite-meta",
+      tenant,
+      mutationTimeoutMs: 10,
+      getCredential: () => new Promise(() => undefined),
+      fetch: async () => {
+        throw new Error("fetch must not be reached");
+      },
+    });
+
+    await expect(
+      client.deleteRow("notes", { column: "id", value: "1" }, "delete-row-timeout-001"),
+    ).rejects.toMatchObject({ status: 504, outcomeAmbiguous: true });
+  });
+
+  test("marks mutation network failures as ambiguous without retrying", async () => {
+    const requests: Request[] = [];
+    const client = createClient(async (input, init) => {
+      requests.push(new Request(input, init));
+      throw new TypeError("connection reset");
+    });
+
+    await expect(
+      client.updateRow(
+        "notes",
+        { column: "id", value: 1 },
+        { body: "updated" },
+        "update-row-network-001",
+      ),
+    ).rejects.toMatchObject({ outcomeAmbiguous: true });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.headers.get("idempotency-key")).toBe("update-row-network-001");
+  });
+
+  test.each([502, 503, 504])(
+    "marks mutation HTTP %d gateway outcomes as ambiguous",
+    async (status) => {
+      const client = createClient(async () =>
+        Response.json(
+          { error: { code: "infrastructure", correlationId } },
+          { status, headers: { [tenantHeaders.correlationId]: correlationId } },
+        ),
+      );
+
+      await expect(
+        client.createRow("notes", { id: 1 }, `create-row-gateway-${status}`),
+      ).rejects.toMatchObject({ status, outcomeAmbiguous: true });
+    },
+  );
+
   test("uses bounded row and SQL contracts without exposing provider fields", async () => {
     const requests: Request[] = [];
     const client = createClient(async (input, init) => {

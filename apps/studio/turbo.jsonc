@@ -54,6 +54,8 @@
         "PLATFORM_PG_META_URL",
         "STUDIO_PG_META_URL",
         "STUDIO_BACKEND_API_URL",
+        "MEKKA_INTERNAL_PROXY_TOKEN",
+        "MEKKA_LOCAL_DEV",
         "PG_META_CRYPTO_KEY",
         "PGRST_DB_SCHEMAS",
         "PGRST_DB_MAX_ROWS",

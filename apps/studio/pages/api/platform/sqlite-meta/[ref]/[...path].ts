@@ -72,11 +72,11 @@ export default async function handler(
     return res.status(403).json({ error: { message: "Tenant mismatch" } });
   }
 
-  const backendUrl = process.env.STUDIO_BACKEND_API_URL;
-  if (!backendUrl) {
+  const backendUrl = resolveBackendUrl(req);
+  if (backendUrl === null) {
     return res
       .status(503)
-      .json({ error: { message: "Studio backend is not configured" } });
+      .json({ error: { message: "Studio backend configuration is invalid" } });
   }
 
   const headers = new Headers({ accept: "application/json" });
@@ -117,7 +117,7 @@ export default async function handler(
   try {
     const requestUrl = new URL(req.url ?? "/", "http://studio.local");
     const response = await fetch(
-      `${backendUrl.replace(/\/$/, "")}/${path}${requestUrl.search}`,
+      `${backendUrl}/${path}${requestUrl.search}`,
       {
         method: req.method,
         headers,
@@ -182,4 +182,72 @@ function isLoopback(address: string | undefined): boolean {
     address === "::1" ||
     address === "::ffff:127.0.0.1"
   );
+}
+
+function resolveBackendUrl(req: NextApiRequest): string | null {
+  const value = process.env.STUDIO_BACKEND_API_URL?.trim();
+  if (!value) return null;
+  let backend: URL;
+  try {
+    backend = new URL(value);
+  } catch {
+    return null;
+  }
+  if (
+    !["http:", "https:"].includes(backend.protocol) ||
+    backend.username !== "" ||
+    backend.password !== "" ||
+    backend.search !== "" ||
+    backend.hash !== "" ||
+    /(?:^|\/)api\/platform\/sqlite-meta(?:\/|$)/.test(backend.pathname)
+  ) {
+    return null;
+  }
+
+  const requestUrl = new URL(req.url ?? "/", "http://studio.local");
+  const requestOrigins = [
+    { host: readHeader(req.headers.host), protocol: requestUrl.protocol },
+    {
+      host: readHeader(req.headers["x-forwarded-host"]),
+      protocol: readHeader(req.headers["x-forwarded-proto"]) ?? requestUrl.protocol,
+    },
+    { host: requestUrl.host, protocol: requestUrl.protocol },
+  ];
+  for (const origin of requestOrigins) {
+    if (origin.host === undefined) continue;
+    const [requestHostname, requestPort] = splitHost(origin.host);
+    if (
+      normalizeHostname(backend.hostname) === normalizeHostname(requestHostname) &&
+      (requestPort === "" ||
+        effectivePort(backend.protocol, backend.port) ===
+          effectivePort(origin.protocol, requestPort))
+    )
+      return null;
+  }
+  return backend.toString().replace(/\/$/, "");
+}
+
+function readHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function splitHost(value: string): [string, string] {
+  try {
+    const parsed = new URL(`http://${value}`);
+    return [parsed.hostname, parsed.port];
+  } catch {
+    return [value, ""];
+  }
+}
+
+function normalizeHostname(value: string): string {
+  const hostname = value.toLowerCase().replace(/^\[|\]$/g, "");
+  return ["localhost", "127.0.0.1", "::1"].includes(hostname)
+    ? "loopback"
+    : hostname;
+}
+
+function effectivePort(protocol: string, port: string): string {
+  if (port) return port;
+  return protocol.replace(/:$/, "") === "https" ? "443" : "80";
 }

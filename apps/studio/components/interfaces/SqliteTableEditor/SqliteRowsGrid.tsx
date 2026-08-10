@@ -1,12 +1,18 @@
-import { type StudioRow, type StudioRowValue } from "@mekka/studio-domain-sdk";
+import {
+  isStudioDomainError,
+  type StudioRow,
+  type StudioRowValue,
+} from "@mekka/studio-domain-sdk";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Input, Label, Textarea } from "ui";
 import { ConfirmationModal } from "ui-patterns/Dialogs/ConfirmationModal";
 
 import { createProjectStudioDomainClient } from "@/data/studio-domain/client";
 
 const pageSize = 50;
+const reconciliationTimeoutMs = 5_000;
+type Reconciliation = "applied" | "not-applied" | "unknown";
 
 export function SqliteRowsGrid({
   projectRef,
@@ -27,39 +33,99 @@ export function SqliteRowsGrid({
   const [error, setError] = useState<string | null>(null);
   const [isMutating, setIsMutating] = useState(false);
   const [rowToDelete, setRowToDelete] = useState<StudioRow | null>(null);
+  const mounted = useRef(true);
+  const mutationController = useRef<AbortController | null>(null);
   const keyColumn = primaryKey[0];
   const hasSinglePrimaryKey = primaryKey.length === 1;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      mutationController.current?.abort();
+    };
+  }, []);
   const rows = useQuery({
     queryKey: ["sqlite-rows", projectRef, table, page, filter, keyColumn],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       client.listRows(table, {
         limit: pageSize,
         offset: page * pageSize,
         ...(filter.length === 0 || keyColumn === undefined
           ? {}
           : { filter: { column: keyColumn, value: filter } }),
+        signal,
       }),
   });
 
-  const refresh = async () => {
-    await queryClient.invalidateQueries({
+  const refresh = () => {
+    void queryClient.invalidateQueries({
       queryKey: ["sqlite-rows", projectRef, table],
     });
   };
 
-  const handleCreate = async () => {
+  const runMutation = async (
+    operation: (signal: AbortSignal) => Promise<unknown>,
+    onSuccess: () => void,
+    reconcile: (signal: AbortSignal) => Promise<Reconciliation>,
+  ) => {
     if (isMutating) return;
+    const controller = new AbortController();
+    mutationController.current = controller;
     setIsMutating(true);
     try {
-      await client.createRow(table, parseRow(draft), idempotencyKey("create"));
-      setDraft("");
+      await operation(controller.signal);
+      if (!mounted.current) return;
+      onSuccess();
       setError(null);
-      await refresh();
+      setIsMutating(false);
+      mutationController.current = null;
+      refresh();
+    } catch (cause) {
+      if (controller.signal.aborted || !mounted.current) return;
+      if (isStudioDomainError(cause) && cause.outcomeAmbiguous) {
+        const result = await reconcileWithTimeout(controller.signal, reconcile);
+        if (!mounted.current) return;
+        setError(reconciliationMessage(result));
+        refresh();
+      } else {
+        setError(message(cause));
+      }
+    } finally {
+      if (mounted.current) setIsMutating(false);
+      if (mutationController.current === controller)
+        mutationController.current = null;
+    }
+  };
+
+  const findRows = (column: string, value: StudioRowValue, signal: AbortSignal) =>
+    client.listRows(table, {
+      limit: 200,
+      filter: { column, value: String(value) },
+      signal,
+    });
+
+  const handleCreate = async () => {
+    let values: StudioRow;
+    try {
+      values = parseRow(draft);
     } catch (cause) {
       setError(message(cause));
-    } finally {
-      setIsMutating(false);
+      return;
     }
+    const attemptKey = idempotencyKey("create");
+    await runMutation(
+      (signal) => client.createRow(table, values, attemptKey, { signal }),
+      () => setDraft(""),
+      async (signal) => {
+        if (keyColumn === undefined || values[keyColumn] === undefined) return "unknown";
+        const result = await findRows(keyColumn, values[keyColumn], signal);
+        return result.rows
+          .filter((row) => rowValueEquals(row[keyColumn], values[keyColumn]))
+          .some((row) => rowMatches(row, values))
+          ? "applied"
+          : "not-applied";
+      },
+    );
   };
 
   const handleUpdate = async () => {
@@ -68,25 +134,31 @@ export function SqliteRowsGrid({
       return;
     }
     if (editingRow === null) return;
-    if (isMutating) return;
-    setIsMutating(true);
+    let values: StudioRow;
     try {
-      const values = parseRow(editDraft);
-      await client.updateRow(
-        table,
-        { column: keyColumn, value: editingRow[keyColumn] ?? null },
-        values,
-        idempotencyKey("update"),
-      );
-      setEditingRow(null);
-      setEditDraft("");
-      setError(null);
-      await refresh();
+      values = parseRow(editDraft);
     } catch (cause) {
       setError(message(cause));
-    } finally {
-      setIsMutating(false);
+      return;
     }
+    const key = { column: keyColumn, value: editingRow[keyColumn] ?? null };
+    const attemptKey = idempotencyKey("update");
+    await runMutation(
+      (signal) => client.updateRow(table, key, values, attemptKey, { signal }),
+      () => {
+        setEditingRow(null);
+        setEditDraft("");
+      },
+      async (signal) => {
+        const nextKey = values[keyColumn] ?? key.value;
+        const result = await findRows(keyColumn, nextKey, signal);
+        return result.rows
+          .filter((row) => rowValueEquals(row[keyColumn], nextKey))
+          .some((row) => rowMatches(row, values))
+          ? "applied"
+          : "not-applied";
+      },
+    );
   };
 
   const handleDelete = async (row: StudioRow) => {
@@ -98,22 +170,18 @@ export function SqliteRowsGrid({
       setError("Row deletion requires exactly one primary key column.");
       return;
     }
-    if (isMutating) return;
-    setIsMutating(true);
-    try {
-      await client.deleteRow(
-        table,
-        { column: keyColumn, value: String(row[keyColumn]) },
-        idempotencyKey("delete"),
-      );
-      setError(null);
-      setRowToDelete(null);
-      await refresh();
-    } catch (cause) {
-      setError(message(cause));
-    } finally {
-      setIsMutating(false);
-    }
+    const key = { column: keyColumn, value: String(row[keyColumn]) };
+    const attemptKey = idempotencyKey("delete");
+    await runMutation(
+      (signal) => client.deleteRow(table, key, attemptKey, { signal }),
+      () => setRowToDelete(null),
+      async (signal) => {
+        const result = await findRows(keyColumn, key.value, signal);
+        return result.rows.some((candidate) => rowValueEquals(candidate[keyColumn], key.value))
+          ? "not-applied"
+          : "applied";
+      },
+    );
   };
 
   const columns =
@@ -315,4 +383,53 @@ function idempotencyKey(action: string): string {
 }
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : "Row operation failed.";
+}
+
+function rowMatches(row: StudioRow, expected: StudioRow): boolean {
+  return Object.entries(expected).every(([column, value]) => rowValueEquals(row[column], value));
+}
+
+function rowValueEquals(
+  actual: StudioRowValue | undefined,
+  expected: StudioRowValue | undefined,
+): boolean {
+  if (actual === expected) return true;
+  if (actual === null || expected === null || actual === undefined || expected === undefined) {
+    return false;
+  }
+  if (typeof actual === typeof expected) return false;
+  const text = typeof actual === "string" ? actual : expected;
+  const number = typeof actual === "number" ? actual : expected;
+  return (
+    typeof text === "string" &&
+    typeof number === "number" &&
+    text === String(number) &&
+    Number.isFinite(number)
+  );
+}
+
+async function reconcileWithTimeout(
+  parentSignal: AbortSignal,
+  reconcile: (signal: AbortSignal) => Promise<Reconciliation>,
+): Promise<Reconciliation> {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parentSignal.reason);
+  parentSignal.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(() => controller.abort(), reconciliationTimeoutMs);
+  try {
+    return await reconcile(controller.signal);
+  } catch {
+    return "unknown";
+  } finally {
+    clearTimeout(timeout);
+    parentSignal.removeEventListener("abort", abort);
+  }
+}
+
+function reconciliationMessage(result: Reconciliation): string {
+  if (result === "applied")
+    return "The row mutation appears applied, but Studio did not receive its response. Rows are being reloaded.";
+  if (result === "not-applied")
+    return "The row mutation does not appear applied. Review the reloaded rows before trying again.";
+  return "Studio could not confirm whether the row mutation was applied. Review the rows before trying again.";
 }

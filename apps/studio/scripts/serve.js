@@ -243,6 +243,9 @@ createServer(async (req, res) => {
     const pathname = rawPathname.length > 1 ? rawPathname.replace(/\/$/, '') : rawPathname
     const isAgentAccessRequest =
       pathname === '/mcp' || pathname === '/.well-known/oauth-protected-resource/mcp'
+    const isApplicationAccessRequest =
+      pathname.startsWith('/api/platform/mcp/approvals') &&
+      /^Bearer [A-Za-z0-9._~-]+$/.test(req.headers.authorization ?? '')
     if (pathname === '/mcp') {
       if (!/^Bearer [A-Za-z0-9._~-]+$/.test(req.headers.authorization ?? '')) {
         const protocol = req.socket.encrypted ? 'https' : 'http'
@@ -264,7 +267,12 @@ createServer(async (req, res) => {
         return
       }
     }
-    if (!isHealthRequest(req) && !isAgentAccessRequest && !isAuthorized(req)) {
+    if (
+      !isHealthRequest(req) &&
+      !isAgentAccessRequest &&
+      !isApplicationAccessRequest &&
+      !isAuthorized(req)
+    ) {
       res.statusCode = 401
       res.setHeader('www-authenticate', 'Basic realm="Mekka Studio", charset="UTF-8"')
       res.setHeader('content-type', 'application/json; charset=utf-8')

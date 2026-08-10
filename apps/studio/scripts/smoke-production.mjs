@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer as createHttpServer } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,30 +9,10 @@ import { fileURLToPath } from "node:url";
 const studioRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = path.resolve(studioRoot, "../..");
 const dataDirectory = await mkdtemp(path.join(tmpdir(), "mekka-production-smoke-"));
-const [studioPort, sqliteMetaPort, emailPort] = await Promise.all([
-  freePort(),
-  freePort(),
-  freePort(),
-]);
+const [studioPort, sqliteMetaPort] = await Promise.all([freePort(), freePort()]);
 const accessToken = "mekka-production-smoke-access-token";
 const baseUrl = `http://127.0.0.1:${studioPort}`;
 const authorization = `Basic ${Buffer.from(`smoke:${accessToken}`).toString("base64")}`;
-let deliveredEmail = null;
-const emailServer = createHttpServer(async (request, response) => {
-  if (request.method !== "POST" || request.url !== "/emails") {
-    response.writeHead(404).end();
-    return;
-  }
-  const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  deliveredEmail = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  response.writeHead(200, { "content-type": "application/json" });
-  response.end(JSON.stringify({ id: "production-smoke-email" }));
-});
-await new Promise((resolve, reject) => {
-  emailServer.once("error", reject);
-  emailServer.listen(emailPort, "127.0.0.1", resolve);
-});
 const child = spawn(
   process.platform === "win32" ? "bun.exe" : "bun",
   ["run", "--cwd", "apps/studio", "start:production"],
@@ -43,15 +22,13 @@ const child = spawn(
       ...process.env,
       NODE_ENV: "production",
       MODE: "production",
+      MEKKA_LOCAL_DEV: "1",
       PORT: String(studioPort),
       SQLITE_META_PORT: String(sqliteMetaPort),
       STUDIO_BACKEND_API_URL: `http://127.0.0.1:${sqliteMetaPort}`,
       SQLITE_META_DATA_DIRECTORY: dataDirectory,
       MEKKA_STUDIO_ACCESS_TOKEN: accessToken,
       MEKKA_PUBLIC_URL: baseUrl,
-      MEKKA_RESEND_API_KEY: "production-smoke-email-key",
-      MEKKA_AUTH_EMAIL_FROM: "Mekka Smoke <auth@example.test>",
-      MEKKA_RESEND_API_URL: `http://127.0.0.1:${emailPort}/emails`,
     },
     stdio: ["ignore", "pipe", "pipe"],
   },
@@ -74,6 +51,44 @@ try {
     authorization,
   });
 
+  const initialHealth = await requestJson("/api/platform/sqlite-meta/local/schema/health", {
+    authorization,
+  });
+  await requestJson("/api/platform/sqlite-meta/local/tables", {
+    authorization,
+    method: "POST",
+    headers: { "idempotency-key": "production-smoke-create-users" },
+    body: JSON.stringify({
+      name: "users",
+      columns: [
+        { name: "id", type: "INTEGER", nullable: false, primaryKey: true },
+        { name: "name", type: "TEXT", nullable: false, primaryKey: false },
+      ],
+      expectedSchemaHash: initialHealth.schemaHash,
+    }),
+  });
+  for (const [id, name] of [
+    [1, "Alice"],
+    [2, "Sam"],
+  ]) {
+    await requestJson("/api/platform/sqlite-meta/local/rows/users", {
+      authorization,
+      method: "POST",
+      headers: { "idempotency-key": `production-smoke-user-${id}` },
+      body: JSON.stringify({ values: { id, name } }),
+    });
+  }
+  const users = await requestJson("/api/platform/sqlite-meta/local/rows/users?limit=50&offset=0", {
+    authorization,
+  });
+  if (
+    users.totalCount !== 2 ||
+    users.rows?.[0]?.name !== "Alice" ||
+    users.rows?.[1]?.name !== "Sam"
+  ) {
+    throw new Error("Official runtime did not persist the demo users Alice and Sam.");
+  }
+
   const email = `production-smoke-${Date.now()}@example.test`;
   const password = "correct-horse-battery-staple";
   const authBase = "/auth/org-local/local/env-local/branch-main/1";
@@ -83,14 +98,13 @@ try {
     headers: { origin: baseUrl },
     body: JSON.stringify({ email, name: "Production Smoke", password }),
   });
-  await expectStatus(
+  const verification = await requestJson(
     `/api/platform/project-auth/local/verification-code?email=${encodeURIComponent(email)}`,
-    404,
     { authorization },
   );
-  const verificationCode = deliveredEmail?.text?.match(/\b\d{6}\b/)?.[0];
+  const verificationCode = verification.code;
   if (typeof verificationCode !== "string") {
-    throw new Error("Production email provider did not receive a verification code.");
+    throw new Error("Local Auth did not expose a verification code.");
   }
   await requestJson(`${authBase}/email-otp/verify-email`, {
     authorization,
@@ -98,19 +112,32 @@ try {
     headers: { origin: baseUrl },
     body: JSON.stringify({ email, otp: verificationCode }),
   });
-  const login = await requestJson(`${authBase}/sign-in/email`, {
+  const loginResponse = await expectStatus(`${authBase}/sign-in/email`, 200, {
     authorization,
     method: "POST",
-    headers: { origin: baseUrl },
+    headers: { "content-type": "application/json", origin: baseUrl },
     body: JSON.stringify({ email, password }),
   });
+  const login = await loginResponse.json();
   if (typeof login.accessToken !== "string" || typeof login.refreshToken !== "string") {
     throw new Error("Production Auth login did not return tokens.");
+  }
+  const sessionCookie = cookieFromSetCookie(loginResponse.headers.get("set-cookie"));
+  const sessionTokens = await requestJson(`${authBase}/token`, {
+    authorization,
+    method: "POST",
+    headers: { cookie: sessionCookie, origin: baseUrl },
+  });
+  if (
+    typeof sessionTokens.accessToken !== "string" ||
+    typeof sessionTokens.refreshToken !== "string"
+  ) {
+    throw new Error("Production Auth cookie did not resolve to an active session.");
   }
   const agentGrant = await requestJson("/api/platform/project-auth/local/agent-token", {
     authorization,
     method: "POST",
-    body: JSON.stringify({ accessToken: login.accessToken }),
+    body: JSON.stringify({ accessToken: sessionTokens.accessToken }),
   });
   if (typeof agentGrant.token !== "string" || typeof agentGrant.expiresAt !== "number") {
     throw new Error("Production Auth did not issue a temporary Agent Access token.");
@@ -168,7 +195,7 @@ try {
   const writeGrant = await requestJson("/api/platform/project-auth/local/agent-token", {
     authorization,
     method: "POST",
-    body: JSON.stringify({ accessToken: login.accessToken, mode: "write" }),
+    body: JSON.stringify({ accessToken: sessionTokens.accessToken, mode: "write" }),
   });
   if (
     typeof writeGrant.token !== "string" ||
@@ -177,11 +204,18 @@ try {
   ) {
     throw new Error("Read-write Agent Access was not isolated to a preview branch.");
   }
-  const mcpTable = `mcp_smoke_${Date.now()}`;
+  const inspected = readMcpToolJson(
+    await expectMcpToolSuccess(writeGrant.token, "inspect_schema", {}),
+  );
+  if (!inspected?.tables?.some((table) => table.name === "users")) {
+    throw new Error("MCP inspect did not see the production users table in its preview branch.");
+  }
+  const postsSql =
+    "CREATE TABLE posts (id INTEGER NOT NULL PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL)";
   const proposed = await callMcpTool(writeGrant.token, "propose_migration", {
-    migrationId: `create-${mcpTable}`,
-    idempotencyKey: `proposal-${mcpTable}`,
-    sql: `CREATE TABLE ${mcpTable} (id INTEGER NOT NULL PRIMARY KEY)`,
+    migrationId: "create-posts",
+    idempotencyKey: "production-smoke-create-posts",
+    sql: postsSql,
   });
   const proposalId = readMcpToolJson(proposed)?.proposalId;
   if (typeof proposalId !== "string") throw new Error("MCP did not return a proposal ID.");
@@ -193,17 +227,48 @@ try {
   if (pendingPromotion?.promotion !== "pending") {
     throw new Error("MCP production promotion did not stop for Studio approval.");
   }
-  const approvalList = await requestJson("/api/platform/mcp/approvals", { authorization });
+  const blockedWriteResponse = await expectStatus(
+    "/api/platform/project-auth/local/agent-token",
+    409,
+    {
+      authorization,
+      method: "POST",
+      body: JSON.stringify({ accessToken: sessionTokens.accessToken, mode: "write" }),
+    },
+  );
+  const blockedWrite = await blockedWriteResponse.json();
+  if (
+    blockedWrite.error !== "approval_conflict" ||
+    blockedWrite.approval?.proposalId !== proposalId ||
+    blockedWrite.approval?.branchId !== writeGrant.tenant.branchId
+  ) {
+    throw new Error("A second write grant was not blocked by the actor's active approval.");
+  }
+  const allowedReadGrant = await requestJson("/api/platform/project-auth/local/agent-token", {
+    authorization,
+    method: "POST",
+    body: JSON.stringify({ accessToken: sessionTokens.accessToken, mode: "read" }),
+  });
+  if (allowedReadGrant.mode !== "read") {
+    throw new Error("An active write approval unexpectedly blocked read-only Agent Access.");
+  }
+  await expectStatus("/api/platform/mcp/approvals", 401, { authorization });
+  const applicationAuthorization = `Bearer ${sessionTokens.accessToken}`;
+  const approvalList = await requestJson("/api/platform/mcp/approvals", {
+    authorization,
+    headers: { "x-mekka-application-authorization": applicationAuthorization },
+  });
   const approval = approvalList.approvals?.find((candidate) => candidate.proposalId === proposalId);
-  if (!approval || approval.sql !== `CREATE TABLE ${mcpTable} (id INTEGER NOT NULL PRIMARY KEY)`) {
+  if (!approval || approval.sql !== postsSql) {
     throw new Error("Studio approval did not expose the exact proposed SQL.");
   }
   const approvalDecision = await requestJson(
     `/api/platform/mcp/approvals/${encodeURIComponent(approval.approvalId)}`,
     {
-    authorization,
-    method: "PATCH",
-    body: JSON.stringify({ state: "approved" }),
+      authorization,
+      headers: { "x-mekka-application-authorization": applicationAuthorization },
+      method: "PATCH",
+      body: JSON.stringify({ state: "approved" }),
     },
   );
   if (typeof approvalDecision.executionToken !== "string") {
@@ -224,7 +289,14 @@ try {
   if (appliedPromotion?.promotion !== "applied") {
     throw new Error("Approved MCP migration was not promoted to production.");
   }
-  await expectStatus(`/api/platform/sqlite-meta/local/tables/${mcpTable}`, 200, { authorization });
+  const posts = await requestJson("/api/platform/sqlite-meta/local/tables/posts", { authorization });
+  if (
+    posts.name !== "posts" ||
+    !posts.columns?.some((column) => column.name === "user_id") ||
+    !posts.columns?.some((column) => column.name === "title")
+  ) {
+    throw new Error("Approved MCP migration did not create the posts table in production.");
+  }
   const authUsers = await requestJson("/api/platform/auth-admin/local/users", {
     authorization,
     headers: {
@@ -249,13 +321,37 @@ try {
     headers: { "idempotency-key": `production-smoke-create-${Date.now()}` },
     body: JSON.stringify({
       name: table,
-      columns: [{ name: "id", type: "INTEGER", nullable: false, primaryKey: true }],
+      columns: [
+        { name: "id", type: "INTEGER", nullable: false, primaryKey: true },
+        { name: "body", type: "TEXT", nullable: false, primaryKey: false },
+      ],
       expectedSchemaHash: health.schemaHash,
     }),
   });
   await expectStatus(`/api/platform/sqlite-meta/local/tables/${table}`, 200, {
     authorization,
   });
+  for (const [id, body] of [
+    [1, "first"],
+    [2, "second"],
+  ]) {
+    await requestJson(`/api/platform/sqlite-meta/local/rows/${table}`, {
+      authorization,
+      method: "POST",
+      headers: { "idempotency-key": `production-smoke-row-${table}-${id}` },
+      body: JSON.stringify({ values: { id, body } }),
+    });
+  }
+  const rows = await requestJson(`/api/platform/sqlite-meta/local/rows/${table}?limit=50&offset=0`, {
+    authorization,
+  });
+  if (
+    rows.totalCount !== 2 ||
+    rows.rows?.[0]?.body !== "first" ||
+    rows.rows?.[1]?.body !== "second"
+  ) {
+    throw new Error("Production Studio row mutations did not remain responsive and observable.");
+  }
   const nextHealth = await requestJson("/api/platform/sqlite-meta/local/schema/health", {
     authorization,
   });
@@ -267,17 +363,6 @@ try {
       headers: { "idempotency-key": `production-smoke-delete-${Date.now()}` },
     },
   );
-  const mcpHealth = await requestJson("/api/platform/sqlite-meta/local/schema/health", {
-    authorization,
-  });
-  await requestJson(
-    `/api/platform/sqlite-meta/local/tables/${mcpTable}?expected_schema_hash=${mcpHealth.schemaHash}`,
-    {
-      authorization,
-      method: "DELETE",
-      headers: { "idempotency-key": `production-smoke-mcp-delete-${Date.now()}` },
-    },
-  );
   const tables = await requestJson("/api/platform/sqlite-meta/local/tables", {
     authorization,
   });
@@ -285,7 +370,7 @@ try {
     throw new Error("Production smoke table was not deleted.");
   }
 
-  console.log("[production-smoke] packaged Studio, SQLite, Auth, email, and MCP lifecycle passed");
+  console.log("[production-smoke] official Studio, SQLite, local Auth, session, and MCP flow passed");
 } catch (error) {
   console.error("[production-smoke] failed:", error);
   if (output.trim()) console.error(output.trim());
@@ -297,7 +382,6 @@ try {
     new Promise((resolve) => setTimeout(resolve, 5_000)),
   ]);
   if (child.exitCode === null) child.kill("SIGKILL");
-  await new Promise((resolve) => emailServer.close(resolve));
   await rm(dataDirectory, { recursive: true, force: true });
 }
 
@@ -376,6 +460,12 @@ function readMcpToolJson(result) {
   } catch {
     return null;
   }
+}
+
+function cookieFromSetCookie(value) {
+  const match = /(?:__Secure-)?better-auth\.session_token=([^;,\s]+)/.exec(value ?? "");
+  if (!match) throw new Error("Production Auth login did not set a session cookie.");
+  return `${match[0].split("=")[0]}=${match[1]}`;
 }
 
 function freePort() {

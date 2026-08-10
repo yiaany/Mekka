@@ -1,11 +1,11 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import {
   createMcpHttpResponse,
   mcpCapabilityAction,
-  mcpPreviewCreateAction,
   mcpPreviewApplyAction,
+  mcpPreviewCreateAction,
   mcpPreviewProposeAction,
   mcpPreviewValidateAction,
   mcpPromotionRequestAction,
@@ -23,6 +23,10 @@ import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
 import { openAgentTokenStore } from "./agent-token-store";
 import { createSqliteMetaApp } from "./app";
 import { openLocalAuthRuntime } from "./auth";
+import {
+  isInternalProxyRequest as matchesInternalProxy,
+  readInternalProxyToken,
+} from "./internal-proxy";
 import { openLocalMcpRuntime } from "./mcp-runtime";
 
 const port = readPort(process.env.SQLITE_META_PORT ?? "3001");
@@ -30,7 +34,10 @@ const host = process.env.SQLITE_META_HOST ?? "127.0.0.1";
 const configuredDataDirectory = process.env.SQLITE_META_DATA_DIRECTORY ?? ".local/sqlite-meta";
 const dataDirectory = resolve(configuredDataDirectory);
 const isLocalDevelopment = process.env.MEKKA_LOCAL_DEV === "1";
-const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN?.trim() ?? "";
+const internalProxyToken = readInternalProxyToken(
+  process.env.MEKKA_INTERNAL_PROXY_TOKEN,
+  !isLocalDevelopment,
+);
 
 if (!isLocalDevelopment && process.env.MEKKA_SQLITE_META_SERVICE !== "1") {
   throw new Error("sqlite-meta requires MEKKA_LOCAL_DEV=1 or MEKKA_SQLITE_META_SERVICE=1.");
@@ -40,9 +47,6 @@ if (!isLocalDevelopment && !isAbsolute(configuredDataDirectory)) {
 }
 if (!isLocalDevelopment && host !== "127.0.0.1" && host !== "::1") {
   throw new Error("SQLITE_META_HOST must remain loopback-only in production.");
-}
-if (!isLocalDevelopment && internalProxyToken.length < 24) {
-  throw new Error("MEKKA_INTERNAL_PROXY_TOKEN must contain at least 24 characters in production.");
 }
 
 await mkdir(dataDirectory, { recursive: true });
@@ -190,6 +194,8 @@ const app = createSqliteMetaApp({
       let grantIdentity = Object.freeze({ ...verified, tokenId: randomUUID() });
       let previewCreated = false;
       if (mode === "write") {
+        const blockingApproval = mcpRuntime.approvals.findBlocking(verified.userId);
+        if (blockingApproval !== null) return writeApprovalConflict(blockingApproval);
         if (expiresAt - Date.now() < 60_000) {
           return Response.json({ error: "auth" }, { status: 401 });
         }
@@ -218,6 +224,15 @@ const app = createSqliteMetaApp({
         });
         grantIdentity = Object.freeze({ ...grantIdentity, tenant: previewTenant });
         previewCreated = true;
+        const racedApproval = mcpRuntime.approvals.findBlocking(verified.userId);
+        if (racedApproval !== null) {
+          await mcpRuntime.branches.deleteBranch(
+            grantIdentity.tenant,
+            verified.userId,
+            createCorrelationId(),
+          );
+          return writeApprovalConflict(racedApproval);
+        }
       }
       const token = randomBytes(32).toString("base64url");
       if (
@@ -240,24 +255,31 @@ const app = createSqliteMetaApp({
       return Response.json({ error: "auth" }, { status: 401 });
     }
   })
-  .get("/mcp-admin/approvals", ({ request }) => {
-    if (!isInternalProxyRequest(request)) {
+  .get("/mcp-admin/approvals", async ({ request }) => {
+    try {
+      requireInternalProxy(request);
+      const actorId = await requireActiveApplicationUser(request);
+      return Response.json(
+        { approvals: mcpRuntime.approvals.list(actorId) },
+        { headers: { "cache-control": "no-store" } },
+      );
+    } catch {
       return Response.json({ error: "auth" }, { status: 401 });
     }
-    return Response.json(
-      { approvals: mcpRuntime.approvals.list() },
-      { headers: { "cache-control": "no-store" } },
-    );
   })
   .patch("/mcp-admin/approvals/:approvalId", async ({ request, params }) => {
-    if (!isInternalProxyRequest(request)) {
+    let actorId: string;
+    try {
+      requireInternalProxy(request);
+      actorId = await requireActiveApplicationUser(request);
+    } catch {
       return Response.json({ error: "auth" }, { status: 401 });
     }
     const body: unknown = await request.json().catch(() => null);
     const state = readApprovalState(body);
     if (state === null) return Response.json({ error: "validation" }, { status: 400 });
     try {
-      return Response.json(mcpRuntime.approvals.decide(params.approvalId, state), {
+      return Response.json(mcpRuntime.approvals.decide(params.approvalId, actorId, state), {
         headers: { "cache-control": "no-store" },
       });
     } catch {
@@ -305,10 +327,35 @@ function requireInternalProxy(request: Request): void {
 }
 
 function isInternalProxyRequest(request: Request): boolean {
-  if (isLocalDevelopment) return true;
-  const provided = request.headers.get("x-mekka-internal-proxy") ?? "";
-  if (provided.length !== internalProxyToken.length) return false;
-  return timingSafeEqual(Buffer.from(provided), Buffer.from(internalProxyToken));
+  return matchesInternalProxy(request, internalProxyToken, isLocalDevelopment);
+}
+
+async function requireActiveApplicationUser(request: Request): Promise<string> {
+  const token = request.headers.get("authorization")?.match(/^Bearer ([A-Za-z0-9._~-]+)$/)?.[1];
+  if (token === undefined) throw new ProtocolError("auth");
+  const verified = await authRuntime.verifyAccessToken(token);
+  if (!authRuntime.isSessionActive(verified.sessionId, verified.userId)) {
+    throw new ProtocolError("auth");
+  }
+  return verified.userId;
+}
+
+function writeApprovalConflict(approval: ReturnType<typeof mcpRuntime.approvals.findBlocking>) {
+  if (approval === null) throw new Error("Blocking approval is required.");
+  return Response.json(
+    {
+      error: "approval_conflict",
+      message:
+        "Resolve or consume the existing MCP approval before issuing another write token. Read-only Agent Access remains available.",
+      approval: {
+        approvalId: approval.approvalId,
+        state: approval.state,
+        proposalId: approval.proposalId,
+        branchId: approval.tenant.branchId,
+      },
+    },
+    { status: 409, headers: { "cache-control": "no-store" } },
+  );
 }
 
 function resolveProductionStorage(): StorageAdapter {

@@ -17,15 +17,18 @@ export type McpApprovalRecord = McpApprovalDecision &
     sql: string;
     destructive: boolean;
     createdAt: number;
+    executionConsumedAt: number | null;
   }>;
 
 export type LocalMcpRuntime = Readonly<{
   branches: BranchService;
   mutations: Awaited<ReturnType<typeof openMcpMutationWorkflow>>;
   approvals: Readonly<{
-    list(): readonly McpApprovalRecord[];
+    list(actorId: string): readonly McpApprovalRecord[];
+    findBlocking(actorId: string): McpApprovalRecord | null;
     decide(
       approvalId: string,
+      actorId: string,
       state: "approved" | "rejected",
     ): Readonly<{ approval: McpApprovalRecord; executionToken?: string }>;
     cleanupExpired(): void;
@@ -127,7 +130,7 @@ export async function openLocalMcpRuntime(
   });
 }
 
-function openApprovalStore(path: string) {
+export function openApprovalStore(path: string) {
   const database = new Database(path, { strict: true });
   database.run("PRAGMA journal_mode = WAL");
   database.run("PRAGMA synchronous = NORMAL");
@@ -212,27 +215,38 @@ function openApprovalStore(path: string) {
   };
   return Object.freeze({
     hook,
-    list(): readonly McpApprovalRecord[] {
+    list(actorId: string): readonly McpApprovalRecord[] {
       return Object.freeze(
         database
-          .query<ApprovalRow, []>(`${approvalSelect} ORDER BY created_at DESC LIMIT 100`)
-          .all()
+          .query<ApprovalRow, [string]>(
+            `${approvalSelect} WHERE actor_id = ? ORDER BY created_at DESC LIMIT 100`,
+          )
+          .all(actorId)
           .map(record),
       );
     },
-    decide(approvalId: string, state: "approved" | "rejected") {
+    findBlocking(actorId: string): McpApprovalRecord | null {
+      const row = database
+        .query<ApprovalRow, [string, number]>(`${approvalSelect}
+          WHERE actor_id = ? AND state IN ('pending', 'approved')
+          AND execution_consumed_at IS NULL AND expires_at > ?
+          ORDER BY created_at DESC LIMIT 1`)
+        .get(actorId, Date.now());
+      return row === null ? null : record(row);
+    },
+    decide(approvalId: string, actorId: string, state: "approved" | "rejected") {
       const executionToken =
         state === "approved" ? randomBytes(32).toString("base64url") : undefined;
       const executionTokenHash = executionToken ? hashExecutionToken(executionToken) : null;
       const updated = database
-        .query<never, [string, string | null, string, number]>(`UPDATE mcp_studio_approval
+        .query<never, [string, string | null, string, string, number]>(`UPDATE mcp_studio_approval
           SET state = ?, execution_token_hash = ?
-          WHERE approval_id = ? AND state = 'pending' AND expires_at > ?`)
-        .run(state, executionTokenHash, approvalId, Date.now());
+          WHERE approval_id = ? AND actor_id = ? AND state = 'pending' AND expires_at > ?`)
+        .run(state, executionTokenHash, approvalId, actorId, Date.now());
       if (updated.changes !== 1)
         throw new Error("Approval is missing, expired, or already decided.");
       return Object.freeze({
-        approval: record(requireApproval(database, approvalId)),
+        approval: record(requireActorApproval(database, approvalId, actorId)),
         ...(executionToken ? { executionToken } : {}),
       });
     },
@@ -290,6 +304,20 @@ function requireApproval(database: Database, approvalId: string): ApprovalRow {
   return row;
 }
 
+function requireActorApproval(
+  database: Database,
+  approvalId: string,
+  actorId: string,
+): ApprovalRow {
+  const row = database
+    .query<ApprovalRow, [string, string]>(
+      `${approvalSelect} WHERE approval_id = ? AND actor_id = ?`,
+    )
+    .get(approvalId, actorId);
+  if (!row) throw new Error("Approval not found.");
+  return row;
+}
+
 function decision(row: ApprovalRow): McpApprovalDecision {
   return Object.freeze({
     approvalId: row.approvalId,
@@ -310,6 +338,7 @@ function record(row: ApprovalRow): McpApprovalRecord {
     sql: row.sql,
     destructive: row.destructive === 1,
     createdAt: row.createdAt,
+    executionConsumedAt: row.executionConsumedAt,
   });
 }
 

@@ -597,6 +597,26 @@ describe("MCP mutation workflow", () => {
         idempotencyKey: "stale-preview-key",
         sql: "ALTER TABLE notes ADD COLUMN stale_check TEXT",
       });
+      const otherPreview = tenant("project-alpha", "preview-three");
+      const crossPreviewClient = await clientFor(
+        context(otherPreview, [
+          readCapability(otherPreview),
+          mutationCapability(otherPreview, mcpPreviewApplyAction),
+        ]),
+        {
+          ...testFixture.dependencies,
+          mutations: workflow,
+          resolveProject: () => ({ ...testFixture.project, tenant: otherPreview }),
+        },
+      );
+      const crossPreview = await crossPreviewClient.callTool({
+        name: "apply_to_preview",
+        arguments: { proposalId: proposal.id },
+      });
+      expect(crossPreview.isError).toBeTrue();
+      expect(JSON.stringify(crossPreview.content)).toContain(
+        "This proposal belongs to another preview. Use the original Agent Access token or start a new proposal.",
+      );
       await workflow.apply(scoped, proposal.id);
       testFixture.adapter.execute({ sql: "CREATE INDEX notes_body_idx ON notes (body)" });
       await expect(workflow.validate(scoped, previewProject, proposal.id)).rejects.toThrow();

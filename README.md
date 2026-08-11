@@ -3,11 +3,10 @@
 
   # MEKKA
 
-  **BACKEND INFRASTRUCTURE THAT FITS IN YOUR HEAD.**
+  **THE BACKEND THAT DOESN'T NEED A FLEET.**
 
-  One command. Bun-native SQLite. Embedded Studio. Scoped Agent Access.
-
-  `DATABASE` · `AUTH` · `STORAGE` · `REALTIME` · `STUDIO` · `SAFE AGENTS`
+  Data, Auth, Storage, Realtime, Studio, and safe agent access on top of a database you can still
+  understand.
 
   [![CI](https://github.com/yiaany/mekka/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yiaany/mekka/actions/workflows/ci.yml)
   ![Bun](https://img.shields.io/badge/Bun-1.3.14-242424?style=flat-square&logo=bun&logoColor=fff)
@@ -15,115 +14,107 @@
   ![SQLite](https://img.shields.io/badge/data-SQLite--native-0f80cc?style=flat-square&logo=sqlite&logoColor=fff)
   ![MCP](https://img.shields.io/badge/MCP-scoped-090909?style=flat-square)
   ![License](https://img.shields.io/badge/license-Mekka%20Business%202.0-090909?style=flat-square)
-
-  [Why Mekka](#why-mekka) · [Architecture](#architecture) · [Studio](#studio) · [Roadmap](#ecosystem-roadmap) · [Run it](#run-it) · [Security](#security)
 </div>
 
 ```bash
 npx mekka
 ```
 
-<p align="center"><strong>With Bun installed, one command downloads Mekka, creates the project folder, installs every dependency, and starts the complete local backend.</strong></p>
-<p align="center"><sub>Data, Auth, Storage, Realtime, Studio, and scoped MCP open locally at <code>127.0.0.1:8082</code>.</sub></p>
-<p align="center"><sub>No Bun yet? The CLI stops safely and prints the exact official installation command for Windows, macOS, or Linux.</sub></p>
+That command downloads the project, installs it, starts the backend, and opens Studio at
+`http://127.0.0.1:8082`.
 
-<br />
+No external database. No Docker compose file full of services you did not ask for. No afternoon lost
+to getting the dashboard, Auth, Storage, and Realtime to agree with each other.
 
 <p align="center">
   <img src="docs/assets/studio/table-editor.jpg" alt="Mekka Studio table editor running against a local SQLite project" width="100%" />
-  <sub>Real Studio. Real local SQLite project. No mockup.</sub>
+  <sub>This is the current Studio running against a real local project.</sub>
 </p>
 
----
+## Why This Exists
 
-## Less Platform. More Product.
+Supabase solved a real problem: it made a serious backend available to people who did not want to
+assemble one from scratch. I like that idea. I do not like that the answer still ends with a fairly
+large PostgreSQL stack for projects that mostly need tables, users, files, subscriptions, and a decent
+admin screen.
 
-Most products need **durable data, auth, files, realtime, and a control surface**. They do not need
-PostgreSQL infrastructure as a lifestyle.
+Mekka keeps those useful surfaces and changes the center of gravity.
 
-<table>
-  <tr>
-    <td width="33%" valign="top"><strong>SQLite-native</strong><br /><sub>Ordinary database files through Bun's native driver.</sub></td>
-    <td width="33%" valign="top"><strong>One Studio</strong><br /><sub>Data, users, files, branches, and approvals in one place.</sub></td>
-    <td width="33%" valign="top"><strong>Agents with limits</strong><br /><sub>Read by default. Preview first. Production only after approval.</sub></td>
-  </tr>
-</table>
+Today, the center is Bun and SQLite. The database is an ordinary file. The backend is a small set of
+TypeScript services. Studio ships with the project. An AI agent can inspect the system without being
+handed a production database password.
 
-> **Mekka is the Supabase killer for teams that need the product surfaces, not the PostgreSQL fleet.**
+That is the bet:
 
-## Why Mekka
+> **Supabase proved that developers want a backend platform. Mekka is proving they don't need the
+> platform weight.**
 
-Supabase is broad by design. Mekka is deliberately smaller: keep the useful backend surface, remove
-the machinery most projects never touch, and make agent safety part of the architecture.
+This is not a PostgreSQL compatibility project wearing a new logo. If your application depends on
+native PostgreSQL RLS, a large extension catalog, ranges, arrays, stored procedures, or exact PostgREST
+behavior, use PostgreSQL. Supabase is probably the better choice today.
 
-| | **Mekka** | **Supabase** | **Plain SQLite** |
-| --- | --- | --- | --- |
-| Data plane | SQLite through Bun's native driver | PostgreSQL | SQLite |
-| Studio | Bundled private fork | Hosted or self-hosted | Bring your own |
-| Backend surface | Data, Auth, Storage, Realtime | Broad PostgreSQL platform | Database only |
-| Agent access | Native scoped MCP | Configurable MCP | Application-defined |
-| Write path | Preview → exact SQL → approval → CAS promotion | Configuration-dependent | Application-defined |
-| Self-host shape | Bun/Node services + SQLite files | Multi-service Postgres stack | Embedded database |
+If you want a backend that starts locally in one command, stays understandable, and gives agents a
+safer way to make changes, that is the problem Mekka is built to solve.
 
-**Choose Supabase** when deep PostgreSQL compatibility is the requirement.
+## What Already Works
 
-**Choose Mekka** when shipping with less infrastructure is the requirement.
+Mekka is not a landing page for a future product. The current repository includes:
 
-## Built For Builders. Protected From Cloud Resale.
+- a typed Data API over SQLite;
+- table, row, column, and index management;
+- migrations with schema compare-and-swap checks;
+- verified checkpoints before destructive schema changes;
+- Auth sessions, JWT/JWKS, OAuth, refresh rotation, and administrative user management;
+- local and S3-compatible object storage;
+- signed reads, resumable uploads, checksums, quotas, and reconciliation;
+- transactional changefeeds, Realtime channels, Broadcast, and Presence;
+- disposable preview branches with guarded promotion;
+- an embedded Studio;
+- scoped MCP access for AI agents;
+- a Supabase JS-compatible Data API subset.
 
-The complete Mekka source is public. Individuals can inspect it, modify it, test it, learn from it,
-and use it for non-production development. Qualifying small organizations can use Mekka inside their
-own products under the additional grant in the Mekka Business License 2.0.
+The important word is **subset**. Unsupported behavior is rejected explicitly. Mekka does not quietly
+pretend that SQLite is PostgreSQL and hope the difference never matters.
 
-What the license prevents is extraction: a large company, cloud vendor, or other third party cannot
-take Mekka, rebrand it, and sell it as a competing hosted backend or cloud service without a
-commercial agreement. Builders get access to the code. Cloud resellers do not get a free product.
+Compatibility details live here:
 
-See [`LICENSE.md`](LICENSE.md) for the exact eligibility conditions and controlling terms.
+- [`apps/gateway/SUPABASE_DATA_COMPATIBILITY.md`](apps/gateway/SUPABASE_DATA_COMPATIBILITY.md)
+- [`apps/gateway/COMPATIBILITY.md`](apps/gateway/COMPATIBILITY.md)
+- [`apps/sqlite-meta/COMPATIBILITY.md`](apps/sqlite-meta/COMPATIBILITY.md)
 
-<details>
-<summary><strong>Comparison notes and sources</strong></summary>
+## The Agent Write Path
 
-Mekka implements a selected `supabase-js` Data API subset. It does not claim parity for PostgreSQL
-arrays, ranges, native RLS, extensions, casts, or every PostgREST feature.
+Giving an agent read access is useful. Giving it an unrestricted production SQL connection is lazy.
 
-Supabase references: [Database](https://supabase.com/docs/guides/database/overview),
-[MCP Server](https://supabase.com/docs/guides/ai-tools/mcp), and
-[Self-hosting](https://supabase.com/docs/guides/self-hosting).
-
-</details>
-
-## Safe Agent Changes
-
-> Agents get room to work, not room to improvise in production.
+Mekka uses a longer path on purpose:
 
 ```text
-PROMPT → SCOPED TOKEN → ISOLATED PREVIEW → VALIDATION → EXACT SQL → APPROVAL → PRODUCTION
+prompt
+  -> short-lived scoped token
+  -> isolated preview branch
+  -> migration and validation
+  -> exact SQL review
+  -> one-time approval
+  -> production promotion
 ```
 
-| **Read** | **Write** |
-| --- | --- |
-| Default capability: `mcp:read` | Requires explicit Studio opt-in |
-| Maximum five-minute opaque token | Bound to a disposable preview branch |
-| Full tenant identity attached | No production execute scope |
-| Revoked with the originating session | One-time artifact-bound approval secret |
+Read access is the default. A write token lasts no longer than five minutes and is bound to the full
+tenant identity:
+
+```text
+organization / project / environment / branch / generation
+```
+
+When write access is enabled, the agent works in a disposable preview. It does not receive a hidden
+production execute scope. Mekka records the migration artifact, exact SQL, schema hashes, and whether
+the operation is destructive. Studio approval produces a short-lived secret tied to that exact
+artifact. Promotion consumes the secret once and checks the production schema again before applying
+anything.
+
+An agent can still make a bad change. The point is that the bad change lands in its preview first.
 
 <details>
-<summary><strong>See the complete trust chain</strong></summary>
-
-1. Studio issues an opaque Agent Access token with a maximum five-minute lifetime.
-2. The grant is bound to organization, project, environment, branch, generation, and auth session.
-3. Write access creates an isolated preview instead of granting production execution.
-4. Mekka records the migration artifact, exact SQL, schema hashes, and destructive-operation flag.
-5. Studio approval issues a short-lived, one-time secret bound to that exact artifact.
-6. Production promotion atomically consumes the secret and rechecks authorization and schema CAS.
-
-An agent typo can damage its disposable preview. It cannot silently rewrite production.
-
-</details>
-
-<details>
-<summary><strong>Universal MCP configuration</strong></summary>
+<summary><strong>MCP configuration example</strong></summary>
 
 ```json
 {
@@ -141,62 +132,52 @@ An agent typo can damage its disposable preview. It cannot silently rewrite prod
 
 </details>
 
-## Architecture
+## How It Is Put Together
 
-Every request carries one unambiguous identity:
-
-```text
-organization / project / environment / branch / generation
-```
-
-```text
-Developer / AI Agent
-         │
-         │ HTTPS + scoped five-minute token
-         ▼
-┌──────────────────────┐
-│     MCP Gateway      │  body limits · rate limits
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│    Token Verifier    │  session · tenant · TTL
-└──────────┬───────────┘
-           │
-     read  │  write opt-in
-           │        └──────► isolated preview
-           │                   │ plan · apply · test
-           │                   ▼
-           │              exact SQL approval
-           ▼                   │
-┌──────────────────────┐◄──────┘
-│     sqlite-meta      │  manifest · compiler · audit
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│   SQLite Database    │  prepared statements
-└──────────────────────┘
-```
-
-<details>
-<summary><strong>Follow a normal query</strong></summary>
+The current local stack has one public Studio endpoint and one loopback backend. A normal request
+moves through authentication, tenant checks, bounded parsing, policy enforcement, prepared SQL,
+idempotency, and audit.
 
 ```text
 Client / Studio / MCP
-  → authentication
-  → rate and size limits
-  → tenant-bound capabilities
-  → typed query or migration artifact
-  → policy rewrite
-  → prepared SQLite statement
-  → storage adapter
-  → response, metrics, and audit
+          |
+          v
+authentication + limits
+          |
+          v
+tenant-bound capability check
+          |
+          v
+typed query or migration artifact
+          |
+          v
+schema and policy validation
+          |
+          v
+prepared SQLite statement
+          |
+          v
+result + audit + metrics
 ```
 
-</details>
+There are a few rules that show up throughout the codebase:
+
+- authentication happens before authorization;
+- tenant-sensitive checks use the complete tenant tuple;
+- user values are bound parameters, not interpolated SQL;
+- identifiers come from validated schema metadata;
+- mutation bodies, rows, messages, uploads, and queues are bounded;
+- retries use durable idempotency instead of wishful thinking;
+- secrets and SQL values do not belong in logs;
+- an unsupported operation fails closed.
+
+The architecture is deliberately less magical than the average backend platform. That makes it
+easier to test and much easier to explain when something goes wrong.
 
 ## Studio
 
-One control surface for the backend paths people actually use.
+Studio is the control surface for the parts of the backend people use every day: tables, SQL, Auth,
+Storage, agent grants, previews, and approvals.
 
 <table>
   <tr>
@@ -204,83 +185,54 @@ One control surface for the backend paths people actually use.
     <td width="50%"><img src="docs/assets/studio/auth-users.jpg" alt="Mekka Auth users administration" /></td>
   </tr>
   <tr>
-    <td align="center"><sub><strong>SQL EDITOR</strong></sub></td>
-    <td align="center"><sub><strong>AUTH USERS</strong></sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/assets/studio/agent-access.jpg" alt="Mekka Agent Access registration and token controls" /></td>
-    <td width="50%"><img src="docs/assets/studio/auth-providers.jpg" alt="Mekka authentication provider configuration" /></td>
-  </tr>
-  <tr>
-    <td align="center"><sub><strong>AGENT ACCESS</strong></sub></td>
-    <td align="center"><sub><strong>AUTH PROVIDERS</strong></sub></td>
+    <td width="50%"><img src="docs/assets/studio/agent-access.jpg" alt="Mekka Agent Access controls" /></td>
+    <td width="50%"><img src="docs/assets/studio/auth-providers.jpg" alt="Mekka Auth provider settings" /></td>
   </tr>
 </table>
 
-## Built In
-
-| **Surface** | **What ships** |
-| --- | --- |
-| **Data + SQLite** | Typed reads and mutations, tables, rows, indexes, migrations, schema diff, backup, and restore |
-| **Auth + Storage** | Sessions, JWT/JWKS, OAuth, audit, local/S3 objects, signed reads, resumable uploads, and quotas |
-| **Realtime + Branching** | Changefeeds, private channels, presence, preview snapshots, validation, restore points, and CAS promotion |
-| **Studio + MCP** | Visual administration, read tools by default, preview mutations, exact-SQL approval, and production promotion |
+Studio began as a private fork of Supabase Studio. The upstream code remains under Apache License 2.0,
+with provenance recorded in [`apps/studio/UPSTREAM.md`](apps/studio/UPSTREAM.md) and the reproduced
+license in [`apps/studio/UPSTREAM_LICENSE`](apps/studio/UPSTREAM_LICENSE).
 
 ## Run It
 
-### Download and start everything with one command
-
-Prerequisite: Node.js 20+. If Bun is missing, `npx mekka` runs the official platform installer,
-locates the new executable without requiring a terminal restart, and only then downloads the project.
-Git is optional; without it the CLI securely downloads the GitHub archive over HTTPS.
+Node.js 20 or newer is required. Git is optional. If Git is unavailable, the CLI downloads the GitHub
+archive over HTTPS.
 
 ```bash
 npx mekka
 ```
 
-That single command:
+Use a different destination directory if you want:
 
-1. Downloads the latest Mekka source into a new `mekka` folder.
-2. Installs the complete workspace with Bun.
-3. Builds the required workspace packages.
-4. Starts the SQLite backend and embedded Studio.
-5. Opens the local stack for Data, Auth, Storage, Realtime, branches, approvals, and scoped MCP.
+```bash
+npx mekka my-app
+```
 
-Open **`http://127.0.0.1:8082`**. No external database or multi-service PostgreSQL stack is required.
+Inside an existing checkout, the command reuses installed dependencies when possible, builds the core
+packages, and starts the current project. Pass `--install` to force dependency installation.
 
-Choose the project directory with `npx mekka my-app`. Inside an existing Mekka checkout, `npx mekka`
-skips installation when dependencies are already present, rebuilds the required core outputs, and starts
-the current project. Use `npx mekka --install` to force a reinstall.
+For repository development:
 
-For contributors, `bun install --frozen-lockfile && bun run dev` is also supported. The dev bootstrap
-incrementally builds required workspace outputs before starting Studio, so a clean checkout does not
-need a manual `bun run build:core` workaround.
+```bash
+bun install --frozen-lockfile
+bun run dev
+```
 
-The same bootstrap runs before `bun run test` and Studio typechecking, so those commands also work
-immediately after a clean `bun install --frozen-lockfile`.
+The local services are:
 
-| Service | Address | Purpose |
+| Service | Address | What it does |
 | --- | --- | --- |
-| Studio | `127.0.0.1:8082` | Browser control surface and same-origin API |
+| Studio | `127.0.0.1:8082` | Browser UI and same-origin API |
 | sqlite-meta | `127.0.0.1:3001` | Data, Auth, branches, approvals, and MCP backend |
 
-Local state lives in `apps/studio/.local/` and is ignored by Git and Docker contexts.
+Runtime state is stored under `apps/studio/.local/` and ignored by Git and Docker contexts.
 
 <details>
-<summary><strong>Production deployment</strong></summary>
+<summary><strong>Production process</strong></summary>
 
-The production shape is one public Studio endpoint, one loopback backend, and one persistent data
-directory.
-
-| Variable | Purpose |
-| --- | --- |
-| `MEKKA_STUDIO_ACCESS_TOKEN` | Protects Studio; minimum 24 characters |
-| `MEKKA_AUTH_SESSION_SECRET` | Auth and Agent Access HMAC secret; minimum 32 random characters |
-| `MEKKA_PUBLIC_URL` | Public origin used by Auth and MCP metadata |
-| `NEXT_PUBLIC_SITE_URL` | Public browser origin baked into Studio |
-| `SQLITE_META_DATA_DIRECTORY` | Absolute persistent data directory |
-| `MEKKA_RESEND_API_KEY` | Server-only production email credential |
-| `MEKKA_AUTH_EMAIL_FROM` | Verified Auth email sender |
+The supported production shape is intentionally small: expose Studio through a trusted reverse proxy,
+keep the backend on loopback, and persist one data directory.
 
 ```bash
 bun run build
@@ -288,12 +240,17 @@ bun run build
 MEKKA_STUDIO_ACCESS_TOKEN="replace-with-a-random-token" \
 MEKKA_AUTH_SESSION_SECRET="replace-with-a-random-secret" \
 MEKKA_PUBLIC_URL="https://mekka.example.com" \
+NEXT_PUBLIC_SITE_URL="https://mekka.example.com" \
 SQLITE_META_DATA_DIRECTORY="/absolute/path/to/mekka-data" \
 bun run --cwd apps/studio start:production
 ```
 
-Backend listeners remain loopback-only. Terminate TLS at a trusted reverse proxy, persist the data
-directory, and test restores before storing valuable data.
+`MEKKA_STUDIO_ACCESS_TOKEN` must contain at least 24 characters. The session secret must contain at
+least 32 random characters. Configure production email with `MEKKA_RESEND_API_KEY` and
+`MEKKA_AUTH_EMAIL_FROM`.
+
+Terminate TLS at the reverse proxy. Back up the persistent directory. Test the restore, not just the
+backup command.
 
 </details>
 
@@ -312,189 +269,77 @@ docker build \
 
 ## Security
 
-Self-hosted is a deployment model, not a security model.
+Self-hosting does not make software secure by itself. The repository currently enforces several useful
+boundaries, but a production deployment still needs monitoring, tested backups, deployment hardening,
+and an independent review.
 
-| Boundary | Guarantee |
-| --- | --- |
-| Identity | Authentication precedes authorization; every check uses the full tenant tuple |
-| Agent access | Read-only by default; writes stay preview-bound until explicit approval |
-| SQL | User values are prepared parameters; public SQL is constrained and allowlisted |
-| Secrets | Tokens, SQL values, provider credentials, and secrets are not logged |
-| Mutations | Durable idempotency, audit outbox, bounded payloads, and schema CAS |
-| Recovery | Destructive schema changes require a verified checkpoint |
+Current guarantees include:
+
+- Agent Access is invalidated by logout, password reset, expiry, or session deletion.
+- Public SQL is a constrained, single-statement subset.
+- Internal tables, PRAGMA, arbitrary DDL, and transaction control are blocked from the SQL editor.
+- Destructive schema changes require a verified checkpoint.
+- Production promotion checks authorization and schema state inside the mutation lock.
+- Unexpected failures become sanitized error envelopes without stack traces.
+- Object reads verify provider key, length, and SHA-256 against stored metadata.
+- Signed object grants are tenant-bound, version-bound, read-only, and expiring.
 
 See [`SECURITY.md`](SECURITY.md) for private vulnerability reporting and
 [`docs/runbooks/`](docs/runbooks/) for recovery procedures.
 
-<details>
-<summary><strong>Additional security guarantees</strong></summary>
+## Where Mekka Goes Next
 
-- Logout, password reset, expiry, and session deletion invalidate Agent Access.
-- Mutation request bodies, MCP messages, query rows, and responses are bounded.
-- Production promotion rechecks secret expiry inside the mutation lock.
-- Unexpected errors become sanitized envelopes without stack traces.
-- Identifiers resolve through the schema manifest instead of user-provided SQL fragments.
+SQLite is the starting point, not the ceiling.
 
-</details>
+The next engine is libSQL/Turso. The useful version of that work is not “accept a remote URL.” Mekka
+needs remote writes, local replicated reads, explicit consistency behavior, provider-backed preview
+databases, scoped credentials, and failure tests that cover the ugly moments between “request sent” and
+“response received.”
 
-## Ecosystem Roadmap
+After libSQL is stable, PGlite becomes the PostgreSQL-shaped option. That track is for teams that need
+JSONB, PostgreSQL semantics, or pgvector without operating a PostgreSQL server for every local project
+and preview environment.
 
-<div align="center">
+The sequence matters:
 
-### The local engine was the opening move.
+1. Keep the local SQLite core fast and boring.
+2. Add libSQL remote and replicated modes without breaking it.
+3. Finish the failure, migration, branch, and Studio paths.
+4. Add server-side PGlite as a separate engine.
+5. Add JSONB and pgvector where the engine actually supports them.
+6. Build Mekka Cloud around autosuspend, preview databases, and engine choice.
 
-**The target is the fastest agent-native database platform from laptop to global edge.**
+What is implemented now:
 
-Mekka is not building a smaller Supabase clone. We are making heavyweight database infrastructure
-optional, then taking the control plane, the agent workflow, and the developer experience further.
+- Bun + SQLite data plane;
+- embedded Studio;
+- Auth, Storage, Realtime, branches, and MCP;
+- guarded agent promotion.
 
-</div>
+What is planned, not shipped:
 
-<table>
-  <tr>
-    <td width="25%" valign="top">
-      <sub>PHASE 1.0</sub><br />
-      <kbd>SHIPPED</kbd><br /><br />
-      <strong>LOCAL CORE</strong><br /><br />
-      Bun + SQLite<br />
-      Embedded Studio<br />
-      Scoped MCP<br />
-      Guarded promotion
-    </td>
-    <td width="25%" valign="top">
-      <sub>PHASE 1.5</sub><br />
-      <kbd>COMING NEXT</kbd><br /><br />
-      <strong>LIBSQL PLANE</strong><br /><br />
-      Remote adapter<br />
-      Replicated reads<br />
-      Primary write routing<br />
-      Managed clones
-    </td>
-    <td width="25%" valign="top">
-      <sub>PHASE 2.0</sub><br />
-      <kbd>COMPATIBILITY TRACK</kbd><br /><br />
-      <strong>PGLITE ENGINE</strong><br /><br />
-      In-process Postgres<br />
-      WASM portability<br />
-      JSONB workflows<br />
-      pgvector target
-    </td>
-    <td width="25%" valign="top">
-      <sub>PHASE 3.0</sub><br />
-      <kbd>PLANNED</kbd><br /><br />
-      <strong>MEKKA CLOUD</strong><br /><br />
-      Serverless orchestration<br />
-      Autosuspend<br />
-      PR databases<br />
-      Multi-region control
-    </td>
-  </tr>
-  <tr>
-    <td align="center"><strong>PROVE IT</strong></td>
-    <td align="center"><strong>EXPAND IT</strong></td>
-    <td align="center"><strong>DISTRIBUTE IT</strong></td>
-    <td align="center"><strong>OWN THE CATEGORY</strong></td>
-  </tr>
-</table>
+- production libSQL/Turso adapter;
+- embedded replica routing;
+- managed Turso clones and credentials;
+- PGlite runtime;
+- pgvector support;
+- hosted Mekka Cloud;
+- general plugin SDK;
+- multi-region orchestration.
 
-> **Supabase made backend platforms accessible. Mekka is making the old platform weight obsolete.**
+There are deliberately no fake checkmarks next to roadmap work. When an engine passes the same storage,
+migration, branch, security, and failure contracts as the local core, it can carry production traffic.
+Not before.
 
-### Where The Platform Goes
+> **The endgame is simple: Supabase-scale usefulness without Supabase-scale machinery.**
 
-| **Engine layer** | **Control layer** | **Execution layer** | **Developer layer** |
-| --- | --- | --- | --- |
-| Bun SQLite today | Tenant-aware orchestration | Isolated TypeScript functions | Studio and CLI workflows |
-| libSQL/Turso adapter next | Branch and replica topology | Realtime mutation streams | PR preview databases |
-| PGlite compatibility track | Autosuspend and placement | Agent-safe plugin runtime | Engine choice per project |
-
-<details>
-<summary><strong>libSQL distributed data plane</strong></summary>
-
-The next SQLite-shaped engine track is a real remote adapter for libSQL and Turso, not a renamed
-HTTP client. The adapter must pass Mekka's storage, migration, branching, credential, and failure
-conformance contracts before it can carry production traffic.
-
-Targets:
-
-- Read replicas close to applications and agents, with writes routed to the primary.
-- Managed database clones and scoped credentials through verified Turso platform primitives.
-- The same typed API, Studio, MCP scopes, audit trail, and promotion workflow across local and remote projects.
-- Dense tenant isolation without keeping every inactive database hot in memory.
-
-Upstream replication and managed-clone primitives are verified. The product adapter and its
-credentials are not implemented yet. See
-[`docs/engine-capabilities/branching.md`](docs/engine-capabilities/branching.md).
-
-</details>
-
-<details>
-<summary><strong>PGlite compatibility engine</strong></summary>
-
-Some teams need PostgreSQL semantics without volunteering to operate PostgreSQL servers. The PGlite
-track targets a WASM-backed, in-process engine option with the same Mekka control surface.
-
-Targets:
-
-- PostgreSQL-compatible local and preview workflows without Docker as a baseline requirement.
-- `JSONB` and `pgvector`-compatible workflows for memory, embeddings, retrieval, and agent workloads.
-- Engine capability negotiation instead of pretending SQLite and PostgreSQL have identical semantics.
-- One Studio and one agent protocol across both engine families.
-
-PGlite support is roadmap work. No production adapter is claimed today.
-
-</details>
-
-<details>
-<summary><strong>Mekka Cloud, previews, and plugin runtime</strong></summary>
-
-The hosted product is designed around databases that wake when needed, disappear from memory when
-idle, and become disposable infrastructure whenever a pull request or agent task needs isolation.
-
-Targets:
-
-- Autosuspend with a single-digit-millisecond resume target for warm platform paths.
-- Disposable PR and CI databases with a sub-200ms orchestration target where the engine permits it.
-- Bun-isolated TypeScript functions executing beside the selected data plane.
-- Plugins for engine adapters, object stores, Auth providers, agent tools, and deployment hooks.
-- Realtime mutation broadcasting without forcing every engine through heavyweight WAL parsing.
-
-These numbers are engineering targets, not current service guarantees. Hosted Cloud, edge execution,
-and the general plugin SDK are planned rather than released.
-
-</details>
-
-**The strategy is simple:** win local development, expand engine choice, distribute the data plane,
-then ship the cloud platform built for software teams where agents are first-class operators.
-
-## Developer Reference
-
-<details>
-<summary><strong>Commands</strong></summary>
-
-| Command | Purpose |
-| --- | --- |
-| `bun run dev` | Start local Studio and sqlite-meta |
-| `bun run test` | Run the core Bun test matrix |
-| `bun run test:workspaces` | Run compatible workspace suites |
-| `bun run test:studio:fork` | Run Mekka Studio integration assertions |
-| `bun run lint` | Run Biome lint checks |
-| `bun run typecheck` | Typecheck core project references |
-| `bun run typecheck:studio` | Typecheck Studio and route contracts |
-| `bun run build` | Build packages and production Studio |
-| `bun run smoke:studio:production` | Exercise Studio, Auth, SQLite, MCP, approval, and promotion |
-| `bun audit` | Check dependencies for known advisories |
-| `bun run check` | Run the complete release gate |
-
-</details>
-
-<details>
-<summary><strong>Repository map</strong></summary>
+## Repository Map
 
 ```text
 apps/
   gateway/             REST, Storage, Realtime, compatibility, MCP mount
-  health-service/      Independent health-service example
-  mcp/                 Resources, tools, transport, mutation workflow
+  health-service/      Independent service and health example
+  mcp/                 Agent resources, tools, and mutation workflow
   sqlite-meta/         SQLite, Auth, branches, approvals, Agent grants
   studio/              React control surface and production server
 
@@ -505,37 +350,43 @@ packages/
   policy-engine/       Row and field authorization
   protocol/            Tenant identity, capabilities, errors
   query-ast/           Validated Data API query representation
-  realtime-core/       Changefeeds, channels, presence
+  realtime-core/       Changefeeds, channels, Broadcast, Presence
   schema-manifest/     Stable SQLite schema contracts
-  sqlite-compiler/     Prepared statement compiler
+  sqlite-compiler/     Prepared SQLite statement compiler
   storage-core/        SQLite adapter and object storage
   studio-domain-sdk/   Typed Studio/backend boundary
 ```
 
-</details>
+## Development
 
-<details>
-<summary><strong>Compatibility and upstream provenance</strong></summary>
+The repository uses Bun `1.3.14` and strict TypeScript.
 
-Compatibility is tested, never assumed. Unsupported PostgreSQL behavior returns explicit errors.
+| Command | Purpose |
+| --- | --- |
+| `bun run dev` | Start Studio and sqlite-meta |
+| `bun run test` | Run the core Bun tests |
+| `bun run test:workspaces` | Run workspace suites |
+| `bun run test:studio:fork` | Run Studio integration assertions |
+| `bun run lint` | Run Biome lint checks |
+| `bun run typecheck` | Typecheck core project references |
+| `bun run typecheck:studio` | Typecheck Studio and route contracts |
+| `bun run build` | Build packages and production Studio |
+| `bun run smoke:studio:production` | Exercise the production Studio path |
+| `bun audit` | Check dependencies for known advisories |
+| `bun run check` | Run the complete repository gate |
 
-- [`apps/gateway/SUPABASE_DATA_COMPATIBILITY.md`](apps/gateway/SUPABASE_DATA_COMPATIBILITY.md)
-- [`apps/sqlite-meta/COMPATIBILITY.md`](apps/sqlite-meta/COMPATIBILITY.md)
-- [`apps/studio/UPSTREAM.md`](apps/studio/UPSTREAM.md)
+Contributions should stay focused. Add tests for success and failure paths, update the public contract
+when behavior changes, and do not commit credentials, local databases, production data, private prompts,
+or agent transcripts. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-Mekka Studio contains code derived from Supabase Studio under Apache License 2.0. Upstream
-provenance and the reproduced license remain in `apps/studio/UPSTREAM.md` and
-`apps/studio/UPSTREAM_LICENSE`.
+## License
 
-</details>
+The full source is visible under the **Mekka Business License 2.0**. Individuals may inspect, modify,
+test, and learn from it. Qualifying small organizations receive an additional grant to use Mekka in
+their own products.
 
-## Status And License
+The license does not give a large company or cloud vendor permission to rebrand this repository and
+sell it back as a competing hosted backend. If someone wants to build a cloud business on Mekka, that
+requires a commercial agreement.
 
-Mekka is under active development. Passing tests cover reviewed paths; production deployments still
-require monitoring, backups, restore tests, and independent security review.
-
-Mekka is built in public under the **Mekka Business License 2.0**. Individuals can inspect, modify,
-test, and learn from the complete source, while qualifying small organizations can use Mekka inside
-their own products. The license prevents third parties, including large cloud companies, from
-repackaging Mekka as a competing hosted backend or cloud service without a commercial agreement.
-See [`LICENSE.md`](LICENSE.md) for the controlling terms.
+See [`LICENSE.md`](LICENSE.md) for the terms that actually control.

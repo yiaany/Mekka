@@ -38,6 +38,7 @@ export type AuthAdminSecretStore = Readonly<{
 export type AuthAdminAuditEvent = Readonly<{
   action:
     | "auth.user.sessions.revoke.requested"
+    | "auth.user.delete.requested"
     | "auth.provider.update.requested"
     | "auth.redirects.update.requested"
     | "auth.template.update.requested";
@@ -131,6 +132,26 @@ export function createAuthAdminHandler(dependencies: AdminDependencies): AuthAdm
             });
             revokeUserCredentials(dependencies.database, userId);
             return { revoked: true };
+          },
+        );
+      }
+      if (request.method === "DELETE" && /^\/users\/[A-Za-z0-9_-]{3,128}$/.test(path)) {
+        const userId = path.slice("/users/".length);
+        return await idempotentMutation(
+          request,
+          dependencies.database,
+          path,
+          async (correlationId) => {
+            const body = await readObject(request);
+            if (body.confirmation !== userId) throw new AdminError("validation", 400);
+            if (!userExists(dependencies.database, userId)) throw new AdminError("validation", 404);
+            await audit(dependencies, context, correlationId, {
+              action: "auth.user.delete.requested",
+              targetId: userId,
+              details: {},
+            });
+            deleteUser(dependencies.database, userId);
+            return { deleted: true, userId };
           },
         );
       }
@@ -454,6 +475,34 @@ function revokeUserCredentials(database: Database, userId: string): void {
       )
       .run(userId);
     database.query<never, [string]>("DELETE FROM session WHERE userId = ?").run(userId);
+  })();
+}
+
+function deleteUser(database: Database, userId: string): void {
+  database.transaction(() => {
+    const user = database
+      .query<{ email: string }, [string]>("SELECT email FROM user WHERE id = ?")
+      .get(userId);
+    if (!user) throw new AdminError("validation", 404);
+    database
+      .query<never, [string]>(
+        "UPDATE _mekka_auth_refresh_token SET status = 'revoked' WHERE user_id = ?",
+      )
+      .run(userId);
+    database.query<never, [string]>("DELETE FROM session WHERE userId = ?").run(userId);
+    database.query<never, [string]>("DELETE FROM account WHERE userId = ?").run(userId);
+    database
+      .query<never, [string, string, string, string, string]>(
+        "DELETE FROM verification WHERE identifier IN (?, ?, ?, ?, ?)",
+      )
+      .run(
+        user.email,
+        `email-verification:${user.email}`,
+        `forget-password:${user.email}`,
+        `reset-password:${user.email}`,
+        `password-reset:${user.email}`,
+      );
+    database.query<never, [string]>("DELETE FROM user WHERE id = ?").run(userId);
   })();
 }
 

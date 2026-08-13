@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import checkApiKey from '@/pages/api/ai/sql/check-api-key'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(checkApiKey)
+const handler = toLazyWebHandler(() => import('@/pages/api/ai/sql/check-api-key'))
 
 export const Route = createFileRoute('/api/ai/sql/check-api-key')({
   server: { handlers: { GET: handler } },

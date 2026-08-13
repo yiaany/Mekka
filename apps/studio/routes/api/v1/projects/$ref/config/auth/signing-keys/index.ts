@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import nextHandler from '@/pages/api/v1/projects/[ref]/config/auth/signing-keys'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(nextHandler)
+const handler = toLazyWebHandler(
+  () => import('@/pages/api/v1/projects/[ref]/config/auth/signing-keys')
+)
 
 export const Route = createFileRoute('/api/v1/projects/$ref/config/auth/signing-keys/')({
   server: { handlers: { GET: handler } },

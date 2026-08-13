@@ -43,6 +43,20 @@ for (const [k, v] of Object.entries(parsed)) {
 const accessToken = process.env.MEKKA_STUDIO_ACCESS_TOKEN
 const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN
 const maxMcpRequestBytes = 1_000_000
+const sqliteMetaReadPaths = new Set(['tables', 'schema/health', 'columns', 'indexes'])
+const sqliteMetaReadPathPatterns = [
+  /^tables\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
+  /^rows\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
+]
+const sqliteMetaMutationPaths = [
+  /^tables$/,
+  /^tables\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
+  /^columns$/,
+  /^columns\/[A-Za-z_][A-Za-z0-9_]{0,63}\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
+  /^indexes$/,
+  /^rows\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
+  /^sql$/,
+]
 if (process.env.NODE_ENV === 'production') {
   if (!accessToken || accessToken.length < 24) {
     throw new Error('MEKKA_STUDIO_ACCESS_TOKEN must contain at least 24 characters in production')
@@ -52,26 +66,29 @@ if (process.env.NODE_ENV === 'production') {
   }
 }
 
-// Initialize server-side Sentry now that .env values are in process.env (the
-// instrument module reads process.env.NEXT_PUBLIC_SENTRY_DSN at call time).
-// Imported dynamically here rather than via a `--import` flag so it runs after
-// the env-loading block above. Non-fatal if the SDK isn't present.
-try {
-  await import(pathToFileURL(path.join(studioRoot, 'instrument.server.mjs')).href)
-} catch (err) {
-  console.warn('[serve] Sentry server init skipped:', err?.message ?? err)
-}
-const { wrapFetchWithSentry } = await import('@sentry/tanstackstart-react').catch(() => ({
-  wrapFetchWithSentry: (fetchHandler) => fetchHandler,
-}))
+let handlerPromise
 
-const { default: rawHandler } = await import(
-  pathToFileURL(path.join(studioRoot, 'dist/server/server.js')).href
-)
-// Wrap so request-scoped errors (incl. ones swallowed into a 500) are captured.
-const handler = {
-  ...rawHandler,
-  fetch: wrapFetchWithSentry(rawHandler.fetch.bind(rawHandler)),
+async function getDynamicHandler() {
+  handlerPromise ??= (async () => {
+    // Static Studio pages do not need the React/Start server graph. Load it,
+    // and server-side Sentry, only when an API/Auth/MCP request actually needs it.
+    try {
+      await import(pathToFileURL(path.join(studioRoot, 'instrument.server.mjs')).href)
+    } catch (err) {
+      console.warn('[serve] Sentry server init skipped:', err?.message ?? err)
+    }
+    const { wrapFetchWithSentry } = await import('@sentry/tanstackstart-react').catch(() => ({
+      wrapFetchWithSentry: (fetchHandler) => fetchHandler,
+    }))
+    const { default: rawHandler } = await import(
+      pathToFileURL(path.join(studioRoot, 'dist/server/server.js')).href
+    )
+    return {
+      ...rawHandler,
+      fetch: wrapFetchWithSentry(rawHandler.fetch.bind(rawHandler)),
+    }
+  })()
+  return handlerPromise
 }
 
 const mimeByExt = new Map([
@@ -136,9 +153,9 @@ async function serveStatic(req, res) {
   return true
 }
 
-function toWebRequest(req) {
+function toWebRequest(req, targetUrl) {
   const protocol = req.socket.encrypted ? 'https' : 'http'
-  const url = `${protocol}://${req.headers.host ?? 'localhost'}${req.url}`
+  const url = targetUrl ?? `${protocol}://${req.headers.host ?? 'localhost'}${req.url}`
   const headers = new Headers()
   for (const [k, v] of Object.entries(req.headers)) {
     if (k.startsWith(':')) continue
@@ -163,6 +180,72 @@ function toWebRequest(req) {
     init.duplex = 'half'
   }
   return new Request(url, init)
+}
+
+function sqliteMetaBackendUrl(pathname, search, method) {
+  const match = pathname.match(/^\/api\/platform\/sqlite-meta\/local\/(.+)$/)
+  if (!match) return null
+  const resourcePath = match[1]
+  const isRead =
+    sqliteMetaReadPaths.has(resourcePath) ||
+    sqliteMetaReadPathPatterns.some((pattern) => pattern.test(resourcePath))
+  const isMutation = sqliteMetaMutationPaths.some((pattern) => pattern.test(resourcePath))
+  if (
+    !((isRead && ['GET', 'HEAD'].includes(method)) ||
+      (isMutation && ['POST', 'PATCH', 'DELETE'].includes(method)))
+  ) {
+    return null
+  }
+  const backend = process.env.STUDIO_BACKEND_API_URL
+  if (!backend) return null
+  return `${backend.replace(/\/$/, '')}/${resourcePath}${search}`
+}
+
+async function proxySqliteMeta(req, res, targetUrl) {
+  const request = toWebRequest(req, targetUrl)
+  request.headers.set('x-mekka-organization-id', process.env.NEXT_PUBLIC_STUDIO_ORGANIZATION_ID ?? 'org-local')
+  request.headers.set('x-mekka-project-id', 'local')
+  request.headers.set('x-mekka-environment-id', process.env.NEXT_PUBLIC_STUDIO_ENVIRONMENT_ID ?? 'env-local')
+  request.headers.set('x-mekka-branch-id', process.env.NEXT_PUBLIC_STUDIO_BRANCH_ID ?? 'branch-main')
+  request.headers.set('x-mekka-generation', process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? '1')
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  req.once('aborted', abort)
+  res.once('close', abort)
+  const timeout = setTimeout(abort, 10_000)
+  try {
+    const response = await fetch(request, { signal: controller.signal })
+    await pipeWebResponse(response, res)
+  } finally {
+    clearTimeout(timeout)
+    req.removeListener('aborted', abort)
+    res.removeListener('close', abort)
+  }
+}
+
+async function serveShell(res) {
+  const filePath = path.join(clientDir, '_shell.html')
+  const st = await stat(filePath)
+  res.statusCode = 200
+  res.setHeader('content-type', 'text/html; charset=utf-8')
+  res.setHeader('content-length', String(st.size))
+  res.setHeader('cache-control', 'no-cache')
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath)
+    stream.on('error', reject)
+    stream.on('end', resolve)
+    stream.pipe(res)
+  })
+}
+
+function isDynamicPath(pathname) {
+  return (
+    pathname === '/mcp' ||
+    pathname === '/.well-known/oauth-protected-resource/mcp' ||
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/auth/') ||
+    pathname.startsWith('/_serverFn/')
+  )
 }
 
 function isHealthRequest(req) {
@@ -280,6 +363,25 @@ createServer(async (req, res) => {
       return
     }
     if (await serveStatic(req, res)) return
+    const sqliteMetaUrl = sqliteMetaBackendUrl(
+      pathname,
+      new URL(req.url ?? '/', 'http://studio.local').search,
+      req.method ?? 'GET'
+    )
+    if (sqliteMetaUrl !== null) {
+      await proxySqliteMeta(req, res, sqliteMetaUrl)
+      return
+    }
+    if (!isDynamicPath(pathname)) {
+      if (path.extname(pathname)) {
+        res.statusCode = 404
+        res.end('Not Found')
+        return
+      }
+      await serveShell(res)
+      return
+    }
+    const handler = await getDynamicHandler()
     const response = await handler.fetch(toWebRequest(req))
     await pipeWebResponse(response, res)
   } catch (err) {

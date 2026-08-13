@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import nextHandler from '@/pages/api/platform/auth/[ref]/invite'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(nextHandler)
+const handler = toLazyWebHandler(() => import('@/pages/api/platform/auth/[ref]/invite'))
 
 export const Route = createFileRoute('/api/platform/auth/$ref/invite')({
   server: { handlers: { POST: handler } },

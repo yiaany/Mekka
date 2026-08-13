@@ -66,7 +66,7 @@ function MekkaMcpContent() {
       <div className="grid gap-3 border-t pt-5 text-sm sm:grid-cols-3">
         <EndpointFact label="Transport" value="Streamable HTTP" />
         <EndpointFact label="Access" value="Tenant-bound, read-only" />
-        <EndpointFact label="Token lifetime" value="Up to five minutes" />
+        <EndpointFact label="Token lifetime" value="Up to one hour" />
       </div>
     </div>
   )

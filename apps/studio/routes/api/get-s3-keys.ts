@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import nextHandler from '@/pages/api/get-s3-keys'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(nextHandler)
+const handler = toLazyWebHandler(() => import('@/pages/api/get-s3-keys'))
 
 export const Route = createFileRoute('/api/get-s3-keys')({
   server: { handlers: { GET: handler } },

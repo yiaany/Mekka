@@ -39,6 +39,17 @@ export async function proxyMcpRequest(request: Request, path: string): Promise<R
   }
 
   activeRequests += 1
+  let released = false
+  let streaming = false
+  const releaseRequest = () => {
+    if (released) return
+    released = true
+    activeRequests -= 1
+  }
+  const upstreamAbort = new AbortController()
+  const abortUpstream = () => upstreamAbort.abort(request.signal.reason)
+  request.signal.addEventListener('abort', abortUpstream, { once: true })
+  const headersTimeout = setTimeout(() => upstreamAbort.abort(), 15_000)
   try {
     const headers = forwardedMcpHeaders(request.headers)
     const body = request.method === 'GET' ? undefined : await readBoundedBody(request, maxRequestBytes)
@@ -46,8 +57,26 @@ export async function proxyMcpRequest(request: Request, path: string): Promise<R
       method: request.method,
       headers,
       ...(body === undefined ? {} : { body }),
-      signal: AbortSignal.timeout(15_000),
+      signal: upstreamAbort.signal,
     })
+    clearTimeout(headersTimeout)
+    if (response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')) {
+      streaming = true
+      return new Response(
+        proxyStreamingBody(response.body, {
+          abort: () => upstreamAbort.abort(),
+          cleanup: () => {
+            request.signal.removeEventListener('abort', abortUpstream)
+            releaseRequest()
+          },
+        }),
+        {
+          status: response.status,
+          statusText: response.statusText,
+          headers: forwardedMcpResponseHeaders(response.headers),
+        }
+      )
+    }
     const responseBody = await readBoundedStream(response.body, maxResponseBytes)
     return new Response(responseBody, {
       status: response.status,
@@ -61,8 +90,50 @@ export async function proxyMcpRequest(request: Request, path: string): Promise<R
     console.error('MCP proxy failed', error)
     return Response.json({ error: 'unavailable' }, { status: 503 })
   } finally {
-    activeRequests -= 1
+    clearTimeout(headersTimeout)
+    if (!streaming) {
+      request.signal.removeEventListener('abort', abortUpstream)
+      releaseRequest()
+    }
   }
+}
+
+function proxyStreamingBody(
+  upstream: ReadableStream<Uint8Array> | null,
+  { abort, cleanup }: { abort: () => void; cleanup: () => void }
+): ReadableStream<Uint8Array> | null {
+  if (upstream === null) {
+    cleanup()
+    return null
+  }
+  const reader = upstream.getReader()
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read()
+        if (done) {
+          reader.releaseLock()
+          cleanup()
+          controller.close()
+        } else {
+          controller.enqueue(value)
+        }
+      } catch (error) {
+        reader.releaseLock()
+        cleanup()
+        controller.error(error)
+      }
+    },
+    async cancel(reason) {
+      abort()
+      try {
+        await reader.cancel(reason)
+      } finally {
+        reader.releaseLock()
+        cleanup()
+      }
+    },
+  })
 }
 
 function takeRateSlot(now: number): boolean {

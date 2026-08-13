@@ -31,6 +31,15 @@ function isQueryEndpointStatementTimeout(error: unknown) {
   );
 }
 
+function isTerminalQueryError(error: unknown): boolean {
+  if (isStudioDomainError(error)) {
+    return error.status >= 400 && error.status < 500 && error.status !== 429;
+  }
+  if (!(error instanceof ResponseError) || error.code === 429) return false;
+  if (error.code !== undefined && error.code >= 400 && error.code < 500) return true;
+  return false;
+}
+
 let queryClient: QueryClient | undefined;
 
 export function getQueryClient() {
@@ -42,6 +51,7 @@ export function getQueryClient() {
           staleTime: 60 * 1000, // 1 minute
           retry(failureCount, error) {
             if (isStudioDomainError(error)) {
+              if (error.status === 504) return false;
               if (
                 error.status >= 400 &&
                 error.status < 500 &&
@@ -98,12 +108,18 @@ export function getQueryClient() {
             // [Joshen] Opting to not refetch a /query request that failed due to a statement
             // timeout, presumably that it'll just run into the same issue. Can however be overriden
             // on a per case basis on each individual query hook
-            if (isQueryEndpointStatementTimeout(query.state.error))
+            if (
+              isQueryEndpointStatementTimeout(query.state.error) ||
+              isTerminalQueryError(query.state.error)
+            )
               return false;
             return true;
           },
           refetchOnReconnect(query) {
-            if (isQueryEndpointStatementTimeout(query.state.error))
+            if (
+              isQueryEndpointStatementTimeout(query.state.error) ||
+              isTerminalQueryError(query.state.error)
+            )
               return false;
             return true;
           },

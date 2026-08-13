@@ -21,6 +21,9 @@ export interface RouterContext {
 // prevents a reload loop if the latest deployment is itself broken.
 function registerChunkErrorBackstop() {
   if (typeof window === 'undefined') return
+  const globalWindow = window as typeof window & { __studioChunkErrorBackstop?: boolean }
+  if (globalWindow.__studioChunkErrorBackstop) return
+  globalWindow.__studioChunkErrorBackstop = true
   window.addEventListener('vite:preloadError', (event) => {
     const KEY = 'studio:chunk-error-reload-at'
     let last = 0

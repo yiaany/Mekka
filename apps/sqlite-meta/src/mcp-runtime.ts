@@ -9,7 +9,9 @@ import {
   openMcpMutationWorkflow,
 } from "@mekka/mcp";
 import { parseTenantIdentity, type TenantIdentity } from "@mekka/protocol";
-import type { StorageAdapter } from "@mekka/storage-core";
+import type { StorageAdapter } from "@mekka/storage-core/sqlite";
+
+export const mcpApprovalTtlMs = 30 * 60_000;
 
 export type McpApprovalRecord = McpApprovalDecision &
   Readonly<{
@@ -161,7 +163,7 @@ export function openApprovalStore(path: string) {
         ) VALUES (?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(
           approvalId,
-          createdAt + 5 * 60_000,
+          createdAt + mcpApprovalTtlMs,
           input.tenant.organizationId,
           input.tenant.projectId,
           input.tenant.environmentId,

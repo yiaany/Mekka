@@ -4,6 +4,7 @@ import { proxyMcpRequest } from './mcp'
 
 describe('MCP public proxy', () => {
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
   })
@@ -42,5 +43,48 @@ describe('MCP public proxy', () => {
       '/mcp'
     )
     expect(responseResponse.status).toBe(413)
+  })
+
+  it('streams SSE beyond 15 seconds and cancels the upstream when the client disconnects', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('STUDIO_BACKEND_API_URL', 'http://backend.test')
+    const encoder = new TextEncoder()
+    let streamController: ReadableStreamDefaultController<Uint8Array>
+    let upstreamCancelled = false
+    let upstreamSignal: AbortSignal | undefined
+    const upstreamBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller
+        controller.enqueue(encoder.encode('data: first\n\n'))
+      },
+      cancel() {
+        upstreamCancelled = true
+      },
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init: RequestInit) => {
+        upstreamSignal = init.signal as AbortSignal
+        return new Response(upstreamBody, { headers: { 'content-type': 'text/event-stream' } })
+      })
+    )
+
+    const response = await proxyMcpRequest(
+      new Request('http://studio.test/mcp', {
+        headers: { authorization: 'Bearer valid-token', accept: 'text/event-stream' },
+      }),
+      '/mcp'
+    )
+    const reader = response.body?.getReader()
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toBe('data: first\n\n')
+
+    await vi.advanceTimersByTimeAsync(16_000)
+    expect(upstreamSignal?.aborted).toBe(false)
+    streamController!.enqueue(encoder.encode('data: second\n\n'))
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toBe('data: second\n\n')
+
+    await reader?.cancel('client disconnected')
+    expect(upstreamSignal?.aborted).toBe(true)
+    expect(upstreamCancelled).toBe(true)
   })
 })

@@ -44,18 +44,21 @@ connect to that endpoint directly and send the bearer token in the `Authorizatio
 For MCP clients that only launch stdio servers, use the official-SDK bridge included in this package:
 
 ```sh
-MEKKA_MCP_TOKEN=your-token npx mekka mcp-stdio --url https://your-mekka-host.example/mcp
+MEKKA_MCP_TOKEN=your-token npx --yes mekka mcp-stdio --url http://127.0.0.1:8082/mcp
 ```
 
 Set the token in the client process environment rather than command arguments. To use another
 environment variable name:
 
 ```sh
-npx mekka mcp-stdio --url https://your-mekka-host.example/mcp --token-env PROJECT_MCP_TOKEN
+npx --yes mekka mcp-stdio --url http://127.0.0.1:8082/mcp --token-env PROJECT_MCP_TOKEN
 ```
 
 The bridge accepts HTTPS endpoints and loopback HTTP endpoints for local development. It does not
 accept a `--token` argument, URL credentials, query parameters, or fragments.
+
+If the endpoint returns HTTP 401, the bridge reports that the environment token is invalid, expired,
+or replaced and should be regenerated. It never prints the token or the upstream response body.
 
 For `npx mekka`, Node.js 20 or newer is the only prerequisite. Git is optional. If Bun is missing, the
 CLI uses the official mutable platform installer, upgrades Bun versions older than 1.3.14, and locates the installed executable without requiring a

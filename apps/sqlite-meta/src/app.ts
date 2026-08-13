@@ -31,7 +31,7 @@ import {
   type StorageAdapter,
   type StorageExecutor,
   type StorageValue,
-} from "@mekka/storage-core";
+} from "@mekka/storage-core/sqlite";
 import { Elysia } from "elysia";
 
 export type SqliteMetaColumn = Readonly<{

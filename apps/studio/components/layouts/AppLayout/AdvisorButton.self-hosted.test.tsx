@@ -62,6 +62,14 @@ describe('AdvisorButton on self-hosted', () => {
   it('disables the notifications query so no request is made to the platform endpoint', () => {
     render(<AdvisorButton projectRef="project-ref" />)
 
+    expect(mockUseProjectLintsQuery).toHaveBeenCalledWith(
+      { projectRef: 'project-ref' },
+      { enabled: false }
+    )
+    expect(mockUseAdvisorSignals).toHaveBeenCalledWith({
+      projectRef: 'project-ref',
+      enabled: false,
+    })
     expect(mockUseNotificationsV2Query).toHaveBeenCalledWith(
       { filters: {}, limit: 20 },
       { enabled: false }

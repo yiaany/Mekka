@@ -5,6 +5,7 @@
       "**",
       "!**/node_modules",
       "!**/dist",
+      "!**/.local",
       "!bun.lock",
       "!apps/studio",
       "!packages/ai-commands",

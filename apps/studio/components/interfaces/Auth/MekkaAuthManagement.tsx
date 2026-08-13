@@ -11,6 +11,7 @@ import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { Button, Checkbox, Form, FormControl, FormField, Input, TextArea } from 'ui'
 import { ConfirmationModal } from 'ui-patterns/Dialogs/ConfirmationModal'
+import { TextConfirmModal } from 'ui-patterns/Dialogs/TextConfirmModal'
 import { FormItemLayout } from 'ui-patterns/form/FormItemLayout/FormItemLayout'
 import { PageContainer } from 'ui-patterns/PageContainer'
 import { z } from 'zod'
@@ -63,6 +64,7 @@ export function MekkaAuthUsers() {
   const projectRef = ref ?? ''
   const queryClient = useQueryClient()
   const [selectedUser, setSelectedUser] = useState<StudioAuthUser | null>(null)
+  const [userToDelete, setUserToDelete] = useState<StudioAuthUser | null>(null)
   const users = useQuery({
     queryKey: authKeys.users(projectRef),
     queryFn: () => createProjectStudioAuthClient(projectRef).listUsers(),
@@ -81,6 +83,20 @@ export function MekkaAuthUsers() {
       toast.success('User sessions and refresh tokens revoked')
     },
     onError: () => toast.error('Failed to revoke user sessions'),
+  })
+  const remove = useMutation({
+    mutationFn: (user: StudioAuthUser) =>
+      createProjectStudioAuthClient(projectRef).deleteUser(
+        user.id,
+        user.id,
+        createIdempotencyKey('delete')
+      ),
+    onSuccess: async () => {
+      setUserToDelete(null)
+      await queryClient.invalidateQueries({ queryKey: authKeys.users(projectRef) })
+      toast.success('Auth user deleted')
+    },
+    onError: () => toast.error('Failed to delete Auth user'),
   })
 
   return (
@@ -113,9 +129,14 @@ export function MekkaAuthUsers() {
                   <td className="px-4 py-3">{user.emailVerified ? 'Yes' : 'No'}</td>
                   <td className="px-4 py-3">{user.sessionCount}</td>
                   <td className="px-4 py-3 text-right">
-                    <Button type="button" variant="danger" onClick={() => setSelectedUser(user)}>
-                      Revoke sessions
-                    </Button>
+                    <div className="flex justify-end gap-2">
+                      <Button type="button" variant="default" onClick={() => setSelectedUser(user)}>
+                        Revoke sessions
+                      </Button>
+                      <Button type="button" variant="danger" onClick={() => setUserToDelete(user)}>
+                        Delete user
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -128,6 +149,12 @@ export function MekkaAuthUsers() {
         isLoading={revoke.isPending}
         onCancel={() => setSelectedUser(null)}
         onConfirm={() => selectedUser && revoke.mutate(selectedUser)}
+      />
+      <AuthUserDeleteConfirmation
+        user={userToDelete}
+        isLoading={remove.isPending}
+        onCancel={() => setUserToDelete(null)}
+        onConfirm={() => userToDelete && remove.mutate(userToDelete)}
       />
     </PageContainer>
   )
@@ -160,6 +187,43 @@ export function AuthUserRevokeConfirmation({
       onCancel={onCancel}
       onConfirm={onConfirm}
     />
+  )
+}
+
+export function AuthUserDeleteConfirmation({
+  user,
+  isLoading,
+  onCancel,
+  onConfirm,
+}: Readonly<{
+  user: StudioAuthUser | null
+  isLoading: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}>) {
+  return (
+    <TextConfirmModal
+      visible={user !== null}
+      title="Permanently delete Auth user?"
+      loading={isLoading}
+      confirmPlaceholder="Type the user ID"
+      confirmString={user?.id ?? ''}
+      confirmLabel="Delete user"
+      variant="destructive"
+      alert={{
+        title: 'This action cannot be undone',
+        description:
+          'The user, linked accounts, sessions, and refresh-token chains will be permanently removed.',
+      }}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    >
+      {user && (
+        <p className="text-sm">
+          Delete <strong>{user.email}</strong> from this project.
+        </p>
+      )}
+    </TextConfirmModal>
   )
 }
 

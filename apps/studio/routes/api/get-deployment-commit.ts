@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import getDeploymentCommit from '@/pages/api/get-deployment-commit'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(getDeploymentCommit)
+const handler = toLazyWebHandler(() => import('@/pages/api/get-deployment-commit'))
 
 export const Route = createFileRoute('/api/get-deployment-commit')({
   server: { handlers: { GET: handler } },

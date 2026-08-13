@@ -83,7 +83,7 @@ Read access works immediately. Write access opens a disposable preview.
 
 ```text
 Agent
-  -> five-minute scoped token
+  -> one-hour scoped token
   -> isolated preview
   -> migration and validation
   -> exact SQL approval

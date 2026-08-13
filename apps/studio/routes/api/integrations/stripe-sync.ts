@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import stripeSync from '@/pages/api/integrations/stripe-sync'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(stripeSync)
+const handler = toLazyWebHandler(() => import('@/pages/api/integrations/stripe-sync'))
 
 export const Route = createFileRoute('/api/integrations/stripe-sync')({
   server: { handlers: { POST: handler, DELETE: handler } },

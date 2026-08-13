@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import nextHandler from '@/pages/api/platform/pg-meta/[ref]/query'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(nextHandler)
+const handler = toLazyWebHandler(() => import('@/pages/api/platform/pg-meta/[ref]/query'))
 
 export const Route = createFileRoute('/api/platform/pg-meta/$ref/query/')({
   server: { handlers: { POST: handler } },

@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import getIpAddress from '@/pages/api/get-ip-address'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(getIpAddress)
+const handler = toLazyWebHandler(() => import('@/pages/api/get-ip-address'))
 
 export const Route = createFileRoute('/api/get-ip-address')({
   server: { handlers: { GET: handler } },

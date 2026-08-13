@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import statusOverride from '@/pages/api/status-override'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(statusOverride)
+const handler = toLazyWebHandler(() => import('@/pages/api/status-override'))
 
 export const Route = createFileRoute('/api/status-override')({
   server: { handlers: { GET: handler } },

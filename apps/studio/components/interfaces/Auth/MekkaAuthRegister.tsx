@@ -10,6 +10,7 @@ const environmentId = process.env.NEXT_PUBLIC_STUDIO_ENVIRONMENT_ID ?? 'env-loca
 const branchId = process.env.NEXT_PUBLIC_STUDIO_BRANCH_ID ?? 'branch-main'
 const generation = process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? '1'
 const applicationAccessTokenStoragePrefix = 'mekka:application-access-token'
+const authWorkflowStoragePrefix = 'mekka:auth-workflow'
 
 export function MekkaAuthRegister() {
   const { ref = 'local' } = useParams()
@@ -21,6 +22,8 @@ export function MekkaAuthRegister() {
   const [message, setMessage] = useState('Create an application user and verify their email.')
   const [isPending, setIsPending] = useState(false)
   const [isSignedIn, setIsSignedIn] = useState(false)
+  const [isSessionRecoveryComplete, setIsSessionRecoveryComplete] = useState(false)
+  const [isWorkflowRestored, setIsWorkflowRestored] = useState(false)
   const [applicationAccessToken, setApplicationAccessToken] = useState<string | null>(null)
   const [mcpToken, setMcpToken] = useState<string | null>(null)
   const [mcpTokenExpiresAt, setMcpTokenExpiresAt] = useState<number | null>(null)
@@ -30,6 +33,14 @@ export function MekkaAuthRegister() {
   const authBase = `/auth/${organizationId}/${ref}/${environmentId}/${branchId}/${generation}`
   const applicationAccessTokenStorageKey = [
     applicationAccessTokenStoragePrefix,
+    organizationId,
+    ref,
+    environmentId,
+    branchId,
+    generation,
+  ].join(':')
+  const authWorkflowStorageKey = [
+    authWorkflowStoragePrefix,
     organizationId,
     ref,
     environmentId,
@@ -107,19 +118,69 @@ export function MekkaAuthRegister() {
   }
 
   useEffect(() => {
+    let cancelled = false
+    setIsSessionRecoveryComplete(false)
+    setIsWorkflowRestored(false)
     const storedToken = readFreshApplicationAccessToken(applicationAccessTokenStorageKey)
+    const workflow = readAuthWorkflow(authWorkflowStorageKey)
     setApplicationAccessToken(storedToken)
     setIsSignedIn(storedToken !== null)
-    setMcpToken(null)
-    setMcpTokenExpiresAt(null)
-    setMcpWriteBranchId(null)
+    setName(workflow.name)
+    setEmail(workflow.email)
+    setOtp(workflow.otp)
+    setAllowMcpWrite(workflow.allowMcpWrite)
+    setMcpToken(workflow.mcpToken)
+    setMcpTokenExpiresAt(workflow.mcpTokenExpiresAt)
+    setMcpWriteBranchId(workflow.mcpWriteBranchId)
     setApprovals([])
-  }, [applicationAccessTokenStorageKey])
+    setIsWorkflowRestored(true)
+    void recoverApplicationSession(authBase).then((result) => {
+      if (cancelled) return
+      if (result.kind === 'recovered') {
+        persistApplicationAccessToken(applicationAccessTokenStorageKey, result.accessToken)
+        setApplicationAccessToken(result.accessToken)
+        setIsSignedIn(true)
+        setMessage('Application session restored.')
+      } else if (result.kind === 'signed-out') {
+        clearApplicationSession(applicationAccessTokenStorageKey)
+        setApplicationAccessToken(null)
+        setIsSignedIn(false)
+        setMessage('Your application session has expired. Sign in again.')
+      }
+      setIsSessionRecoveryComplete(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [applicationAccessTokenStorageKey, authBase])
 
   useEffect(() => {
-    if (!isSignedIn) return
+    if (!isWorkflowRestored) return
+    persistAuthWorkflow(authWorkflowStorageKey, {
+      name,
+      email,
+      otp,
+      allowMcpWrite,
+      mcpToken,
+      mcpTokenExpiresAt,
+      mcpWriteBranchId,
+    })
+  }, [
+    allowMcpWrite,
+    authWorkflowStorageKey,
+    email,
+    isWorkflowRestored,
+    mcpToken,
+    mcpTokenExpiresAt,
+    mcpWriteBranchId,
+    name,
+    otp,
+  ])
+
+  useEffect(() => {
+    if (!isSignedIn || !isSessionRecoveryComplete) return
     void refreshApprovals().catch(() => setMessage('MCP approvals are unavailable.'))
-  }, [isSignedIn, ref])
+  }, [isSessionRecoveryComplete, isSignedIn, ref])
 
   useEffect(() => {
     if (mcpTokenExpiresAt === null) return
@@ -407,15 +468,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function readMessage(payload: unknown): string {
-  if (
-    typeof payload === 'object' &&
-    payload !== null &&
-    'message' in payload &&
-    typeof payload.message === 'string'
-  ) {
-    return payload.message
-  }
-  return 'Auth request failed.'
+  return readAuthErrorMessage(payload, 'Auth request failed.')
 }
 
 function readCode(payload: unknown): string | null {
@@ -474,15 +527,61 @@ function readExecutionToken(payload: unknown): string | null {
 }
 
 function readAgentTokenError(payload: unknown): string {
-  if (
-    typeof payload === 'object' &&
-    payload !== null &&
-    'message' in payload &&
-    typeof payload.message === 'string'
-  ) {
-    return payload.message
+  return readAuthErrorMessage(payload, 'Temporary Agent Access token was not issued.')
+}
+
+async function recoverApplicationSession(
+  authBase: string
+): Promise<
+  | { kind: 'recovered'; accessToken: string }
+  | { kind: 'signed-out' }
+  | { kind: 'unavailable' }
+> {
+  const controller = new AbortController()
+  const timeout = window.setTimeout(() => controller.abort(), 5_000)
+  try {
+    const response = await fetch(`${authBase}/token`, {
+      method: 'POST',
+      credentials: 'include',
+      signal: controller.signal,
+    })
+    const payload: unknown = await response.json().catch(() => ({}))
+    if (response.ok && hasTokens(payload)) return { kind: 'recovered', accessToken: payload.accessToken }
+    if (response.status === 401) return { kind: 'signed-out' }
+    return { kind: 'unavailable' }
+  } catch {
+    return { kind: 'unavailable' }
+  } finally {
+    window.clearTimeout(timeout)
   }
-  return 'Temporary Agent Access token was not issued.'
+}
+
+function readAuthErrorMessage(payload: unknown, fallback: string): string {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return fallback
+  const record = payload as Record<string, unknown>
+  const nested =
+    typeof record.error === 'object' && record.error !== null && !Array.isArray(record.error)
+      ? (record.error as Record<string, unknown>)
+      : undefined
+  const code = nested?.code ?? record.code
+  if (typeof code === 'string') {
+    if (/AUTH_(?:ACCESS|REFRESH)_TOKEN_INVALID|UNAUTHORIZED/i.test(code)) {
+      return 'Your application session has expired. Sign in again.'
+    }
+    if (/RATE|TOO_MANY|QUOTA/i.test(code)) {
+      return 'Too many Auth requests. Wait a moment and try again.'
+    }
+    if (/VALIDATION|INVALID|BAD_REQUEST/i.test(code)) {
+      return 'Check the Auth form values and try again.'
+    }
+  }
+  const message = nested?.message ?? record.message
+  return typeof message === 'string' &&
+    message.length > 0 &&
+    message.length <= 240 &&
+    !/[\r\n{}\[\]]/.test(message)
+    ? message
+    : fallback
 }
 
 type McpApproval = Readonly<{
@@ -567,6 +666,60 @@ function readFreshApplicationAccessToken(storageKey: string): string | null {
     return null
   }
   return token
+}
+
+type AuthWorkflow = Readonly<{
+  name: string
+  email: string
+  otp: string
+  allowMcpWrite: boolean
+  mcpToken: string | null
+  mcpTokenExpiresAt: number | null
+  mcpWriteBranchId: string | null
+}>
+
+function readAuthWorkflow(storageKey: string): AuthWorkflow {
+  const empty: AuthWorkflow = {
+    name: 'Member',
+    email: '',
+    otp: '',
+    allowMcpWrite: false,
+    mcpToken: null,
+    mcpTokenExpiresAt: null,
+    mcpWriteBranchId: null,
+  }
+  try {
+    const raw = window.sessionStorage.getItem(storageKey)
+    if (raw === null) return empty
+    const value: unknown = JSON.parse(raw)
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return empty
+    const record = value as Record<string, unknown>
+    const expiresAt = typeof record.mcpTokenExpiresAt === 'number' ? record.mcpTokenExpiresAt : null
+    const hasFreshMcpToken =
+      typeof record.mcpToken === 'string' && expiresAt !== null && expiresAt > Date.now()
+    return {
+      name: typeof record.name === 'string' ? record.name : empty.name,
+      email: typeof record.email === 'string' ? record.email : '',
+      otp: typeof record.otp === 'string' ? record.otp : '',
+      allowMcpWrite: record.allowMcpWrite === true,
+      mcpToken: hasFreshMcpToken ? (record.mcpToken as string) : null,
+      mcpTokenExpiresAt: hasFreshMcpToken ? expiresAt : null,
+      mcpWriteBranchId:
+        hasFreshMcpToken && typeof record.mcpWriteBranchId === 'string'
+          ? record.mcpWriteBranchId
+          : null,
+    }
+  } catch {
+    return empty
+  }
+}
+
+function persistAuthWorkflow(storageKey: string, workflow: AuthWorkflow): void {
+  try {
+    window.sessionStorage.setItem(storageKey, JSON.stringify(workflow))
+  } catch {
+    // Browser storage can be unavailable; the current page state still works.
+  }
 }
 
 function persistApplicationAccessToken(storageKey: string, token: string): void {

@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import getFileNames from '@/pages/api/connect'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(getFileNames)
+const handler = toLazyWebHandler(() => import('@/pages/api/connect'))
 
 export const Route = createFileRoute('/api/connect/')({
   server: { handlers: { GET: handler } },

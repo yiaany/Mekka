@@ -20,9 +20,7 @@ import '@/styles/ui.css'
 import 'ui-patterns/ShimmeringLoader/index.css'
 
 import * as Sentry from '@sentry/react'
-import { TanStackDevtools } from '@tanstack/react-devtools'
 import type { QueryClient } from '@tanstack/react-query'
-import { ReactQueryDevtoolsPanel } from '@tanstack/react-query-devtools'
 import {
   ClientOnly,
   createRootRouteWithContext,
@@ -32,7 +30,6 @@ import {
   Scripts,
   type AnyRouter,
 } from '@tanstack/react-router'
-import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import {
   FeatureFlagProvider,
   getFlags,
@@ -433,19 +430,6 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
       </head>
       <body>
         {children}
-        <TanStackDevtools
-          config={{ position: 'bottom-right' }}
-          plugins={[
-            {
-              name: 'TanStack Router',
-              render: <TanStackRouterDevtoolsPanel />,
-            },
-            {
-              name: 'TanStack Query',
-              render: <ReactQueryDevtoolsPanel />,
-            },
-          ]}
-        />
         <Scripts />
       </body>
     </html>

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,11 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
-import { parseMcpStdioArguments, runMcpStdioBridge } from "./mcp-stdio.js";
+import {
+  mcpStdioTransportFailureMessage,
+  parseMcpStdioArguments,
+  runMcpStdioBridge,
+} from "./mcp-stdio.js";
 
 test("parses a secure environment-backed bridge configuration", () => {
   assert.deepEqual(
@@ -55,6 +60,37 @@ test("rejects malformed bearer token environment values", async () => {
     }),
     /environment variable is malformed/,
   );
+});
+
+test("reports a missing bearer token environment variable without exposing secrets", async () => {
+  await assert.rejects(
+    runMcpStdioBridge(["--url", "https://mcp.example.test/mcp"], { env: {} }),
+    /^Error: MCP bearer token environment variable is not set: MEKKA_MCP_TOKEN$/,
+  );
+});
+
+test("gives safe actionable diagnostics for an expired or replaced token", () => {
+  const secret = "do-not-print-this-token";
+  const message = mcpStdioTransportFailureMessage(
+    { code: 401, message: `Unauthorized: Bearer ${secret}` },
+    "MEKKA_MCP_TOKEN",
+  );
+
+  assert.match(message, /HTTP 401/);
+  assert.match(message, /invalid, expired, or replaced/);
+  assert.match(message, /Generate a new token/);
+  assert.doesNotMatch(message, new RegExp(secret));
+});
+
+test("documents a portable OpenCode bridge using the public Studio endpoint and explicit env", async () => {
+  const docs = await readFile(
+    new URL("../../../docs/integrations/mcp.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(docs, /"command": \[\s*"npx",\s*"--yes",\s*"mekka"/);
+  assert.match(docs, /"http:\/\/127\.0\.0\.1:8082\/mcp"/);
+  assert.match(docs, /"environment": \{\s*"MEKKA_MCP_TOKEN": "\{env:MEKKA_MCP_TOKEN\}"/);
+  assert.doesNotMatch(docs, /[A-Z]:\\|\/Users\//);
 });
 
 test("bridges an MCP stdio client to an authenticated Streamable HTTP endpoint", async () => {

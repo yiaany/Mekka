@@ -26,6 +26,7 @@ import { readEnvFiles } from './lib/env.js'
 import { terminateProcessTree } from './process-tree.js'
 
 const studioRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const sqliteMetaRoot = path.resolve(studioRoot, '..', 'sqlite-meta')
 
 // Shell env wins, then `.env.local`, then `.env` — the same precedence
 // scripts/serve.js and vite use, so STUDIO_FRAMEWORK set in either file is
@@ -154,8 +155,8 @@ export function runDispatch(target, options = {}) {
   let readiness = null
   let stopping = false
   const localBackend = startBackend
-    ? spawnImpl(packageManager, ['--watch', '../sqlite-meta/src/local.ts'], {
-        cwd: studioRoot,
+    ? spawnImpl(packageManager, ['--watch', 'src/local.ts'], {
+        cwd: sqliteMetaRoot,
         stdio: 'inherit',
         env: {
           ...env,
@@ -169,25 +170,33 @@ export function runDispatch(target, options = {}) {
     : null
 
   const monitorReadiness = () => {
-    const monitorOptions = {
+    const sharedOptions = {
       fetchImpl: options.fetchImpl,
       sleepImpl: options.sleepImpl,
       setTimeoutImpl: options.setTimeoutImpl,
       clearTimeoutImpl: options.clearTimeoutImpl,
-      attempts: options.readinessAttempts,
-      intervalMs: options.readinessIntervalMs,
-      requestTimeoutMs: options.requestTimeoutMs,
       signal: readinessAbort.signal,
     }
-    const backendReady = waitForHttp(backendUrl, monitorOptions).then((ready) => {
+    const backendReady = waitForHttp(backendUrl, {
+      ...sharedOptions,
+      attempts: options.readinessAttempts ?? 120,
+      intervalMs: options.readinessIntervalMs ?? 250,
+      requestTimeoutMs: options.requestTimeoutMs ?? 1_000,
+    }).then((ready) => {
       if (ready) log('Backend ready')
       return ready
     })
-    const studioReady = waitForHttp(studioHealthUrl, {
-      ...monitorOptions,
-      acceptResponse: (response) => response.ok,
-    })
-    return Promise.all([backendReady, studioReady]).then(([isBackendReady, isStudioReady]) => {
+    return backendReady.then(async (isBackendReady) => {
+      const isStudioReady =
+        isBackendReady && !readinessAbort.signal.aborted
+          ? await waitForHttp(studioHealthUrl, {
+              ...sharedOptions,
+              attempts: options.studioReadinessAttempts ?? options.readinessAttempts ?? 6,
+              intervalMs: options.studioReadinessIntervalMs ?? options.readinessIntervalMs ?? 2_000,
+              requestTimeoutMs: options.studioRequestTimeoutMs ?? 60_000,
+              acceptResponse: (response) => response.ok,
+            })
+          : false
       if (isBackendReady && isStudioReady && !readinessAbort.signal.aborted) {
         log(`Mekka ready at ${studioUrl}`)
         return true

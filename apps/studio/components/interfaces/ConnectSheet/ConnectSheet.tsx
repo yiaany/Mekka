@@ -15,6 +15,7 @@ import { useConnectState } from './useConnectState'
 import { useAPIKeys } from '@/data/api-keys/api-keys-query'
 import { useProjectApiUrl } from '@/data/config/project-endpoint-query'
 import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
+import { STUDIO_FEATURES } from '@/lib/fork-config'
 import { useTrack } from '@/lib/telemetry/track'
 import { useAppStateSnapshot } from '@/state/app-state'
 
@@ -111,7 +112,10 @@ export const ConnectSheet = () => {
     PermissionAction.READ,
     'service_api_keys'
   )
-  const { data: apiKeysData } = useAPIKeys({ projectRef }, { enabled: canReadAPIKeys })
+  const { data: apiKeysData } = useAPIKeys(
+    { projectRef },
+    { enabled: showConnect && canReadAPIKeys && STUDIO_FEATURES.settings }
+  )
 
   const projectKeys: ProjectKeys = useMemo(() => {
     const { anonKey, publishableKey } = apiKeysData ?? {}

@@ -26,7 +26,7 @@
     "test:ui": "vitest --ui",
     "test:update": "vitest --run --update",
     "test:ci": "vitest --run --coverage",
-    "test:fork": "vitest --run --config vitest.fork.config.ts tests/fork/fork-config.test.tsx tests/fork/studio-domain-integration.test.tsx tests/fork/onboarding.test.tsx tests/fork/auth-management.test.tsx tests/fork/storage-management.test.tsx tests/fork/storage-proxy.test.ts tests/fork/sqlite-meta-proxy.test.ts tests/fork/mekka-framework-parity.test.ts tests/fork/edge-functions-utils.test.ts",
+    "test:fork": "vitest --run --config vitest.fork.config.ts tests/fork/fork-config.test.tsx tests/fork/studio-domain-integration.test.tsx tests/fork/onboarding.test.tsx tests/fork/auth-management.test.tsx tests/fork/auth-admin-proxy.test.ts tests/fork/storage-management.test.tsx tests/fork/storage-proxy.test.ts tests/fork/sqlite-meta-proxy.test.ts tests/fork/mekka-framework-parity.test.ts tests/fork/edge-functions-utils.test.ts",
     "test:report": "open coverage/lcov-report/index.html",
     "pretypecheck": "node scripts/prepare-typecheck.js",
     "typecheck": "tsc --noEmit",

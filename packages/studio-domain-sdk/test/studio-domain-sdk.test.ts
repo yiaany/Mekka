@@ -140,6 +140,9 @@ describe("Studio Domain SDK", () => {
             clientSecret: "must-not-leak",
           });
         }
+        if (request.method === "DELETE") {
+          return Response.json({ deleted: true, userId: "user-001" });
+        }
         return Response.json({ revoked: true });
       },
     });
@@ -151,6 +154,10 @@ describe("Studio Domain SDK", () => {
       "auth-provider-update-0001",
     );
     await client.revokeUser("user-001", "user-001", "auth-user-revoke-0001");
+    expect(await client.deleteUser("user-001", "user-001", "auth-user-delete-0001")).toEqual({
+      deleted: true,
+      userId: "user-001",
+    });
 
     expect(users.users[0]).toMatchObject({ email: "member@example.test", sessionCount: 1 });
     expect(provider).toEqual({
@@ -167,6 +174,33 @@ describe("Studio Domain SDK", () => {
     );
     expect(requests[0]?.headers.get(tenantHeaders.projectId)).toBe("project-main");
     expect(requests[1]?.headers.get("idempotency-key")).toBe("auth-provider-update-0001");
+    expect(requests.at(-1)?.method).toBe("DELETE");
+    expect(requests.at(-1)?.headers.get("x-mekka-csrf-token")).toBe(
+      "csrf-token-value-that-is-long-enough",
+    );
+    expect(await requests.at(-1)?.json()).toEqual({ confirmation: "user-001" });
+  });
+
+  test.each([
+    [{ message: "Unauthorized" }, 401, "auth"],
+    [{ error: { message: "Forbidden" } }, 403, "forbidden"],
+    [{ code: "conflict" }, 409, "conflict"],
+    [{ error: { code: "validation" } }, 400, "validation"],
+  ] as const)("parses safe Auth error shapes %#", async (body, status, code) => {
+    const client = createStudioAuthAdminClient({
+      baseUrl: "http://studio-backend.local/auth-admin/project-main",
+      tenant,
+      getCredential: () => ({ kind: "session", token: "session-token-value" }),
+      getCsrfToken: () => "csrf-token-value-that-is-long-enough",
+      fetch: async () => Response.json(body, { status }),
+    });
+
+    await expect(client.listUsers()).rejects.toMatchObject({ code, status });
+    try {
+      await client.listUsers();
+    } catch (error) {
+      expect((error as Error).message).not.toContain(JSON.stringify(body));
+    }
   });
 
   test("maps sqlite-meta tables without exposing provider details and sends tenant/session context", async () => {
@@ -327,8 +361,34 @@ describe("Studio Domain SDK", () => {
     await started;
     controller.abort(new DOMException("Cancelled", "AbortError"));
 
-    expect(receivedSignal).toBe(controller.signal);
+    expect(receivedSignal).toBeInstanceOf(AbortSignal);
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(receivedSignal?.reason).toMatchObject({ name: "AbortError", message: "Cancelled" });
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  test("bounds reads and reports a retryable timeout without marking an outcome ambiguous", async () => {
+    let capturedSignal: AbortSignal | null | undefined;
+    const client = createStudioDomainClient({
+      baseUrl: "http://studio-backend.local/sqlite-meta",
+      tenant,
+      requestTimeoutMs: 10,
+      fetch: (_input, init) => {
+        capturedSignal = init?.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        });
+      },
+    });
+
+    await expect(client.getSchemaHealth()).rejects.toMatchObject({
+      code: "infrastructure",
+      status: 504,
+      outcomeAmbiguous: false,
+    });
+    expect(capturedSignal?.aborted).toBe(true);
   });
 
   test("allows only supported table mutations and returns the generated migration diff", async () => {

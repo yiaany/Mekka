@@ -153,7 +153,7 @@ function adminContext(tenantIdentity: TenantIdentity): AuthAdminContext {
 function adminRequest(
   service: Awaited<ReturnType<typeof openProjectAuthService>>,
   path: string,
-  method: "GET" | "POST" | "PUT" = "GET",
+  method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
   body?: unknown,
   idempotencyKey = "auth-admin-request-0001",
 ): Request {
@@ -214,6 +214,106 @@ async function registerVerifiedUser(
 }
 
 describe("Studio Auth administration", () => {
+  test("deletes a user transactionally, invalidates credentials, audits, and replays the result", async () => {
+    const directory = await createFixture();
+    const projectTenant = tenant("studio-auth-delete");
+    const emailProvider = new LocalAuthEmailSink();
+    const auditEvents: AuthAdminAuditEvent[] = [];
+    const service = await openProjectAuthService({
+      tenant: projectTenant,
+      mode: { kind: "production" },
+      authStorageDirectory: directory,
+      publicOrigin: "https://auth.example.test",
+      secretStore,
+      emailProvider,
+      ...securityOptions(),
+      admin: {
+        studioOrigin: "https://auth.example.test",
+        secretStore: {
+          readSecret: ({ name }) => secretStore.readSecret({ tenant: projectTenant, name }),
+          async writeSecrets(): Promise<void> {},
+        },
+        auditSink: {
+          async append(event): Promise<void> {
+            auditEvents.push(event);
+          },
+        },
+      },
+    });
+
+    try {
+      const email = "delete-user@example.test";
+      const password = "correct-horse-battery-staple";
+      const tokens = await registerVerifiedUser(service, emailProvider, email);
+      const verified = await service.verifyAccessToken(tokens.accessToken);
+      const request = () =>
+        service.handleAdminRequest(
+          adminRequest(
+            service,
+            `/users/${verified.userId}`,
+            "DELETE",
+            { confirmation: verified.userId },
+            "auth-user-delete-0001",
+          ),
+          adminContext(projectTenant),
+        );
+
+      const first = await request();
+      expect(first.status).toBe(200);
+      expect(await first.json()).toEqual({ deleted: true, userId: verified.userId });
+      const replay = await request();
+      expect(replay.status).toBe(200);
+      expect(await replay.json()).toEqual({ deleted: true, userId: verified.userId });
+      expect(service.isSessionActive(verified.sessionId, verified.userId)).toBe(false);
+      expect(
+        (
+          await service.handleRequest(
+            authRequest(service, "/refresh", {
+              refreshToken: tokens.refreshToken,
+            }),
+          )
+        ).status,
+      ).toBe(401);
+      expect(
+        (await service.handleRequest(authRequest(service, "/sign-in/email", { email, password })))
+          .status,
+      ).toBe(401);
+
+      const database = new Database(databasePath(directory, projectTenant, "production"));
+      try {
+        for (const [table, column] of [
+          ["user", "id"],
+          ["account", "userId"],
+          ["session", "userId"],
+        ] as const) {
+          expect(
+            database
+              .query<{ count: number }, [string]>(
+                `SELECT COUNT(*) AS count FROM ${table} WHERE ${column} = ?`,
+              )
+              .get(verified.userId)?.count,
+          ).toBe(0);
+        }
+        expect(
+          database
+            .query<{ count: number }, [string]>(
+              "SELECT COUNT(*) AS count FROM _mekka_auth_refresh_token WHERE user_id = ? AND status != 'revoked'",
+            )
+            .get(verified.userId)?.count,
+        ).toBe(0);
+      } finally {
+        database.close(false);
+      }
+      expect(auditEvents).toHaveLength(1);
+      expect(auditEvents[0]).toMatchObject({
+        action: "auth.user.delete.requested",
+        targetId: verified.userId,
+      });
+    } finally {
+      service.close();
+    }
+  });
+
   test("isolates users, writes provider secrets safely, validates redirects and revokes sessions with audit", async () => {
     const directory = await createFixture();
     const projectTenant = tenant("studio-auth-project");

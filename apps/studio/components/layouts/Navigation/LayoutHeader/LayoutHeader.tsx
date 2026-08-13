@@ -30,6 +30,7 @@ import { useOrgUsageQuery } from '@/data/usage/org-usage-query'
 import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
 import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 import { IS_PLATFORM } from '@/lib/constants'
+import { STUDIO_FEATURES } from '@/lib/fork-config'
 import { useTrack } from '@/lib/telemetry/track'
 import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
 import { useIsShortcutEnabled } from '@/state/shortcuts/useIsShortcutEnabled'
@@ -244,7 +245,7 @@ export const LayoutHeader = ({
                     )}
                   />
                   <HelpButton />
-                  <AdvisorButton projectRef={projectRef} />
+                  {STUDIO_FEATURES.advisors && <AdvisorButton projectRef={projectRef} />}
                   <AnimatePresence initial={false}>
                     {!!projectRef && (
                       <>
@@ -272,7 +273,7 @@ export const LayoutHeader = ({
                     )}
                   />
                   <HelpButton />
-                  <AdvisorButton projectRef={projectRef} />
+                  {STUDIO_FEATURES.advisors && <AdvisorButton projectRef={projectRef} />}
                   <AnimatePresence initial={false}>
                     {!!projectRef && (
                       <>

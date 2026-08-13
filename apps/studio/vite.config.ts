@@ -6,7 +6,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import remapping, { type SourceMapInput } from '@jridgewell/remapping'
 import tailwindcss from '@tailwindcss/vite'
-import { devtools } from '@tanstack/devtools-vite'
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 import viteReact from '@vitejs/plugin-react'
 import MagicString from 'magic-string'
@@ -644,6 +643,11 @@ export default defineConfig(({ command, mode }) => {
   //                                  (inlined via `define` above).
   // Leaving the var empty keeps the app at `/` as today.
   const basePath = env.NEXT_PUBLIC_BASE_PATH || undefined
+  const routerConfig = {
+    ...studioRouterGeneratorConfig,
+    autoCodeSplitting: true,
+    ...(basePath && { basepath: basePath }),
+  }
 
   // Skew protection — see the skewProtectionDpl comment above. Both are
   // build-time system env vars on Vercel; unset on local/self-hosted builds,
@@ -836,19 +840,15 @@ export default defineConfig(({ command, mode }) => {
       ssrLodashEs(),
       umdAmdShortCircuit(),
       assertNoChunkCycles(),
-      devtools(),
       tailwindcss(),
       tanstackStart({
         srcDirectory: './',
         spa: {
           enabled: true,
         },
-        router: {
-          ...studioRouterGeneratorConfig,
-          // Set `configuredBasepath` so `deriveRouterBasepath` short-circuits
-          // its slash-stripping branch. See the basePath comment above.
-          ...(basePath && { basepath: basePath }),
-        },
+        // The installed Start plugin's types lag its router generator runtime,
+        // which requires the stable `autoCodeSplitting` option.
+        router: routerConfig,
       }),
       viteReact(),
       // Skew protection parts 2 + 3. Registered after tanstackStart() so the

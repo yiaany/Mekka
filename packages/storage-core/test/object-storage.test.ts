@@ -20,7 +20,6 @@ import {
 import {
   createLocalObjectProvider,
   createObjectStorageCore,
-  createS3ObjectProvider,
   normalizeStorageObjectPath,
   type ObjectProvider,
   ObjectProviderError,
@@ -37,6 +36,7 @@ import {
   storageObjectPathMaxUtf8Bytes,
   storageObjectPathSegmentMaxUtf8Bytes,
 } from "../src/index";
+import { createS3ObjectProvider } from "../src/s3-object-provider";
 
 const temporaryDirectories: string[] = [];
 const allowAllPolicy: StoragePolicyHook = Object.freeze({ authorize: () => true });

@@ -20,6 +20,8 @@ const tenant = parseTenantIdentity({
   generation: Number(process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? "1"),
 });
 
+export type LocalAuthRuntime = Awaited<ReturnType<typeof openLocalAuthRuntime>>;
+
 export async function openLocalAuthRuntime(dataDirectory: string) {
   const isLocalDevelopment = process.env.MEKKA_LOCAL_DEV === "1";
   const configuredSessionSecret = process.env.MEKKA_AUTH_SESSION_SECRET?.trim() ?? "";

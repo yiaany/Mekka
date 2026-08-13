@@ -117,6 +117,7 @@ test('starts TanStack Studio after backend spawn and reports truthful readiness 
   assert.equal(calls[0].options.env.AUTH_PUBLIC_ORIGIN, 'http://127.0.0.1:9000')
   assert.equal(calls[0].options.env.MEKKA_LOCAL_DEV, '1')
   assert.equal(calls[1].options.env.MEKKA_LOCAL_DEV, '1')
+  assert.equal(calls[0].options.cwd, path.resolve('apps/sqlite-meta'))
   assert.match(calls[0].options.env.MEKKA_INTERNAL_PROXY_TOKEN, /^[A-Za-z0-9_-]{43}$/)
   assert.equal(
     calls[1].options.env.MEKKA_INTERNAL_PROXY_TOKEN,
@@ -219,6 +220,44 @@ test('bounds polling and aborts each request after the configured timeout', asyn
   assert.equal(ready, false)
   assert.equal(requests, 2)
   assert.equal(timers, 2)
+})
+
+test('waits for the backend before starting a long-lived Studio readiness probe', async () => {
+  const children = []
+  const requests = []
+  let releaseBackend
+  const backendResponse = new Promise((resolve) => {
+    releaseBackend = resolve
+  })
+  const result = runDispatch('dev', {
+    env: { MEKKA_BUN_EXECUTABLE: path.resolve('bun') },
+    fileEnv: {},
+    registerSignals: false,
+    logImpl: () => {},
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options })
+      if (url === 'http://127.0.0.1:3001') return backendResponse
+      return { ok: true }
+    },
+    spawnImpl() {
+      const child = fakeChild()
+      children.push(child)
+      return child
+    },
+  })
+
+  children[0].emit('spawn')
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.deepEqual(requests.map(({ url }) => url), ['http://127.0.0.1:3001'])
+  releaseBackend({ ok: true })
+  assert.equal(await result.readiness, true)
+  assert.deepEqual(requests.map(({ url }) => url), [
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:8082/api/platform/sqlite-meta/local/schema/health',
+  ])
+  children[1].emit('exit', 0, null)
+  children[0].emit('exit', 0, null)
+  process.exitCode = undefined
 })
 
 test('stops readiness polling when either dev child exits', async () => {

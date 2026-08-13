@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import test from '@/pages/api/edge-functions/test'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(test)
+const handler = toLazyWebHandler(() => import('@/pages/api/edge-functions/test'))
 
 export const Route = createFileRoute('/api/edge-functions/test')({
   server: { handlers: { POST: handler } },

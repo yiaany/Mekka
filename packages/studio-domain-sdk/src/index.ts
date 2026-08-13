@@ -13,6 +13,7 @@ import {
 export * from "./storage";
 
 const maxResponseBytes = 2 * 1024 * 1024;
+const defaultRequestTimeoutMs = 10_000;
 const defaultMutationTimeoutMs = 10_000;
 
 export type StudioMutationOptions = Readonly<{ signal?: AbortSignal }>;
@@ -211,6 +212,11 @@ export type StudioAuthAdminClient = Readonly<{
     confirmation: string,
     idempotencyKey: string,
   ): Promise<Readonly<{ revoked: true }>>;
+  deleteUser(
+    userId: string,
+    confirmation: string,
+    idempotencyKey: string,
+  ): Promise<Readonly<{ deleted: true; userId: string }>>;
   updateProvider(
     provider: StudioAuthProvider,
     input: Readonly<{ enabled: boolean; clientId?: string; clientSecret?: string }>,
@@ -290,18 +296,32 @@ export function createStudioDomainClient(
     tenant: TenantIdentity | TenantIdentityInput;
     getCredential?: () => Promise<StudioCredential | undefined> | StudioCredential | undefined;
     fetch?: typeof globalThis.fetch;
+    requestTimeoutMs?: number;
     mutationTimeoutMs?: number;
   }>,
 ): StudioDomainClient {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const tenant = parseTenantIdentity(input.tenant);
   const fetcher = input.fetch ?? globalThis.fetch;
+  const requestTimeoutMs = readTimeout(
+    input.requestTimeoutMs,
+    defaultRequestTimeoutMs,
+    "requestTimeoutMs",
+  );
   const mutationTimeoutMs = readMutationTimeout(input.mutationTimeoutMs);
 
   return Object.freeze({
     async listTables(options = {}) {
       const rawTables = parseTables(
-        await request(fetcher, baseUrl, tenant, input.getCredential, "tables", options.signal),
+        await request(
+          fetcher,
+          baseUrl,
+          tenant,
+          input.getCredential,
+          "tables",
+          options.signal,
+          requestTimeoutMs,
+        ),
       );
       const search = options.search?.trim().toLocaleLowerCase() ?? "";
       const filtered = rawTables
@@ -324,6 +344,7 @@ export function createStudioDomainClient(
           input.getCredential,
           "schema/health",
           options.signal,
+          requestTimeoutMs,
         ),
       );
     },
@@ -337,6 +358,7 @@ export function createStudioDomainClient(
           input.getCredential,
           `tables/${encodeURIComponent(name)}`,
           options.signal,
+          requestTimeoutMs,
         ),
       );
     },
@@ -458,6 +480,7 @@ export function createStudioDomainClient(
           input.getCredential,
           `rows/${encodeURIComponent(table)}?${search.toString()}`,
           options.signal,
+          requestTimeoutMs,
         ),
       );
     },
@@ -556,7 +579,7 @@ export function createStudioAuthAdminClient(
   const fetcher = input.fetch ?? globalThis.fetch;
   const authRequest = async (
     path: string,
-    method: "GET" | "POST" | "PUT",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     payload?: unknown,
     idempotencyKey?: string,
     signal?: AbortSignal,
@@ -623,6 +646,20 @@ export function createStudioAuthAdminClient(
       );
       if (record.revoked !== true) throw malformedResponse();
       return Object.freeze({ revoked: true as const });
+    },
+    async deleteUser(userId, confirmation, idempotencyKey) {
+      assertResourceId(userId);
+      assertIdempotencyKey(idempotencyKey);
+      const record = readRecord(
+        await authRequest(
+          `users/${encodeURIComponent(userId)}`,
+          "DELETE",
+          { confirmation },
+          idempotencyKey,
+        ),
+      );
+      if (record.deleted !== true || record.userId !== userId) throw malformedResponse();
+      return Object.freeze({ deleted: true as const, userId });
     },
     async updateProvider(provider, update, idempotencyKey) {
       readOneOf(provider, ["google", "github"] as const);
@@ -708,8 +745,56 @@ async function request(
     | undefined,
   path: string,
   signal: AbortSignal | undefined,
+  timeoutMs: number,
 ): Promise<unknown> {
-  return requestWithMethod(fetcher, baseUrl, tenant, getCredential, path, "GET", undefined, signal);
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abortFromCaller();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  let rejectOnAbort: ((reason?: unknown) => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectOnAbort = reject;
+  });
+  const rejectAborted = () =>
+    rejectOnAbort?.(
+      controller.signal.reason ?? new DOMException("Studio request cancelled", "AbortError"),
+    );
+  if (controller.signal.aborted) rejectAborted();
+  else controller.signal.addEventListener("abort", rejectAborted, { once: true });
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new DOMException("Studio request timed out", "TimeoutError"));
+  }, timeoutMs);
+  try {
+    return await Promise.race([
+      requestWithMethod(
+        fetcher,
+        baseUrl,
+        tenant,
+        getCredential,
+        path,
+        "GET",
+        undefined,
+        controller.signal,
+      ),
+      aborted,
+    ]);
+  } catch (error) {
+    if (timedOut) {
+      throw new StudioDomainError(
+        "infrastructure",
+        504,
+        createCorrelationId(),
+        "The database service did not answer in time. Retry the request.",
+      );
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
+    controller.signal.removeEventListener("abort", rejectAborted);
+  }
 }
 
 async function mutationRequest(
@@ -1165,15 +1250,31 @@ function parseError(
   fallback: CorrelationId,
 ): StudioDomainError {
   try {
-    const error = readRecord(readRecord(value).error);
-    const code = readErrorCode(error.code);
+    const record = readRecord(value);
+    const nested =
+      typeof record.error === "object" && record.error !== null
+        ? readRecord(record.error)
+        : undefined;
+    const code = readErrorCode(nested?.code ?? record.code ?? errorCodeForStatus(response.status));
     const correlationId = parseCorrelationId(
-      error.correlationId ?? response.headers.get(tenantHeaders.correlationId),
+      nested?.correlationId ??
+        record.correlationId ??
+        response.headers.get(tenantHeaders.correlationId) ??
+        fallback,
     );
     return new StudioDomainError(code, response.status, correlationId);
   } catch {
     return new StudioDomainError("infrastructure", response.status, fallback);
   }
+}
+
+function errorCodeForStatus(status: number): ErrorCode {
+  if (status === 401) return "auth";
+  if (status === 403) return "forbidden";
+  if (status === 409) return "conflict";
+  if (status === 429) return "quota";
+  if (status === 400 || status === 404) return "validation";
+  return "infrastructure";
 }
 
 async function readJson(response: Response, correlationId: CorrelationId): Promise<unknown> {
@@ -1216,9 +1317,13 @@ function boundedInteger(
 }
 
 function readMutationTimeout(value: number | undefined): number {
-  const timeout = value ?? defaultMutationTimeoutMs;
+  return readTimeout(value, defaultMutationTimeoutMs, "mutationTimeoutMs");
+}
+
+function readTimeout(value: number | undefined, fallback: number, name: string): number {
+  const timeout = value ?? fallback;
   if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 120_000) {
-    throw new Error("Studio Domain SDK mutationTimeoutMs must be between 1 and 120000.");
+    throw new Error(`Studio Domain SDK ${name} must be between 1 and 120000.`);
   }
   return timeout;
 }

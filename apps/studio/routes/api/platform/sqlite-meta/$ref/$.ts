@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import nextHandler from '@/pages/api/platform/sqlite-meta/[ref]/[...path]'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handleNextRequest = toWebHandler(nextHandler)
+const handleNextRequest = toLazyWebHandler(
+  () => import('@/pages/api/platform/sqlite-meta/[ref]/[...path]')
+)
 
 export const Route = createFileRoute('/api/platform/sqlite-meta/$ref/$')({
   server: {

@@ -12,6 +12,7 @@ import {
   wrapperMetaComparator,
 } from '@/components/interfaces/Integrations/Wrappers/Wrappers.utils'
 import { useFDWsQuery } from '@/data/fdw/fdws-query'
+import { STUDIO_FEATURES } from '@/lib/fork-config'
 
 /**
  * A list of system schemas that users should not interact with
@@ -46,10 +47,13 @@ export const INTERNAL_SCHEMAS = [
  */
 const useFdwSchemasQuery = () => {
   const { data: project } = useSelectedProjectQuery()
-  const result = useFDWsQuery({
-    projectRef: project?.ref,
-    connectionString: project?.connectionString,
-  })
+  const result = useFDWsQuery(
+    {
+      projectRef: project?.ref,
+      connectionString: project?.connectionString,
+    },
+    { enabled: STUDIO_FEATURES.integrations }
+  )
 
   // Find all wrappers that create a schema for their data.
   const FDWsWithSchemas = useMemo(

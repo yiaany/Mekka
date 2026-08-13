@@ -2,10 +2,13 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { NextApiRequest, NextApiResponse } from 'next'
 
 import { tenantHeaders } from '@mekka/protocol'
+import { apiAuthenticate } from '@/lib/api/apiAuthenticate'
+import { isResponseOk } from '@/lib/api/apiWrapper'
 
 const readPaths = [/^users$/, /^users\/[A-Za-z0-9_-]{3,128}$/, /^settings$/]
 const mutationPaths = [
   /^users\/[A-Za-z0-9_-]{3,128}\/revoke$/,
+  /^users\/[A-Za-z0-9_-]{3,128}$/,
   /^providers\/(?:google|github)$/,
   /^redirects$/,
   /^templates\/(?:email-verification|password-reset)$/,
@@ -19,19 +22,35 @@ const forwardedHeaders = [
   tenantHeaders.correlationId,
 ] as const
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const path = Array.isArray(req.query.path) ? req.query.path.join('/') : req.query.path
-  const projectRef = Array.isArray(req.query.ref) ? req.query.ref[0] : req.query.ref
+export default async function authenticatedHandler(req: NextApiRequest, res: NextApiResponse) {
   const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN
-  const isTrustedProductionRequest =
+  const isTrustedInternalRequest =
     internalProxyToken !== undefined &&
     req.headers['x-mekka-internal-proxy'] === internalProxyToken
   const isLoopbackDevelopment =
     process.env.NODE_ENV !== 'production' &&
     (req.socket === undefined || isLoopback(req.socket.remoteAddress))
-  if (!path || projectRef !== 'local' || (!isTrustedProductionRequest && !isLoopbackDevelopment)) {
+  if (!isTrustedInternalRequest && !isLoopbackDevelopment) {
+    const authentication = await apiAuthenticate(req, res)
+    if (!isResponseOk(authentication)) {
+      return res.status(401).json({ error: { code: 'auth' } })
+    }
+  }
+  return handler(req, res)
+}
+
+function isLoopback(address: string | undefined): boolean {
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+}
+
+export async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const path = Array.isArray(req.query.path) ? req.query.path.join('/') : req.query.path
+  const projectRef = Array.isArray(req.query.ref) ? req.query.ref[0] : req.query.ref
+  const internalProxyToken = process.env.MEKKA_INTERNAL_PROXY_TOKEN
+  if (!path || projectRef !== 'local') {
     return res.status(401).json({ error: { code: 'auth' } })
   }
+  if (!internalProxyToken) return res.status(503).json({ error: { code: 'infrastructure' } })
   if (
     req.headers[tenantHeaders.projectId] !== undefined &&
     req.headers[tenantHeaders.projectId] !== projectRef
@@ -57,7 +76,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const isRead = req.method === 'GET' && readPaths.some((pattern) => pattern.test(path))
   const isMutation =
-    ['POST', 'PUT'].includes(req.method ?? '') && mutationPaths.some((pattern) => pattern.test(path))
+    ['POST', 'PUT', 'DELETE'].includes(req.method ?? '') &&
+    mutationPaths.some((pattern) => pattern.test(path))
   if (!isRead && !isMutation) return res.status(404).json({ error: { code: 'unsupported' } })
   if (isMutation && !hasValidCsrf(req)) {
     return res.status(403).json({ error: { code: 'forbidden' } })
@@ -69,7 +89,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const backendUrl = process.env.STUDIO_BACKEND_API_URL
   if (!backendUrl) return res.status(503).json({ error: { code: 'infrastructure' } })
   const headers = new Headers({ accept: 'application/json' })
-  if (internalProxyToken) headers.set('x-mekka-internal-proxy', internalProxyToken)
+  headers.set('x-mekka-internal-proxy', internalProxyToken)
   for (const name of forwardedHeaders) {
     const value = req.headers[name]
     if (typeof value === 'string') headers.set(name, value)
@@ -124,14 +144,6 @@ function hasValidCsrf(req: NextApiRequest): boolean {
   const left = Buffer.from(header)
   const right = Buffer.from(cookie)
   return left.length === right.length && timingSafeEqual(left, right)
-}
-
-function isLoopback(address: string | undefined): boolean {
-  return (
-    address === '127.0.0.1' ||
-    address === '::1' ||
-    address === '::ffff:127.0.0.1'
-  )
 }
 
 function isSecureStudioOrigin(): boolean {

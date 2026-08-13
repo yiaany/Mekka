@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import enabledFeaturesOverrides from '@/pages/api/enabled-features-overrides'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(enabledFeaturesOverrides)
+const handler = toLazyWebHandler(() => import('@/pages/api/enabled-features-overrides'))
 
 export const Route = createFileRoute('/api/enabled-features-overrides')({
   server: { handlers: { GET: handler } },

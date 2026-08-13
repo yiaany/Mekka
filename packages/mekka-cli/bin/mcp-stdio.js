@@ -44,7 +44,12 @@ export function parseMcpStdioArguments(args) {
 
 export async function runMcpStdioBridge(
   args,
-  { env = process.env, stdin = process.stdin, stdout = process.stdout } = {},
+  {
+    env = process.env,
+    stdin = process.stdin,
+    stdout = process.stdout,
+    stderr = process.stderr,
+  } = {},
 ) {
   const options = parseMcpStdioArguments(args);
   if (options.help) {
@@ -81,10 +86,10 @@ Options:
   let downstreamWrites = Promise.resolve();
   let closing = false;
 
-  const fail = () => {
+  const fail = (error) => {
     if (closing) return;
     closing = true;
-    process.stderr.write("Mekka MCP stdio bridge transport failed.\n");
+    stderr.write(`${mcpStdioTransportFailureMessage(error, options.tokenEnvironmentVariable)}\n`);
     Promise.allSettled([upstream.close(), downstream.close()]).finally(() => {
       process.exitCode = 1;
     });
@@ -121,10 +126,17 @@ Options:
   try {
     await upstream.start();
     await downstream.start();
-  } catch {
+  } catch (error) {
     await Promise.allSettled([upstream.close(), downstream.close()]);
-    throw new Error("MCP stdio bridge could not connect to the upstream endpoint.");
+    throw new Error(mcpStdioTransportFailureMessage(error, options.tokenEnvironmentVariable));
   }
+}
+
+export function mcpStdioTransportFailureMessage(error, tokenEnvironmentVariable) {
+  if (isHttpUnauthorized(error)) {
+    return `MCP authentication failed (HTTP 401): ${tokenEnvironmentVariable} is invalid, expired, or replaced. Generate a new token and update the environment variable.`;
+  }
+  return "MCP stdio bridge could not connect to the upstream endpoint.";
 }
 
 function requireOptionValue(args, index, option) {
@@ -138,4 +150,9 @@ function isLoopbackHttpUrl(url) {
     url.protocol === "http:" &&
     (url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "localhost")
   );
+}
+
+function isHttpUnauthorized(error) {
+  if (typeof error !== "object" || error === null) return false;
+  return error.code === 401 || error.status === 401 || error.statusCode === 401;
 }

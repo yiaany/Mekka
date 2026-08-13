@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import getUtcTime from '@/pages/api/get-utc-time'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(getUtcTime)
+const handler = toLazyWebHandler(() => import('@/pages/api/get-utc-time'))
 
 export const Route = createFileRoute('/api/get-utc-time')({
   server: { handlers: { GET: handler } },

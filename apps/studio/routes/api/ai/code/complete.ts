@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import complete from '@/pages/api/ai/code/complete'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(complete)
+const handler = toLazyWebHandler(() => import('@/pages/api/ai/code/complete'))
 
 export const Route = createFileRoute('/api/ai/code/complete')({
   server: { handlers: { POST: handler } },

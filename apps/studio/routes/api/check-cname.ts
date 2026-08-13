@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import checkCname from '@/pages/api/check-cname'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(checkCname)
+const handler = toLazyWebHandler(() => import('@/pages/api/check-cname'))
 
 export const Route = createFileRoute('/api/check-cname')({
   server: { handlers: { GET: handler } },

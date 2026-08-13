@@ -32,7 +32,36 @@ variable rather than committing it:
 ```
 
 Older OpenCode builds that report `expected text/event-stream` are using an SSE-only remote
-transport. Configure the stdio bridge below instead of changing Mekka's Streamable HTTP endpoint.
+transport. Configure the portable stdio bridge below instead of changing Mekka's Streamable HTTP
+endpoint. This launches the published package, targets the public Studio endpoint on port `8082`, and
+explicitly passes the token from OpenCode's environment:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mekka": {
+      "type": "local",
+      "command": [
+        "npx",
+        "--yes",
+        "mekka",
+        "mcp-stdio",
+        "--url",
+        "http://127.0.0.1:8082/mcp",
+        "--token-env",
+        "MEKKA_MCP_TOKEN"
+      ],
+      "environment": {
+        "MEKKA_MCP_TOKEN": "{env:MEKKA_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Do not replace `npx --yes mekka` with a machine-specific path to a checkout or to
+`bin/mcp-stdio.js`.
 
 ## Zed
 
@@ -74,7 +103,7 @@ Mekka tools while continuing to use Aider for repository edits.
 Use the published `mekka` CLI when a client supports MCP over stdio but not Streamable HTTP:
 
 ```sh
-MEKKA_MCP_TOKEN=your-token npx mekka mcp-stdio --url https://your-mekka-host.example/mcp
+MEKKA_MCP_TOKEN=your-token npx --yes mekka mcp-stdio --url http://127.0.0.1:8082/mcp
 ```
 
 A client configuration should launch `npx` with these arguments:
@@ -83,10 +112,11 @@ A client configuration should launch `npx` with these arguments:
 {
   "command": "npx",
   "args": [
+    "--yes",
     "mekka",
     "mcp-stdio",
     "--url",
-    "https://your-mekka-host.example/mcp",
+    "http://127.0.0.1:8082/mcp",
     "--token-env",
     "MEKKA_MCP_TOKEN"
   ],

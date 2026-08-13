@@ -14,6 +14,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 //   is not implemented — no studio route reads multipart in.
 
 type NextHandler = (req: NextApiRequest, res: NextApiResponse) => unknown | Promise<unknown>
+type NextHandlerModule = { default: NextHandler }
 
 interface RouteCtx {
   request: Request
@@ -32,6 +33,14 @@ export function toWebHandler(handler: NextHandler) {
     if (result instanceof Response) return result
 
     return finalize()
+  }
+}
+
+export function toLazyWebHandler(loadHandler: () => Promise<NextHandlerModule>) {
+  let handlerPromise: Promise<ReturnType<typeof toWebHandler>> | undefined
+  return (ctx: RouteCtx): Promise<Response> => {
+    handlerPromise ??= loadHandler().then(({ default: handler }) => toWebHandler(handler))
+    return handlerPromise.then((handler) => handler(ctx))
   }
 }
 

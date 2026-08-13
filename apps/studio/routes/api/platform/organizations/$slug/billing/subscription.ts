@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 
-import { toWebHandler } from '@/compat/next/api'
-import nextHandler from '@/pages/api/platform/organizations/[slug]/billing/subscription'
+import { toLazyWebHandler } from '@/compat/next/api'
 
-const handler = toWebHandler(nextHandler)
+const handler = toLazyWebHandler(
+  () => import('@/pages/api/platform/organizations/[slug]/billing/subscription')
+)
 
 export const Route = createFileRoute('/api/platform/organizations/$slug/billing/subscription')({
   server: { handlers: { GET: handler } },

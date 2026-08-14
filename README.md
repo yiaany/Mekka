@@ -26,8 +26,6 @@ downloads, installs, builds, starts the backend, and opens Studio at `http://127
 
 </div>
 
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
-
 ## Why Mekka exists
 
 Supabase taught the market to expect a database, Auth, Storage, Realtime, and a dashboard in the same box. Mekka keeps that product shape and cuts the infrastructure bill underneath it. The current release runs on Bun and SQLite. The database is a file you own. Studio ships in the repo. You can trace the request path without drawing a map of twelve services first.
@@ -46,8 +44,6 @@ Every request carries the full tenant identity, and every user value stays a pre
 Deep PostgreSQL compatibility still belongs on PostgreSQL. Mekka rejects unsupported behavior instead of faking it. Teams that need native RLS, stored procedures, ranges, or a large extension catalog should use the real thing. Everyone else has been paying a Postgres tax for features their app never touches.
 
 > **Mekka is coming for the teams that want Supabase's product and none of its weight.**
-
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
 
 ## Request path
 
@@ -109,8 +105,6 @@ docker build \
 ```
 
 </details>
-
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
 
 ## What's inside
 
@@ -191,8 +185,6 @@ Read the exact contracts:
 [Core matrix](docs/core-capability-matrix.md)
 </details>
 
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
-
 ## Product tour
 
 <div align="center">
@@ -206,8 +198,6 @@ Read the exact contracts:
 </div>
 
 Studio contains code derived from Supabase Studio under Apache License 2.0. Provenance and the reproduced license live in [`apps/studio/UPSTREAM.md`](apps/studio/UPSTREAM.md) and [`apps/studio/UPSTREAM_LICENSE`](apps/studio/UPSTREAM_LICENSE).
-
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
 
 ## Agent access without production roulette
 
@@ -274,8 +264,6 @@ npx mekka mcp-stdio --url https://mekka.example.com/mcp --token-env MEKKA_MCP_TO
 
 </details>
 
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
-
 ## API surface
 
 Every request gates on the tenant tuple `organization / project / environment / branch / generation`.
@@ -338,8 +326,6 @@ Local filesystem and S3-compatible providers, checksummed bounded reads, MIME al
 
 </details>
 
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
-
 ## Security model
 
 <details>
@@ -363,8 +349,6 @@ Security research is welcome. Source access makes review possible; it doesn't pr
 
 </details>
 
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
-
 ## How it compares
 
 | | Mekka | Supabase | DIY on Postgres |
@@ -377,8 +361,6 @@ Security research is welcome. Source access makes review possible; it doesn't pr
 | Works against a checked-out repo offline | Yes | No | No |
 | Native Postgres RLS, RPC, extensions | No, explicit error | Yes | Yes |
 | Local infrastructure cost | One Bun process | Cloud services | Containers, ops |
-
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
 
 ## Run it
 
@@ -403,8 +385,6 @@ bun run dev
 | Backend | `http://127.0.0.1:3001` |
 
 Local state stays in `apps/studio/.local/`.
-
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
 
 ## Verification and development
 
@@ -432,8 +412,6 @@ Local state stays in `apps/studio/.local/`.
 
 Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
 
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
-
 ## Roadmap
 
 <details>
@@ -454,8 +432,6 @@ Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
 Mekka is ready for a controlled local deployment with test data. The engine track through libSQL and PGlite has to land and pass its storage, migration, branch, security, and failure tests before it absorbs a paid cloud's production workload.
 
 </details>
-
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
 
 ## Repository map
 
@@ -481,15 +457,11 @@ Mekka is ready for a controlled local deployment with test data. The engine trac
 | `packages/onboarding-core` | Project provisioning and connect analyzer |
 | `apps/studio/UPSTREAM.md` | Supabase Studio provenance |
 
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
-
 ## Support and security
 
 Use GitHub Issues for reproducible bugs, questions, and feature requests. Report vulnerabilities privately through the process in [`SECURITY.md`](SECURITY.md).
 
 Mekka is under active development. Reviewed paths have tests. A production deployment still needs monitoring, verified backups, deployment hardening, and an independent security review.
-
-<p align="center">✦ &nbsp;✦ &nbsp;✦</p>
 
 ## License
 

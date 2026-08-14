@@ -68,8 +68,13 @@ test('issues CSRF only after Studio authentication', async () => {
 test('relies on TanStack route handlers covering every Next auth-admin mutation method', () => {
   const handlers = authAdminRoute.options?.server?.handlers
   assert.ok(handlers)
+  assert.equal(typeof handlers, 'object')
   for (const method of ['GET', 'POST', 'PUT', 'DELETE'] as const) {
-    assert.equal(typeof handlers[method], 'function', `${method} handler missing`)
+    assert.equal(
+      typeof (handlers as Partial<Record<(typeof method), unknown>>)[method],
+      'function',
+      `${method} handler missing`
+    )
   }
 })
 

@@ -11,6 +11,7 @@ const BLOCKED_API_SEGMENTS = [
   "/config/postgres",
   "/config/postgrest",
   "/config/pgbouncer",
+  "/run-lints",
 ] as const;
 
 export function isMekkaSupportedApiPath(pathname: string): boolean {

@@ -142,6 +142,12 @@ try {
   if (typeof agentGrant.token !== "string" || typeof agentGrant.expiresAt !== "number") {
     throw new Error("Production Auth did not issue a temporary Agent Access token.");
   }
+  const agentLifetimeMs = agentGrant.expiresAt - Date.now();
+  if (agentLifetimeMs < 55 * 60_000 || agentLifetimeMs > 60 * 60_000) {
+    throw new Error(
+      `Production Auth issued an invalid Agent Access lifetime: ${agentLifetimeMs}ms.`,
+    );
+  }
   const metadata = await requestJson("/.well-known/oauth-protected-resource/mcp");
   if (metadata.resource !== `${baseUrl}/mcp`) {
     throw new Error("MCP protected-resource metadata used the wrong public endpoint.");

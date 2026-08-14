@@ -724,6 +724,12 @@ export default defineConfig(({ command, mode }) => {
       },
     }),
     optimizeDeps: {
+      // Studio's route graph is large enough that Vite's automatic dev
+      // dependency discovery can consume multiple gigabytes while opening the
+      // first page. Serve dependencies through the normal transform pipeline
+      // instead; production builds are unaffected and explicit entries can be
+      // added here if a dependency ever requires pre-bundling.
+      noDiscovery: command === 'serve',
       // graphiql's Vite worker setup (swapped in for the webpack one by the
       // `graphiqlViteWorkers` plugin above) imports Monaco's workers with
       // Vite's `?worker` suffix. The dep optimizer can't load `?worker` ids

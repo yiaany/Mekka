@@ -60,7 +60,7 @@ touches.
 - **Branches.** Disposable database previews, schema validation, restore points, and guarded
   production promotion.
 - **Studio.** Tables, SQL, users, providers, files, agent grants, previews, and approvals.
-- **Agent Access.** Five-minute scoped MCP tokens with read access by default and preview-bound writes.
+- **Agent Access.** One-hour scoped MCP tokens with read access by default and preview-bound writes.
 - **Supabase compatibility.** A tested `supabase-js` Data API subset for common CRUD flows.
 
 The compatibility claim stops where the tests stop. Arrays, ranges, native PostgreSQL RLS, RPC,
@@ -276,7 +276,8 @@ bun run check
 
 | Command | Purpose |
 | --- | --- |
-| `bun run dev` | Start Studio and the backend |
+| `bun run dev` | Build the Studio SPA, then start the low-memory Studio and backend runtime |
+| `bun run --cwd apps/studio dev:hmr` | Start the memory-heavier Vite HMR server for Studio development |
 | `bun run test` | Run the core Bun tests |
 | `bun run test:workspaces` | Run workspace test suites |
 | `bun run test:studio:fork` | Run Studio integration tests |

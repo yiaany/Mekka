@@ -59,8 +59,8 @@ export function resolveDispatch(
   )
   return {
     packageManager: resolveBunExecutable(env),
-    script: `${target}:${framework}`,
-    startBackend: target === 'dev',
+    script: target === 'dev' && framework === 'tanstack' ? 'dev:stable' : `${target}:${framework}`,
+    startBackend: target === 'dev' && framework === 'next',
     studioPort,
     backendPort,
   }
@@ -143,7 +143,7 @@ export function runDispatch(target, options = {}) {
     env,
     fileEnv
   )
-  const internalProxyToken = startBackend ? resolveInternalProxyToken(env, fileEnv) : undefined
+  const internalProxyToken = target === 'dev' ? resolveInternalProxyToken(env, fileEnv) : undefined
   const backendUrl = `http://127.0.0.1:${backendPort}`
   const studioUrl = `http://127.0.0.1:${studioPort}`
   const studioHealthUrl = `${studioUrl}/api/platform/sqlite-meta/local/schema/health`
@@ -155,7 +155,7 @@ export function runDispatch(target, options = {}) {
   let readiness = null
   let stopping = false
   const localBackend = startBackend
-    ? spawnImpl(packageManager, ['--watch', 'src/local.ts'], {
+    ? spawnImpl(packageManager, ['--smol', '--watch', 'src/local.ts'], {
         cwd: sqliteMetaRoot,
         stdio: 'inherit',
         env: {
@@ -177,21 +177,26 @@ export function runDispatch(target, options = {}) {
       clearTimeoutImpl: options.clearTimeoutImpl,
       signal: readinessAbort.signal,
     }
-    const backendReady = waitForHttp(backendUrl, {
-      ...sharedOptions,
-      attempts: options.readinessAttempts ?? 120,
-      intervalMs: options.readinessIntervalMs ?? 250,
-      requestTimeoutMs: options.requestTimeoutMs ?? 1_000,
-    }).then((ready) => {
-      if (ready) log('Backend ready')
-      return ready
-    })
+    const backendReady = startBackend
+      ? waitForHttp(backendUrl, {
+          ...sharedOptions,
+          attempts: options.readinessAttempts ?? 120,
+          intervalMs: options.readinessIntervalMs ?? 250,
+          requestTimeoutMs: options.requestTimeoutMs ?? 1_000,
+        }).then((ready) => {
+          if (ready) log('Backend ready')
+          return ready
+        })
+      : Promise.resolve(true)
     return backendReady.then(async (isBackendReady) => {
       const isStudioReady =
         isBackendReady && !readinessAbort.signal.aborted
           ? await waitForHttp(studioHealthUrl, {
               ...sharedOptions,
-              attempts: options.studioReadinessAttempts ?? options.readinessAttempts ?? 6,
+              // The low-memory dev path performs a production SPA build
+              // before opening the listener. Keep the backend probe fast,
+              // but allow enough time for that one-time compilation.
+               attempts: options.studioReadinessAttempts ?? options.readinessAttempts ?? 120,
               intervalMs: options.studioReadinessIntervalMs ?? options.readinessIntervalMs ?? 2_000,
               requestTimeoutMs: options.studioRequestTimeoutMs ?? 60_000,
               acceptResponse: (response) => response.ok,
@@ -217,7 +222,7 @@ export function runDispatch(target, options = {}) {
     child = spawnImpl(packageManager, ['run', script], {
       stdio: 'inherit',
       env:
-        localBackend === null
+        target !== 'dev'
           ? env
           : {
               ...env,
@@ -230,7 +235,7 @@ export function runDispatch(target, options = {}) {
               STUDIO_PORT: studioPort,
             },
     })
-    readiness = startBackend ? monitorReadiness() : null
+    readiness = target === 'dev' ? monitorReadiness() : null
     child.on('error', (err) => {
       error('dispatch.js: failed to spawn child:', err)
       stopping = true

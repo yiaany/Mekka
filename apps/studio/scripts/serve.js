@@ -210,17 +210,152 @@ async function proxySqliteMeta(req, res, targetUrl) {
   request.headers.set('x-mekka-generation', process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? '1')
   const controller = new AbortController()
   const abort = () => controller.abort()
+  let timedOut = false
   req.once('aborted', abort)
   res.once('close', abort)
-  const timeout = setTimeout(abort, 10_000)
+  const timeout = setTimeout(() => {
+    timedOut = true
+    abort()
+  }, 10_000)
   try {
     const response = await fetch(request, { signal: controller.signal })
     await pipeWebResponse(response, res)
+  } catch (error) {
+    if (!timedOut) throw error
+    if (!res.headersSent) {
+      res.statusCode = 504
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({ error: { message: 'SQLite Meta request timed out' } }))
+    }
   } finally {
     clearTimeout(timeout)
     req.removeListener('aborted', abort)
     res.removeListener('close', abort)
   }
+}
+
+async function serveHealth(pathname, res) {
+  if (pathname === '/api/health/live') {
+    res.statusCode = 200
+    res.setHeader('content-type', 'application/json; charset=utf-8')
+    res.end(JSON.stringify({ status: 'ok' }))
+    return true
+  }
+  if (pathname !== '/api/health/ready') return false
+
+  const backend = process.env.STUDIO_BACKEND_API_URL
+  if (!backend) {
+    sendUnavailable(res)
+    return true
+  }
+  const headers = new Headers({
+    accept: 'application/json',
+    'x-mekka-organization-id': process.env.NEXT_PUBLIC_STUDIO_ORGANIZATION_ID ?? 'org-local',
+    'x-mekka-project-id': 'local',
+    'x-mekka-environment-id': process.env.NEXT_PUBLIC_STUDIO_ENVIRONMENT_ID ?? 'env-local',
+    'x-mekka-branch-id': process.env.NEXT_PUBLIC_STUDIO_BRANCH_ID ?? 'branch-main',
+    'x-mekka-generation': process.env.NEXT_PUBLIC_STUDIO_GENERATION ?? '1',
+  })
+  if (internalProxyToken) headers.set('x-mekka-internal-proxy', internalProxyToken)
+  try {
+    const response = await fetch(`${backend.replace(/\/$/, '')}/schema/health`, {
+      headers,
+      signal: AbortSignal.timeout(2_000),
+    })
+    if (!response.ok) {
+      sendUnavailable(res)
+      return true
+    }
+    res.statusCode = 200
+    res.setHeader('content-type', 'application/json; charset=utf-8')
+    res.setHeader('cache-control', 'no-store')
+    res.end(JSON.stringify({ status: 'ready' }))
+  } catch {
+    sendUnavailable(res)
+  }
+  return true
+}
+
+function sendUnavailable(res) {
+  res.statusCode = 503
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.setHeader('cache-control', 'no-store')
+  res.end(JSON.stringify({ status: 'unavailable' }))
+}
+
+function serveLocalBootstrapApi(pathname, req, res) {
+  if ((req.method ?? 'GET') !== 'GET') return false
+  const projectName = process.env.DEFAULT_PROJECT_NAME ?? 'Local Project'
+  const organizationName = process.env.DEFAULT_ORGANIZATION_NAME ?? 'Local Organization'
+  const publicUrl = new URL(process.env.MEKKA_PUBLIC_URL ?? 'http://localhost:8000')
+  const project = {
+    id: 1,
+    ref: 'local',
+    name: process.env.CURRENT_CLI_VERSION ? 'Mekka Studio (CLI)' : projectName,
+    organization_id: 1,
+    cloud_provider: 'localhost',
+    status: 'ACTIVE_HEALTHY',
+    region: 'local',
+    inserted_at: '2021-08-02T06:40:40.646Z',
+    connectionString: '',
+    restUrl: `${publicUrl.origin}/rest/v1/`,
+  }
+  let payload
+  if (pathname === '/api/platform/projects/local') payload = project
+  else if (pathname === '/api/platform/profile') {
+    payload = {
+      id: 1,
+      primary_email: 'local-admin@example.invalid',
+      username: 'local-admin',
+      first_name: 'Local',
+      last_name: 'Admin',
+      organizations: [
+        {
+          id: 1,
+          name: organizationName,
+          slug: 'default-org-slug',
+          billing_email: 'billing@example.invalid',
+          projects: [project],
+        },
+      ],
+    }
+  } else if (pathname === '/api/platform/organizations') {
+    payload = [
+      {
+        id: 1,
+        name: organizationName,
+        slug: 'default-org-slug',
+        billing_email: 'billing@example.invalid',
+        plan: { id: 'enterprise', name: 'Enterprise' },
+      },
+    ]
+  } else if (pathname === '/api/enabled-features-overrides') payload = { disabled_features: [] }
+  else if (pathname === '/api/get-deployment-commit') {
+    payload = { commitSha: process.env.VERCEL_GIT_COMMIT_SHA ?? 'development', commitTime: 'unknown' }
+  } else if (pathname === '/api/platform/integrations/github/authorization') payload = null
+  else return false
+
+  res.statusCode = 200
+  res.setHeader('content-type', 'application/json; charset=utf-8')
+  res.setHeader('cache-control', 'no-store')
+  res.end(JSON.stringify(payload))
+  return true
+}
+
+function isUnsupportedLocalApi(pathname) {
+  if (!pathname.startsWith('/api/')) return false
+  return (
+    pathname.startsWith('/api/ai/') ||
+    pathname.startsWith('/api/v1/') ||
+    pathname.startsWith('/api/platform/pg-meta/') ||
+    pathname.startsWith('/api/platform/auth/') ||
+    pathname.startsWith('/api/platform/storage/') ||
+    pathname.includes('/api-keys') ||
+    pathname.includes('/run-lints') ||
+    pathname.includes('/config/postgres') ||
+    pathname.includes('/config/postgrest') ||
+    pathname.includes('/config/pgbouncer')
+  )
 }
 
 async function serveShell(res) {
@@ -360,6 +495,14 @@ createServer(async (req, res) => {
       res.setHeader('www-authenticate', 'Basic realm="Mekka Studio", charset="UTF-8"')
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.end(JSON.stringify({ error: { message: 'Authentication required' } }))
+      return
+    }
+    if (await serveHealth(pathname, res)) return
+    if (serveLocalBootstrapApi(pathname, req, res)) return
+    if (isUnsupportedLocalApi(pathname)) {
+      res.statusCode = 404
+      res.setHeader('content-type', 'application/json; charset=utf-8')
+      res.end(JSON.stringify({ error: { message: 'Not supported by Mekka Studio' } }))
       return
     }
     if (await serveStatic(req, res)) return

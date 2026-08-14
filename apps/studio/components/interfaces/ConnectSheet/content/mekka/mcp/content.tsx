@@ -39,7 +39,7 @@ function MekkaMcpContent() {
       <Admonition
         type="default"
         title="Two deliberate steps"
-        description="Sign in on the Register / Sign in page and copy the five-minute Agent Access token. Then replace the placeholder below and add the configuration to your MCP client. Mekka will offer true one-click authorization only after a complete OAuth consent flow exists."
+        description="Sign in on the Register / Sign in page and copy the one-hour Agent Access token. Then replace the placeholder below and add the configuration to your MCP client. Mekka will offer true one-click authorization only after a complete OAuth consent flow exists."
       />
 
       <div className="overflow-hidden rounded-lg border bg-surface-100">

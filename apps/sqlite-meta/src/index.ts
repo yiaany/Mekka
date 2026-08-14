@@ -88,7 +88,10 @@ async function getMcpRuntime(): Promise<LocalMcpRuntime> {
       beforePreviewDelete: closeTenantStorage,
     });
     mcpRuntime = runtime;
-    previewCleanupTimer = setInterval(() => void runtime.cleanupExpired().catch(() => {}), 60_000);
+    previewCleanupTimer = setInterval(() => {
+      agentTokens.cleanupExpired();
+      void runtime.cleanupExpired().catch(() => {});
+    }, 60_000);
     previewCleanupTimer.unref();
     return runtime;
   });
@@ -222,7 +225,10 @@ const app = createSqliteMetaApp({
       const verified = await auth.verifyAccessToken(accessToken);
       const mode = await readAgentMode(request);
       if (mode === "write") requireInternalProxy(request);
-      const expiresAt = Math.min(verified.expiresAt * 1_000, Date.now() + agentAccessTtlMs);
+      // Agent grants are independently revocable and are checked against the
+      // source application session on every MCP request. They do not need to
+      // inherit the shorter application JWT expiry.
+      const expiresAt = Date.now() + agentAccessTtlMs;
       if (expiresAt <= Date.now() || !auth.isSessionActive(verified.sessionId, verified.userId)) {
         return Response.json({ error: "auth" }, { status: 401 });
       }

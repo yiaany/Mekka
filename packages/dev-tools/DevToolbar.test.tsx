@@ -50,6 +50,9 @@ async function renderFullToolbar() {
   )
 }
 
+// Each case resets the module graph so process.env is evaluated afresh. The
+// toolbar's production dependency graph can take longer than Vitest's 5s
+// default on a cold or loaded worker.
 describe('DevToolbar', () => {
   beforeEach(() => {
     const store = new Map<string, string>()
@@ -360,7 +363,7 @@ describe('DevToolbar', () => {
       })
     })
   })
-})
+}, 30_000)
 
 describe('DevToolbar utils', () => {
   describe('safeJsonParse', () => {

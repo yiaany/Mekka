@@ -5,17 +5,13 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { LocalDropdown } from './LocalDropdown'
 
-const { mockRouter, mockSetTheme, mockSetLastRoute, mockToggleFeaturePreviewModal } = vi.hoisted(
-  () => ({
-    mockRouter: {
-      pathname: '/project/[ref]/editor',
-      asPath: '/project/local/editor',
-    },
-    mockSetTheme: vi.fn(),
-    mockSetLastRoute: vi.fn(),
-    mockToggleFeaturePreviewModal: vi.fn(),
-  })
-)
+const { mockRouter, mockSetTheme } = vi.hoisted(() => ({
+  mockRouter: {
+    pathname: '/project/[ref]/editor',
+    asPath: '/project/local/editor',
+  },
+  mockSetTheme: vi.fn(),
+}))
 
 vi.mock('next/router', () => ({
   useRouter: () => mockRouter,

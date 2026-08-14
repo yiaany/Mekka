@@ -66,6 +66,7 @@ test('uses the absolute Bun executable passed by the CLI', () => {
 
 test('defaults to the TanStack scripts and keeps Next and ports configurable', () => {
   assert.equal(resolveDispatch('start', {}).script, 'start:tanstack')
+  assert.equal(resolveDispatch('dev', {}).script, 'dev:stable')
   const next = resolveDispatch('dev', {
     STUDIO_FRAMEWORK: 'next',
     STUDIO_PORT: '9000',
@@ -79,7 +80,7 @@ test('defaults to the TanStack scripts and keeps Next and ports configurable', (
   assert.throws(() => resolveDispatch('dev', { STUDIO_PORT: 'nope' }), /STUDIO_PORT/)
 })
 
-test('starts TanStack Studio after backend spawn and reports truthful readiness milestones', async () => {
+test('starts the combined low-memory runtime and reports truthful readiness milestones', async () => {
   const calls = []
   const children = []
   const requests = []
@@ -107,41 +108,27 @@ test('starts TanStack Studio after backend spawn and reports truthful readiness 
   })
 
   assert.equal(calls.length, 1)
-  assert.equal(result.child, null)
-  children[0].emit('spawn')
-  assert.equal(calls.length, 2)
-  assert.deepEqual(calls[1].args, ['run', 'dev:tanstack'])
-  assert.equal(calls[1].options.env.STUDIO_BACKEND_API_URL, 'http://127.0.0.1:4001')
-  assert.equal(calls[1].options.env.STUDIO_PORT, '9000')
+  assert.deepEqual(calls[0].args, ['run', 'dev:stable'])
+  assert.equal(calls[0].options.env.STUDIO_BACKEND_API_URL, 'http://127.0.0.1:4001')
+  assert.equal(calls[0].options.env.STUDIO_PORT, '9000')
   assert.equal(calls[0].options.env.SQLITE_META_PORT, '4001')
   assert.equal(calls[0].options.env.AUTH_PUBLIC_ORIGIN, 'http://127.0.0.1:9000')
   assert.equal(calls[0].options.env.MEKKA_LOCAL_DEV, '1')
-  assert.equal(calls[1].options.env.MEKKA_LOCAL_DEV, '1')
-  assert.equal(calls[0].options.cwd, path.resolve('apps/sqlite-meta'))
   assert.match(calls[0].options.env.MEKKA_INTERNAL_PROXY_TOKEN, /^[A-Za-z0-9_-]{43}$/)
-  assert.equal(
-    calls[1].options.env.MEKKA_INTERNAL_PROXY_TOKEN,
-    calls[0].options.env.MEKKA_INTERNAL_PROXY_TOKEN
-  )
   assert.equal(calls[0].options.stdio, 'inherit')
-  assert.equal(calls[1].options.stdio, 'inherit')
   assert.equal(await result.readiness, true)
-  assert.deepEqual(logs, ['Studio building', 'Backend ready', 'Mekka ready at http://127.0.0.1:9000'])
+  assert.deepEqual(logs, ['Studio building', 'Mekka ready at http://127.0.0.1:9000'])
   assert.deepEqual(
     requests.map(({ url }) => url).sort(),
-    [
-      'http://127.0.0.1:4001',
-      'http://127.0.0.1:9000/api/platform/sqlite-meta/local/schema/health',
-    ]
+    ['http://127.0.0.1:9000/api/platform/sqlite-meta/local/schema/health']
   )
   assert.ok(requests.every(({ options }) => Object.keys(options).join(',') === 'signal'))
-  children[1].emit('exit', 0, null)
   children[0].emit('exit', 0, null)
   assert.equal(process.exitCode, 0)
   process.exitCode = undefined
 })
 
-test('propagates AUTH_PUBLIC_ORIGIN from env files to both dev children', () => {
+test('propagates AUTH_PUBLIC_ORIGIN from env files to the combined dev runtime', () => {
   const calls = []
   const children = []
   runDispatch('dev', {
@@ -157,10 +144,7 @@ test('propagates AUTH_PUBLIC_ORIGIN from env files to both dev children', () => 
       return child
     },
   })
-  children[0].emit('spawn')
   assert.equal(calls[0].options.env.AUTH_PUBLIC_ORIGIN, 'https://mekka.local.example')
-  assert.equal(calls[1].options.env.AUTH_PUBLIC_ORIGIN, 'https://mekka.local.example')
-  children[1].emit('exit', 0, null)
   children[0].emit('exit', 0, null)
   process.exitCode = undefined
 })
@@ -230,7 +214,7 @@ test('waits for the backend before starting a long-lived Studio readiness probe'
     releaseBackend = resolve
   })
   const result = runDispatch('dev', {
-    env: { MEKKA_BUN_EXECUTABLE: path.resolve('bun') },
+    env: { MEKKA_BUN_EXECUTABLE: path.resolve('bun'), STUDIO_FRAMEWORK: 'next' },
     fileEnv: {},
     registerSignals: false,
     logImpl: () => {},
@@ -255,7 +239,6 @@ test('waits for the backend before starting a long-lived Studio readiness probe'
     'http://127.0.0.1:3001',
     'http://127.0.0.1:8082/api/platform/sqlite-meta/local/schema/health',
   ])
-  children[1].emit('exit', 0, null)
   children[0].emit('exit', 0, null)
   process.exitCode = undefined
 })
@@ -281,10 +264,8 @@ test('stops readiness polling when either dev child exits', async () => {
     },
   })
 
-  children[0].emit('spawn')
-  children[1].emit('exit', 1, null)
+  children[0].emit('exit', 1, null)
   assert.equal(await result.readiness, false)
-  assert.equal(children[0].killed, true)
   assert.deepEqual(errors, [])
   process.exitCode = undefined
 })
@@ -313,7 +294,6 @@ test('marks readiness timeout as failure and terminates both dev process trees',
     },
   })
 
-  children[0].emit('spawn')
   assert.equal(await result.readiness, false)
   assert.equal(process.exitCode, 1)
   assert.deepEqual(new Set(terminated), new Set(children))
@@ -361,14 +341,14 @@ test('rejects short or malformed explicit internal proxy tokens before spawning'
   )
 })
 
-test('does not start Studio when the local backend fails to spawn', () => {
+test('does not start Studio when the Next local backend fails to spawn', () => {
   const backend = fakeChild()
   let calls = 0
   const originalError = console.error
   console.error = () => {}
   try {
     runDispatch('dev', {
-      env: { MEKKA_BUN_EXECUTABLE: path.resolve('missing-bun') },
+        env: { MEKKA_BUN_EXECUTABLE: path.resolve('missing-bun'), STUDIO_FRAMEWORK: 'next' },
       fileEnv: {},
       registerSignals: false,
       spawnImpl() {

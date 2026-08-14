@@ -32,7 +32,6 @@ export default defineConfig({
     // CI runs the full jsdom suite alongside all workspaces. Two workers avoid
     // saturating the machine while keeping the suite practical to run.
     maxWorkers: process.env.CI === 'true' ? 2 : undefined,
-    minWorkers: process.env.CI === 'true' ? 1 : undefined,
     environment: 'jsdom', // TODO(kamil): This should be set per test via header in .tsx files only
     setupFiles: [
       resolve(dirname, './tests/setup/polyfills.ts'),

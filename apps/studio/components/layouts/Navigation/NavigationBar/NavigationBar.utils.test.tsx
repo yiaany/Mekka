@@ -39,42 +39,25 @@ describe('generateToolRoutes', () => {
 })
 
 describe('generateProductRoutes', () => {
-  it('includes all product routes when all features are enabled', () => {
+  it('includes only auth by default (other products are fork-disabled)', () => {
+    const routes = generateProductRoutes(REF, activeProject)
+    expect(keys(routes)).toEqual(['auth'])
+  })
+
+  it('keeps fork-disabled products out even when features are enabled', () => {
     const routes = generateProductRoutes(REF, activeProject, {
       auth: true,
+      database: true,
       storage: true,
       edgeFunctions: true,
       realtime: true,
     })
-    expect(keys(routes)).toEqual(['database', 'auth', 'storage', 'functions', 'realtime'])
-  })
-
-  it('includes all product routes by default (features default to true)', () => {
-    const routes = generateProductRoutes(REF, activeProject)
-    expect(keys(routes)).toEqual(['database', 'auth', 'storage', 'functions', 'realtime'])
+    expect(keys(routes)).toEqual(['auth'])
   })
 
   it('excludes auth when auth feature is disabled', () => {
     const routes = generateProductRoutes(REF, activeProject, { auth: false })
-    expect(keys(routes)).not.toContain('auth')
-
-    expect(keys(routes)).toContain('database')
-    expect(keys(routes)).toContain('storage')
-  })
-
-  it('excludes storage when storage feature is disabled', () => {
-    const routes = generateProductRoutes(REF, activeProject, { storage: false })
-    expect(keys(routes)).not.toContain('storage')
-  })
-
-  it('excludes edge functions when edgeFunctions feature is disabled', () => {
-    const routes = generateProductRoutes(REF, activeProject, { edgeFunctions: false })
-    expect(keys(routes)).not.toContain('functions')
-  })
-
-  it('excludes realtime when realtime feature is disabled', () => {
-    const routes = generateProductRoutes(REF, activeProject, { realtime: false })
-    expect(keys(routes)).not.toContain('realtime')
+    expect(keys(routes)).toEqual([])
   })
 
   it('links auth to overview page when authOverviewPage is enabled', () => {
@@ -88,83 +71,22 @@ describe('generateProductRoutes', () => {
     const authRoute = routes.find((r) => r.key === 'auth')
     expect(authRoute?.link).toBe(`/project/${REF}/auth/users`)
   })
-
-  it('always includes database even when all optional features are disabled', () => {
-    const routes = generateProductRoutes(REF, activeProject, {
-      auth: false,
-      storage: false,
-      edgeFunctions: false,
-      realtime: false,
-    })
-    expect(keys(routes)).toEqual(['database'])
-  })
 })
 
 describe('generateOtherRoutes', () => {
-  it('always includes advisors, logs, and integrations', () => {
+  it('returns no routes in the local fork (advisors, logs, integrations, observability disabled)', () => {
     const routes = generateOtherRoutes(REF, activeProject)
-    expect(keys(routes)).toContain('advisors')
-    expect(keys(routes)).toContain('logs')
-    expect(keys(routes)).toContain('integrations')
+    expect(keys(routes)).toEqual([])
   })
 
-  it('includes observability when reports are enabled', () => {
+  it('keeps observability out even when reports are enabled', () => {
     const routes = generateOtherRoutes(REF, activeProject, { showReports: true })
-    expect(keys(routes)).toContain('observability')
-  })
-
-  it('excludes observability when reports are disabled', () => {
-    const routes = generateOtherRoutes(REF, activeProject, { showReports: false })
     expect(keys(routes)).not.toContain('observability')
-  })
-
-  it('links observability to the query performance page in self-hosted mode', () => {
-    // NEXT_PUBLIC_IS_PLATFORM is false in .env.test, so IS_PLATFORM is false here
-    const routes = generateOtherRoutes(REF, activeProject, { showReports: true })
-    const observabilityRoute = routes.find((r) => r.key === 'observability')
-    expect(observabilityRoute?.link).toBe(`/project/${REF}/query-performance`)
-  })
-
-  it('does not include API Docs nav item', () => {
-    const routes = generateOtherRoutes(REF, activeProject)
-    expect(keys(routes)).not.toContain('api')
-  })
-
-  it('links logs to unified logs page when unifiedLogs is enabled', () => {
-    const routes = generateOtherRoutes(REF, activeProject, { unifiedLogs: true })
-    const logsRoute = routes.find((r) => r.key === 'logs')
-    expect(logsRoute?.link).toBe(`/project/${REF}/logs`)
-  })
-
-  it('links logs to explorer page by default', () => {
-    const routes = generateOtherRoutes(REF, activeProject)
-    const logsRoute = routes.find((r) => r.key === 'logs')
-    expect(logsRoute?.link).toBe(`/project/${REF}/logs/explorer`)
-  })
-
-  it('points links to building URL when project is building', () => {
-    const routes = generateOtherRoutes(REF, buildingProject, { showReports: true })
-    const observabilityRoute = routes.find((r) => r.key === 'observability')
-    expect(observabilityRoute?.link).toBe(`/project/${REF}`)
-  })
-
-  it('marks routes as disabled when project is not active', () => {
-    const routes = generateOtherRoutes(REF, inactiveProject)
-    const advisorsRoute = routes.find((r) => r.key === 'advisors')
-    expect(advisorsRoute?.disabled).toBe(true)
   })
 })
 
 describe('generateSettingsRoutes', () => {
-  it('links to general settings', () => {
-    const routes = generateSettingsRoutes(REF)
-    const settingsRoute = routes.find((r) => r.key === 'settings')
-    expect(settingsRoute?.link).toBe(`/project/${REF}/settings/general`)
-  })
-
-  it('returns a link as false when ref is undefined', () => {
-    const routes = generateSettingsRoutes(undefined)
-    const settingsRoute = routes.find((r) => r.key === 'settings')
-    expect(settingsRoute?.link).toBe(undefined)
+  it('returns no routes when settings are fork-disabled', () => {
+    expect(generateSettingsRoutes(REF)).toEqual([])
   })
 })

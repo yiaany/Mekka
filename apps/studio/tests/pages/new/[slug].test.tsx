@@ -909,7 +909,7 @@ describe('project creation wizard', () => {
       await waitFor(() =>
         expect(screen.getByLabelText('Postgres version')).toHaveTextContent('17.9.9.999')
       )
-    })
+    }, 60_000)
 
     test('restores the standard Postgres configuration when high availability is disabled', async () => {
       mockWizardEndpoints()

@@ -95,10 +95,10 @@ describe('timeout', () => {
 })
 
 describe('getURL', () => {
-  it('should return prod url by default', () => {
+  it('should return the local Studio URL by default', () => {
     const result = getURL()
 
-    expect(result).toEqual('https://supabase.com/dashboard')
+    expect(result).toEqual('http://localhost:8082')
   })
 })
 

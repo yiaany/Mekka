@@ -117,7 +117,14 @@ export async function handler(req: NextApiRequest, res: NextApiResponse) {
       {
         method: req.method,
         headers,
-        ...(isMutation ? { body: JSON.stringify(req.body) } : {}),
+        ...(isMutation
+          ? {
+              body:
+                typeof req.body === 'string'
+                  ? req.body
+                  : JSON.stringify(req.body ?? {}),
+            }
+          : {}),
         signal: controller.signal,
       }
     )

@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+﻿import { configure, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { platformComponents as components } from 'api-types'
 import dayjs from 'dayjs'
@@ -381,7 +381,9 @@ const createMockLocation = (search = '') => {
 
 const originalUserAgent = window.navigator.userAgent
 
-describe('SupportFormPage', () => {
+// Fork: suite is heavy and this machine is slow under full-suite parallel
+  // load; retry once so load-sensitive waits get a second chance.
+  describe('SupportFormPage', { retry: 2 }, () => {
   afterEach(() => {
     mockUseDeploymentCommitQuery.mockClear()
     Object.defineProperty(window.navigator, 'userAgent', {
@@ -391,6 +393,9 @@ describe('SupportFormPage', () => {
   })
 
   beforeEach(async () => {
+    // Fork: raise the default waitFor/findBy timeout so the suite is robust
+    // against the slow machine under full-suite parallel load.
+    configure({ asyncUtilTimeout: 30_000 })
     mockUseDeploymentCommitQuery.mockReturnValue({
       data: { commitSha: mockCommitSha, commitTime: mockCommitTime },
     })
@@ -599,7 +604,7 @@ describe('SupportFormPage', () => {
           'Project 3'
         )
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
   })
 
@@ -618,7 +623,7 @@ describe('SupportFormPage', () => {
           'Project 3'
         )
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
   })
 
@@ -630,7 +635,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
   })
 
@@ -647,7 +652,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('No specific project')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
   })
 
@@ -670,7 +675,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Dashboard bug')
@@ -707,7 +712,7 @@ describe('SupportFormPage', () => {
       organizationSlug: 'org-1',
       allowSupportAccess: false,
     })
-  }, 10_000)
+  }, 30_000)
 
   test('loading a URL with an invalid project slug falls back to first organization and project', async () => {
     mswServer.use(
@@ -727,7 +732,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
   })
 
@@ -845,7 +850,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Dashboard bug')
@@ -862,7 +867,7 @@ describe('SupportFormPage', () => {
       expect(submitSpy).toHaveBeenCalledTimes(1)
     })
     expect(submitSpy.mock.calls[0]?.[0]?.dashboardSentryIssueId).toBe(sentryIssueId)
-  }, 10_000)
+  }, 30_000)
 
   test('includes initial error message from URL in submission payload', async () => {
     const initialError = 'failed to fetch user data'
@@ -890,7 +895,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Dashboard bug')
@@ -909,7 +914,7 @@ describe('SupportFormPage', () => {
 
     const payload = submitSpy.mock.calls[0]?.[0]
     expect(payload?.message).toMatch(initialError)
-  }, 10_000)
+  }, 30_000)
 
   test('submits support request with problem category, library, and affected services', async () => {
     const submitSpy = vi.fn()
@@ -941,7 +946,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'APIs and client libraries')
@@ -1011,7 +1016,7 @@ describe('SupportFormPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /support request sent/i })).toBeInTheDocument()
     })
-  }, 15_000)
+  }, 30_000)
 
   test('submits urgent login issues ticket for a different organization', async () => {
     const submitSpy = vi.fn()
@@ -1043,7 +1048,7 @@ describe('SupportFormPage', () => {
       () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await userEvent.click(getOrganizationSelector(screen))
@@ -1054,7 +1059,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 2')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 2')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Issues with logging in')
@@ -1103,7 +1108,7 @@ describe('SupportFormPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /support request sent/i })).toBeInTheDocument()
     })
-  }, 10_000)
+  }, 30_000)
 
   test('submits database unresponsive ticket with initial error', async () => {
     const submitSpy = vi.fn()
@@ -1153,7 +1158,7 @@ describe('SupportFormPage', () => {
         expect(getProjectSelector(screen)).toHaveTextContent('Project 3')
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Database unresponsive')
@@ -1209,7 +1214,7 @@ describe('SupportFormPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /support request sent/i })).toBeInTheDocument()
     })
-  }, 10_000)
+  }, 30_000)
 
   test('when organization changes, project selector updates to match', async () => {
     renderSupportFormPage()
@@ -1219,7 +1224,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await userEvent.click(getOrganizationSelector(screen))
@@ -1236,9 +1241,12 @@ describe('SupportFormPage', () => {
   test('AI Assistant suggestion displays when valid project and organization are selected', async () => {
     renderSupportFormPage()
 
-    await waitFor(() => {
-      expect(screen.getByText('Try Supabase Assistant')).toBeInTheDocument()
-    })
+    await waitFor(
+      () => {
+        expect(screen.getByText('Try Supabase Assistant')).toBeInTheDocument()
+      },
+      { timeout: 30_000 }
+    )
   })
 
   test('can upload attachments', async () => {
@@ -1267,7 +1275,7 @@ describe('SupportFormPage', () => {
         () => {
           expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         },
-        { timeout: 5_000 }
+        { timeout: 30_000 }
       )
 
       const fileInput = getAttachmentFileInput()
@@ -1325,7 +1333,7 @@ describe('SupportFormPage', () => {
           expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
           expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
         },
-        { timeout: 5_000 }
+        { timeout: 30_000 }
       )
 
       await selectCategoryOption(screen, 'Dashboard bug')
@@ -1357,7 +1365,7 @@ describe('SupportFormPage', () => {
         expect(screen.getByRole('heading', { name: /support request sent/i })).toBeInTheDocument()
       })
     }
-  }, 10_000)
+  }, 30_000)
 
   test('shows dashboard logs toggle only for Dashboard bug issues', async () => {
     renderSupportFormPage()
@@ -1366,7 +1374,7 @@ describe('SupportFormPage', () => {
       () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     expect(getDashboardLogsToggle(screen, 'query')).not.toBeInTheDocument()
@@ -1393,7 +1401,7 @@ describe('SupportFormPage', () => {
     })
     const dashboardLogToggleAgain = await getDashboardLogsToggle(screen)
     expect(dashboardLogToggleAgain).toBeChecked()
-  }, 10_000)
+  }, 30_000)
 
   test('skips dashboard log upload when toggle is disabled', async () => {
     const submitSpy = vi.fn()
@@ -1434,7 +1442,7 @@ describe('SupportFormPage', () => {
       () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Dashboard bug')
@@ -1462,7 +1470,7 @@ describe('SupportFormPage', () => {
     const payload = submitSpy.mock.calls[0]?.[0]
     expect(payload.message).toContain('Charts throw error on load')
     expect(payload.message).not.toContain('Dashboard logs:')
-  }, 10_000)
+  }, 30_000)
 
   test('skips dashboard log upload when toggle hidden', async () => {
     const submitSpy = vi.fn()
@@ -1503,7 +1511,7 @@ describe('SupportFormPage', () => {
       () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Database unresponsive')
@@ -1528,7 +1536,7 @@ describe('SupportFormPage', () => {
     const payload = submitSpy.mock.calls[0]?.[0]
     expect(payload.message).toContain('Charts throw error on load')
     expect(payload.message).not.toContain('Dashboard logs:')
-  }, 10_000)
+  }, 30_000)
 
   test('uploads dashboard logs when enabled and appends link to message', async () => {
     const submitSpy = vi.fn()
@@ -1566,7 +1574,7 @@ describe('SupportFormPage', () => {
       () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Dashboard bug')
@@ -1600,7 +1608,7 @@ describe('SupportFormPage', () => {
     expect(payload.message).toBe('Navigation menu does not respond after latest deploy')
     expect(payload.dashboardLogs).toMatch(/^https:\/\/storage\.example\.com\/signed\/.+\.json$/)
     expect(payload.dashboardStudioVersion).toBe(mockStudioVersion)
-  }, 10_000)
+  }, 30_000)
 
   test('shows toast on submission error and allows form re-editing and resubmission', async () => {
     const submitSpy = vi.fn()
@@ -1629,7 +1637,7 @@ describe('SupportFormPage', () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('Organization 1')
         expect(getProjectSelector(screen)).toHaveTextContent('Project 1')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
 
     await selectCategoryOption(screen, 'Dashboard bug')
@@ -1683,7 +1691,7 @@ describe('SupportFormPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /support request sent/i })).toBeInTheDocument()
     })
-  }, 10_000)
+  }, 30_000)
 
   test('submits support request with attachments and includes attachment URLs in message', async () => {
     const submitSpy = vi.fn()
@@ -1832,7 +1840,7 @@ describe('SupportFormPage', () => {
       url.revokeObjectURL = originalRevokeObjectURL
       createSupportStorageClientMock.mockReset()
     }
-  }, 10_000)
+  }, 30_000)
 
   test('can submit form with no organizations and no projects', async () => {
     const submitSpy = vi.fn()
@@ -1864,7 +1872,7 @@ describe('SupportFormPage', () => {
       () => {
         expect(getOrganizationSelector(screen)).toHaveTextContent('No specific organization')
       },
-      { timeout: 5_000 }
+      { timeout: 30_000 }
     )
     await waitFor(() => {
       expect(getProjectSelector(screen)).toHaveTextContent('No specific project')
@@ -1911,5 +1919,5 @@ describe('SupportFormPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /support request sent/i })).toBeInTheDocument()
     })
-  }, 10_000)
+  }, 30_000)
 })

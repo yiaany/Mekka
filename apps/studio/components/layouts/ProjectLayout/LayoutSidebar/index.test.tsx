@@ -125,14 +125,14 @@ describe('LayoutSidebar', () => {
     renderSidebar()
 
     await waitFor(() => {
-      expect(sidebarManagerState.sidebars[SIDEBAR_KEYS.AI_ASSISTANT]).toBeDefined()
+      expect(sidebarManagerState.sidebars[SIDEBAR_KEYS.EDITOR_PANEL]).toBeDefined()
     })
 
     act(() => {
-      sidebarManagerState.toggleSidebar(SIDEBAR_KEYS.AI_ASSISTANT)
+      sidebarManagerState.toggleSidebar(SIDEBAR_KEYS.EDITOR_PANEL)
     })
 
-    const sidebar = await screen.findByTestId('ai-assistant-sidebar')
+    const sidebar = await screen.findByTestId('editor-panel-sidebar')
     expect(sidebar).toBeTruthy()
   })
 

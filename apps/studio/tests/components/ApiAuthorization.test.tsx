@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+﻿import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { platformComponents as components } from 'api-types'
 import dayjs from 'dayjs'
@@ -129,14 +129,14 @@ describe('AuthorizeConnectLogo', () => {
     ['ChatGPT', 'https://chatgpt.com/callback', 'openai'],
     ['OpenAI', 'https://openai.com/callback', 'openai'],
     ['Perplexity', 'https://www.perplexity.ai/callback', 'perplexity'],
-  ])('pairs %s with Supabase when redirect host is allowlisted', (name, redirectUri, iconKey) => {
+  ])('pairs %s with Mekka when redirect host is allowlisted', (name, redirectUri, iconKey) => {
     customRender(<AuthorizeConnectLogo icon={null} name={name} redirectUri={redirectUri} />)
 
     expect(screen.getByAltText(name)).toHaveAttribute(
       'src',
       getMcpClientIconSrc({ icon: iconKey, useDarkVariant: false })
     )
-    expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+    expect(screen.getByAltText('Mekka')).toBeInTheDocument()
   })
 
   test('does not use a curated logo from the requester name alone', () => {
@@ -144,7 +144,7 @@ describe('AuthorizeConnectLogo', () => {
       <AuthorizeConnectLogo icon={null} name="Claude" redirectUri="https://evil.com/callback" />
     )
 
-    expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+    expect(screen.getByAltText('Mekka')).toBeInTheDocument()
     expect(screen.queryByAltText('Claude')).not.toBeInTheDocument()
   })
 
@@ -161,25 +161,25 @@ describe('AuthorizeConnectLogo', () => {
       'src',
       getMcpClientIconSrc({ icon: 'claude', useDarkVariant: false })
     )
-    expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+    expect(screen.getByAltText('Mekka')).toBeInTheDocument()
   })
 
-  test('shows Supabase alone when the requester has no icon', () => {
+  test('shows Mekka alone when the requester has no icon', () => {
     customRender(<AuthorizeConnectLogo icon={null} name="Acme" />)
 
-    expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+    expect(screen.getByAltText('Mekka')).toBeInTheDocument()
     expect(screen.queryByAltText('Acme')).not.toBeInTheDocument()
     expect(screen.queryByText('A')).not.toBeInTheDocument()
   })
 
-  test('shows Supabase alone when the requester icon fails to load', () => {
+  test('shows Mekka alone when the requester icon fails to load', () => {
     customRender(
       <AuthorizeConnectLogo icon="https://example.com/broken-logo.svg" name="Unknown App" />
     )
 
     fireEvent.error(screen.getByAltText('Unknown App'))
 
-    expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+    expect(screen.getByAltText('Mekka')).toBeInTheDocument()
     expect(screen.queryByAltText('Unknown App')).not.toBeInTheDocument()
     expect(screen.queryByText('U')).not.toBeInTheDocument()
   })
@@ -195,8 +195,8 @@ describe('AuthorizeConnectLogo', () => {
 
     expect(screen.getByAltText('Acme').parentElement).toHaveClass('bg-white')
     expect(screen.getByAltText('Acme').parentElement).toHaveClass('border-black/10')
-    expect(screen.getByAltText('Supabase').parentElement).toHaveClass('bg-white')
-    expect(screen.getByAltText('Supabase').parentElement).toHaveClass('border-black/10')
+    expect(screen.getByAltText('Mekka').parentElement).toHaveClass('bg-white')
+    expect(screen.getByAltText('Mekka').parentElement).toHaveClass('border-black/10')
   })
 
   test('keeps theme tiles for curated partners', () => {
@@ -205,7 +205,7 @@ describe('AuthorizeConnectLogo', () => {
     )
 
     expect(screen.getByAltText('Cursor').parentElement).toHaveClass('bg-surface-75')
-    expect(screen.getByAltText('Supabase').parentElement).toHaveClass('bg-surface-75')
+    expect(screen.getByAltText('Mekka').parentElement).toHaveClass('bg-surface-75')
   })
 })
 
@@ -215,7 +215,7 @@ describe('ApiAuthorizationScreen', () => {
       renderScreen({ auth_id: undefined })
       expect(screen.getByText('Missing authorization link')).toBeInTheDocument()
       expect(screen.getByText(/auth_id/)).toBeInTheDocument()
-      expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+      expect(screen.getByAltText('Mekka')).toBeInTheDocument()
       expect(screen.getByRole('link', { name: 'Back to dashboard' })).toHaveAttribute('href', '/')
     })
   })
@@ -343,14 +343,14 @@ describe('ApiAuthorizationScreen', () => {
           mockBothEndpoints(createMockAuthResponse({ name: 'My OAuth App' }))
           renderScreen()
           await screen.findByText('Authorize API access for My OAuth App')
-          expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+          expect(screen.getByAltText('Mekka')).toBeInTheDocument()
           expect(screen.queryByText('M')).not.toBeInTheDocument()
           expect(screen.getByRole('combobox')).toBeInTheDocument()
           expect(screen.getByRole('button', { name: /Authorize My OAuth App/ })).toBeInTheDocument()
           expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
         })
 
-        test('pairs curated MCP requesters with Supabase when redirect host is allowlisted', async () => {
+        test('pairs curated MCP requesters with Mekka when redirect host is allowlisted', async () => {
           mockBothEndpoints(
             createMockAuthResponse({
               name: 'Cursor',
@@ -361,7 +361,7 @@ describe('ApiAuthorizationScreen', () => {
           renderScreen()
           await screen.findByText('Authorize API access for Cursor')
           expect(screen.getByAltText('Cursor')).toBeInTheDocument()
-          expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+          expect(screen.getByAltText('Mekka')).toBeInTheDocument()
           expect(
             screen.queryByText('Check this redirect before authorizing')
           ).not.toBeInTheDocument()
@@ -385,7 +385,7 @@ describe('ApiAuthorizationScreen', () => {
             )
           ).toBeInTheDocument()
           expect(screen.queryByAltText('Claude')).not.toBeInTheDocument()
-          expect(screen.getByAltText('Supabase')).toBeInTheDocument()
+          expect(screen.getByAltText('Mekka')).toBeInTheDocument()
         })
 
         test('auto-selects the only organization when no organization_slug is provided', async () => {
@@ -513,7 +513,7 @@ describe('ApiAuthorizationScreen', () => {
       describe('form validation', () => {
         test('shows validation error when Authorize is clicked without selecting an organization', async () => {
           const user = userEvent.setup()
-          // Two orgs → no auto-selection, user must pick one manually
+          // Two orgs â†’ no auto-selection, user must pick one manually
           mockBothEndpoints(createMockAuthResponse(), [DEFAULT_ORG, SECOND_ORG])
           renderScreen()
           await screen.findByRole('button', { name: /Authorize Test App/ })
@@ -526,3 +526,4 @@ describe('ApiAuthorizationScreen', () => {
     })
   })
 })
+

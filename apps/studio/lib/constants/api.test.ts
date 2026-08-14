@@ -68,8 +68,8 @@ describe('constants/api', () => {
 
       expect(DEFAULT_PROJECT).toEqual({
         id: 1,
-        ref: 'default',
-        name: 'Default Project',
+        ref: 'local',
+        name: 'Local Project',
         organization_id: 1,
         cloud_provider: 'localhost',
         status: 'ACTIVE_HEALTHY',
@@ -87,7 +87,7 @@ describe('constants/api', () => {
     it('should have static id and ref', async () => {
       const { DEFAULT_PROJECT } = await import('./api')
       expect(DEFAULT_PROJECT.id).toBe(1)
-      expect(DEFAULT_PROJECT.ref).toBe('default')
+      expect(DEFAULT_PROJECT.ref).toBe('local')
     })
 
     it('should have localhost cloud_provider', async () => {

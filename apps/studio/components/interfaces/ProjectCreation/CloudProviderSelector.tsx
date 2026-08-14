@@ -43,8 +43,9 @@ export const CloudProviderSelector = ({ form }: CloudProviderSelectorProps) => {
           }
         >
           <Select
-            onValueChange={(value) => field.onChange(value)}
-            defaultValue={field.value}
+            onValueChange={(value) => {
+              if (value) field.onChange(value)
+            }}
             value={field.value}
           >
             <FormControl>

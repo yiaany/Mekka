@@ -14,7 +14,7 @@ import type { CommonChartProps, StackedChartProps } from './Charts.types'
  * numberFormatter(123, 2)    // "123.00"
  */
 export const numberFormatter = (num: number, precision = 2) => {
-  return isFloat(num) ? precisionFormatter(num, precision) : num.toLocaleString()
+  return isFloat(num) ? precisionFormatter(num, precision) : num.toLocaleString('en-US')
 }
 
 /**
@@ -51,10 +51,10 @@ export const precisionFormatter = (num: number, precision: number): string => {
 
   if (isFloat(num)) {
     const [head, tail] = String(num).split('.')
-    return Number(head).toLocaleString() + '.' + tail.slice(0, precision)
+    return Number(head).toLocaleString('en-US') + '.' + tail.slice(0, precision)
   } else {
     // pad int with 0
-    return num.toLocaleString() + '.' + '0'.repeat(precision)
+    return num.toLocaleString('en-US') + '.' + '0'.repeat(precision)
   }
 }
 

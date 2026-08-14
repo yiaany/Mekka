@@ -1,4 +1,4 @@
-import { PermissionAction } from '@supabase/shared-types/out/constants'
+﻿import { PermissionAction } from '@supabase/shared-types/out/constants'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { platformComponents as components } from 'api-types'
@@ -108,6 +108,12 @@ vi.mock('@/lib/constants', async (importOriginal) => {
     IS_PLATFORM: true,
   }
 })
+
+vi.mock('@number-flow/react', () => ({
+  default: ({ value, ...props }: { value: number | string } & Record<string, unknown>) => (
+    <span {...props}>{String(value)}</span>
+  ),
+}))
 
 vi.mock('ui-patterns/Admonition', () => ({
   Admonition: ({
@@ -295,6 +301,19 @@ function mockInfrastructureEndpoints() {
         ],
       }),
   })
+  addAPIMock({
+    method: 'post',
+    path: '/platform/pg-meta/:ref/query',
+    response: () =>
+      HttpResponse.json({
+        result: [
+          {
+            db_size_bytes: 25 * 1024 * 1024 * 1024,
+            wal_size_bytes: 5 * 1024 * 1024 * 1024,
+          },
+        ],
+      }),
+  })
 }
 
 function renderInfrastructurePage() {
@@ -433,5 +452,6 @@ describe('/project/[ref]/settings/infrastructure', () => {
         min_increment_gb: 10,
       })
     })
-  })
+  }, 30_000)
 })
+

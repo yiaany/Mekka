@@ -141,7 +141,7 @@ describe('InviteMemberButton', () => {
     expect(screen.getAllByRole('radio')).toHaveLength(4)
     expect(screen.getByRole('link', { name: 'roles and permissions' })).toHaveAttribute(
       'href',
-      'https://supabase.com/docs/guides/platform/access-control'
+      '/docs/guides/platform/access-control'
     )
     expect(
       screen.getByText(

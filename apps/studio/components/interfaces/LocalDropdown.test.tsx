@@ -9,7 +9,7 @@ const { mockRouter, mockSetTheme, mockSetLastRoute, mockToggleFeaturePreviewModa
   () => ({
     mockRouter: {
       pathname: '/project/[ref]/editor',
-      asPath: '/project/default/editor',
+      asPath: '/project/local/editor',
     },
     mockSetTheme: vi.fn(),
     mockSetLastRoute: vi.fn(),
@@ -44,20 +44,8 @@ vi.mock('next-themes', () => ({
   }),
 }))
 
-vi.mock('@/state/app-state', () => ({
-  useAppStateSnapshot: () => ({
-    setLastRouteBeforeVisitingAccountPage: mockSetLastRoute,
-  }),
-}))
-
 vi.mock('@/components/ui/ProfileImage', () => ({
   ProfileImage: () => <div>Avatar</div>,
-}))
-
-vi.mock('./App/FeaturePreview/FeaturePreviewContext', () => ({
-  useFeaturePreviewModal: () => ({
-    toggleFeaturePreviewModal: mockToggleFeaturePreviewModal,
-  }),
 }))
 
 vi.mock('@/lib/telemetry/track', () => ({ useTrack: () => vi.fn() }))
@@ -79,32 +67,7 @@ vi.mock('ui', async () => {
     DropdownMenuTrigger: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     DropdownMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
     DropdownMenuGroup: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    DropdownMenuItem: ({
-      children,
-      asChild,
-      onClick,
-      onSelect,
-    }: {
-      children: ReactNode
-      asChild?: boolean
-      onClick?: () => void
-      onSelect?: () => void
-    }) =>
-      asChild ? (
-        <div>{children}</div>
-      ) : (
-        <button
-          tabIndex={0}
-          onClick={() => {
-            onClick?.()
-            onSelect?.()
-          }}
-        >
-          {children}
-        </button>
-      ),
     DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-    DropdownMenuSeparator: () => <hr />,
     DropdownMenuRadioGroup: ({
       children,
       onValueChange,
@@ -144,20 +107,13 @@ vi.mock('ui', async () => {
 })
 
 describe('LocalDropdown', () => {
-  it('shows Preferences, removes Command menu, and keeps theme controls wired', async () => {
+  it('removes the Command menu and keeps theme controls wired', async () => {
     const user = userEvent.setup()
 
     render(<LocalDropdown />)
 
-    expect(screen.getByText('Preferences')).toBeInTheDocument()
-    expect(screen.queryByText('Command menu')).not.toBeInTheDocument()
     expect(screen.getByText('Theme')).toBeInTheDocument()
-
-    await user.click(screen.getByText('Preferences'))
-    expect(mockSetLastRoute).toHaveBeenCalledWith('/project/default/editor')
-
-    await user.click(screen.getByText('Feature previews'))
-    expect(mockToggleFeaturePreviewModal).toHaveBeenCalledWith(true)
+    expect(screen.queryByText('Command menu')).not.toBeInTheDocument()
 
     await user.click(screen.getByText('Light'))
     expect(mockSetTheme).toHaveBeenCalledWith('light')

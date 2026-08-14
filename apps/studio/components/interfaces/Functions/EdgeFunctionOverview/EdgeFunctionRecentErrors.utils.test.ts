@@ -358,16 +358,16 @@ limit 25`)
 
   it('builds a troubleshooting docs URL keyed off the response status code', () => {
     expect(buildTroubleshootingDocsUrl({ statusCode: '500' })).toBe(
-      'https://supabase.com/docs/guides/troubleshooting/edge-function-500-response'
+      '/docs/guides/troubleshooting/edge-function-500-response'
     )
     expect(buildTroubleshootingDocsUrl({ statusCode: '503' })).toBe(
-      'https://supabase.com/docs/guides/troubleshooting/edge-function-503-response'
+      '/docs/guides/troubleshooting/edge-function-503-response'
     )
     expect(buildTroubleshootingDocsUrl({})).toBe(
-      'https://supabase.com/docs/guides/troubleshooting?search=edge%20function'
+      '/docs/guides/troubleshooting?search=edge%20function'
     )
     expect(buildTroubleshootingDocsUrl({ statusCode: 'not-a-number' })).toBe(
-      'https://supabase.com/docs/guides/troubleshooting?search=edge%20function'
+      '/docs/guides/troubleshooting?search=edge%20function'
     )
   })
 })

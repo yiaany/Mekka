@@ -310,6 +310,60 @@ try {
   if (!authUsers.users.some((user) => user.email === email)) {
     throw new Error("Registered production Auth user was not visible in Studio.");
   }
+  const authUser = authUsers.users.find((candidate) => candidate.email === email);
+  const tenantHeaders = {
+    "x-mekka-organization-id": "org-local",
+    "x-mekka-project-id": "local",
+    "x-mekka-environment-id": "env-local",
+    "x-mekka-branch-id": "branch-main",
+    "x-mekka-generation": "1",
+  };
+  const csrfResponse = await expectStatus("/api/platform/auth-admin/local/csrf", 200, {
+    authorization,
+    headers: tenantHeaders,
+  });
+  const csrfBody = await csrfResponse.json();
+  const csrfSetCookie = csrfResponse.headers.get("set-cookie");
+  const csrfCookieMatch = /mekka-studio-csrf=([^;,\s]+)/.exec(csrfSetCookie ?? "");
+  if (typeof csrfBody.token !== "string" || !csrfCookieMatch) {
+    throw new Error("Production Studio did not issue a CSRF token for Auth administration.");
+  }
+  const csrfCookie = `mekka-studio-csrf=${csrfCookieMatch[1]}`;
+  await expectStatus(`/api/platform/auth-admin/local/users/${authUser.id}`, 200, {
+    authorization,
+    method: "DELETE",
+    headers: {
+        ...tenantHeaders,
+        cookie: csrfCookie,
+        "content-type": "application/json",
+        "x-mekka-csrf-token": csrfBody.token,
+      "idempotency-key": `production-smoke-delete-user-${Date.now()}`,
+      "x-correlation-id": `production-smoke-correlation-${Date.now()}`,
+    },
+    body: JSON.stringify({ confirmation: authUser.id }),
+  });
+  const authUsersAfterDeletion = await requestJson("/api/platform/auth-admin/local/users", {
+    authorization,
+    headers: tenantHeaders,
+  });
+  if (authUsersAfterDeletion.users.some((user) => user.email === email)) {
+    throw new Error("Deleted production Auth user remained visible in Studio.");
+  }
+  await expectStatus(`${authBase}/sign-in/email`, 401, {
+    authorization,
+    method: "POST",
+    headers: { "content-type": "application/json", origin: baseUrl },
+    body: JSON.stringify({ email, password }),
+  });
+  await expectStatus("/mcp", 401, {
+    method: "POST",
+    headers: {
+      accept: "application/json, text/event-stream",
+      authorization: `Bearer ${agentGrant.token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+  });
 
   const health = await requestJson("/api/platform/sqlite-meta/local/schema/health", {
     authorization,

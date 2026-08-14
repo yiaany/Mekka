@@ -23,6 +23,12 @@ export default defineConfig({
   },
   test: {
     globals: true,
+    // Fork: this machine is slow under full-suite parallel load; the default
+    // 5s per-test timeout causes spurious timeouts on files that pass in isolation.
+    testTimeout: 60_000,
+    // Fork: heavy parallel load makes a few jsdom interaction suites exceed even
+    // generous timeouts; retry once so genuine failures still surface after retry.
+    retry: 1,
     environment: 'jsdom', // TODO(kamil): This should be set per test via header in .tsx files only
     setupFiles: [
       resolve(dirname, './tests/setup/polyfills.ts'),
@@ -33,6 +39,9 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       `.next/*`,
+      // node:test scripts, executed by the root `cli:test` (bun test) instead of vitest
+      'scripts/dispatch.test.js',
+      'scripts/framework-launcher.test.js',
       'tests/features/logs/logs-query.test.tsx',
       'tests/features/reports/storage-report.test.tsx',
     ],

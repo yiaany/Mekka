@@ -12,6 +12,7 @@ export const Route = createFileRoute('/api/platform/auth-admin/$ref/$')({
       GET: handleRequest,
       POST: handleRequest,
       PUT: handleRequest,
+      DELETE: handleRequest,
     },
   },
 })

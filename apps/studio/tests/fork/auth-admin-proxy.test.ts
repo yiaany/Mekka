@@ -3,6 +3,7 @@ import { afterAll, beforeAll, test, vi } from 'vitest'
 
 import { toWebHandler } from '@/compat/next/api'
 import nextHandler from '@/pages/api/platform/auth-admin/[ref]/[...path]'
+import { Route as authAdminRoute } from '@/routes/api/platform/auth-admin/$ref/$'
 
 vi.mock('@/lib/api/apiAuthenticate', () => ({
   apiAuthenticate: vi.fn(async (req: { headers: Record<string, unknown> }) =>
@@ -64,6 +65,14 @@ test('issues CSRF only after Studio authentication', async () => {
   assert.equal(upstream, undefined)
 })
 
+test('relies on TanStack route handlers covering every Next auth-admin mutation method', () => {
+  const handlers = authAdminRoute.options?.server?.handlers
+  assert.ok(handlers)
+  for (const method of ['GET', 'POST', 'PUT', 'DELETE'] as const) {
+    assert.equal(typeof handlers[method], 'function', `${method} handler missing`)
+  }
+})
+
 test('enforces CSRF and replaces a browser internal header with the server secret', async () => {
   const csrf = 'a'.repeat(43)
   const rejected = await handleRequest({
@@ -104,6 +113,29 @@ test('enforces CSRF and replaces a browser internal header with the server secre
   assert.equal(captured.headers.get('x-mekka-internal-proxy'), 'server-only-internal-token')
   assert.equal(captured.headers.has('authorization'), false)
   assert.deepEqual(await captured.json(), { confirmation: 'user-001' })
+})
+
+test('forwards a mutation body verbatim when the client omits content-type', async () => {
+  const csrf = 'b'.repeat(43)
+  const response = await handleRequest({
+    request: new Request('https://studio.example.test/api/platform/auth-admin/local/users/user-001', {
+      method: 'DELETE',
+      headers: {
+        authorization: 'Bearer studio-session-token',
+        cookie: `__Host-mekka-studio-csrf=${csrf}`,
+        'idempotency-key': 'auth-user-delete-0002',
+        'x-mekka-csrf-token': csrf,
+      },
+      body: JSON.stringify({ confirmation: 'user-001' }),
+    }),
+    params: { ref: 'local', path: 'users/user-001' },
+  })
+
+  assert.equal(response.status, 200)
+  const captured = upstream as Request | undefined
+  assert.ok(captured)
+  assert.equal(captured.headers.get('content-type'), 'application/json')
+  assert.equal(await captured.text(), JSON.stringify({ confirmation: 'user-001' }))
 })
 
 function restoreEnvironment(name: string, value: string | undefined) {

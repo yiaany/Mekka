@@ -1,6 +1,6 @@
 {
   "name": "mekka",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Run the agent-native backend on Bun and SQLite with one command.",
   "license": "LicenseRef-Mekka-Business-2.0",
   "type": "module",

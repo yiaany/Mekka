@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/protocol" },
+    { "path": "./packages/engine-core" },
     { "path": "./packages/storage-core" },
     { "path": "./packages/schema-manifest" },
     { "path": "./packages/query-ast" },

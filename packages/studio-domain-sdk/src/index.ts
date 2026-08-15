@@ -1517,6 +1517,8 @@ function errorMessage(code: ErrorCode): string {
       return "The project quota was exceeded.";
     case "unsupported":
       return "This project operation is not supported.";
+    case "not_found":
+      return "The project resource was not found.";
     case "infrastructure":
       return "The project service is temporarily unavailable.";
   }

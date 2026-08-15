@@ -61,6 +61,7 @@ export type ErrorCode =
   | "conflict"
   | "quota"
   | "unsupported"
+  | "not_found"
   | "infrastructure";
 
 export type ErrorEnvelope = Readonly<{
@@ -103,6 +104,7 @@ const errorDetails = {
   conflict: { status: 409, message: "The request conflicts with the current resource state." },
   quota: { status: 429, message: "A resource quota was exceeded." },
   unsupported: { status: 501, message: "The requested operation is not supported." },
+  not_found: { status: 404, message: "The requested resource does not exist." },
   infrastructure: { status: 503, message: "The service is temporarily unavailable." },
 } as const satisfies Record<ErrorCode, Readonly<{ status: number; message: string }>>;
 

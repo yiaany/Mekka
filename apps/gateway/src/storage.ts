@@ -963,6 +963,8 @@ function protocolStatus(code: StorageHttpError["code"]): number {
       return 429;
     case "unsupported":
       return 501;
+    case "not_found":
+      return 404;
     case "infrastructure":
       return 503;
     case "validation":
@@ -1011,6 +1013,7 @@ class StorageHttpError extends Error {
       | "conflict"
       | "quota"
       | "unsupported"
+      | "not_found"
       | "infrastructure",
     readonly status: number,
   ) {

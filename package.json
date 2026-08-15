@@ -38,6 +38,7 @@
     "check": "bun run repo:check && bun run format:check && bun run lint && bun run typecheck && bun run typecheck:studio && bun run cli:test && bun run test && bun run test:workspaces && bun run test:studio:fork && bun run build && bun run smoke:studio:production && bun run smoke:health"
   },
   "catalog": {
+    "@libsql/client": "0.17.4",
     "@monaco-editor/react": "4.7.0",
     "@sentry/nextjs": "10.59.0",
     "@sentry/tanstackstart-react": "10.59.0",

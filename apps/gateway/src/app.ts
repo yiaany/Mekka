@@ -1408,6 +1408,8 @@ function statusForProtocolCode(code: ErrorCode): number {
       return 429;
     case "unsupported":
       return 501;
+    case "not_found":
+      return 404;
     case "conflict":
       return 409;
     case "infrastructure":

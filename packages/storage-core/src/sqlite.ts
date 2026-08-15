@@ -56,8 +56,8 @@ export class StorageAdapterError extends Error {
   }
 }
 
-const defaultBusyTimeoutMs = 1_000;
-const defaultMinimumEngineVersion = "3.35.0";
+export const defaultBusyTimeoutMs = 1_000;
+export const defaultMinimumEngineVersion = "3.35.0";
 const forbiddenStatementKeywords = new Set([
   "attach",
   "begin",
@@ -137,7 +137,7 @@ function configureConnection(database: Database, busyTimeoutMs: number): void {
   database.run(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
 }
 
-function verifyConnectionInvariants(database: Database, busyTimeoutMs: number): void {
+export function verifyConnectionInvariants(database: Database, busyTimeoutMs: number): void {
   const foreignKeys = database.query<{ foreign_keys: number }, []>("PRAGMA foreign_keys").get();
   const journalMode = database.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get();
   const synchronous = database.query<{ synchronous: number }, []>("PRAGMA synchronous").get();
@@ -159,7 +159,10 @@ function verifyConnectionInvariants(database: Database, busyTimeoutMs: number): 
   }
 }
 
-function verifyEngineVersion(database: Database, minimumEngineVersion: readonly number[]): void {
+export function verifyEngineVersion(
+  database: Database,
+  minimumEngineVersion: readonly number[],
+): void {
   const row = database.query<{ version: string }, []>("SELECT sqlite_version() AS version").get();
 
   if (
@@ -199,7 +202,10 @@ function executeStatement<Row extends Record<string, StorageValue>>(
   }
 }
 
-function validateDatabasePath(databasePath: string, databaseDirectory: string | undefined): string {
+export function validateDatabasePath(
+  databasePath: string,
+  databaseDirectory: string | undefined,
+): string {
   if (databasePath === ":memory:") {
     return databasePath;
   }
@@ -230,7 +236,7 @@ function validateDatabasePath(databasePath: string, databaseDirectory: string | 
   return resolvedPath;
 }
 
-function validateBusyTimeout(value: number): number {
+export function validateBusyTimeout(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > 60_000) {
     throw new StorageAdapterError(
       "STORAGE_PATH_INVALID",
@@ -241,7 +247,7 @@ function validateBusyTimeout(value: number): number {
   return value;
 }
 
-function validateStatement(statement: StorageStatement): void {
+export function validateStatement(statement: StorageStatement): void {
   if (typeof statement.sql !== "string" || statement.sql.trim().length === 0) {
     throw new StorageAdapterError("STORAGE_QUERY_FORBIDDEN", "SQLite statement must not be empty.");
   }
@@ -294,7 +300,7 @@ function firstKeyword(sql: string): string {
   return match?.[1]?.toLowerCase() ?? "";
 }
 
-function parseVersion(value: string, name: string): readonly number[] {
+export function parseVersion(value: string, name: string): readonly number[] {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
 
   if (match === null) {
@@ -307,7 +313,7 @@ function parseVersion(value: string, name: string): readonly number[] {
   return match.slice(1).map((segment) => Number(segment));
 }
 
-function compareVersions(left: readonly number[], right: readonly number[]): number {
+export function compareVersions(left: readonly number[], right: readonly number[]): number {
   for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
     const difference = (left[index] ?? 0) - (right[index] ?? 0);
     if (difference !== 0) {
@@ -318,7 +324,7 @@ function compareVersions(left: readonly number[], right: readonly number[]): num
   return 0;
 }
 
-function mapDatabaseError(error: unknown): Error {
+export function mapDatabaseError(error: unknown): Error {
   if (
     typeof error === "object" &&
     error !== null &&

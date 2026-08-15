@@ -1,21 +1,21 @@
-import { createHash } from "node:crypto";
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, rmSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import {
-  type BackupArtifact,
-  type MigrationArtifact,
-  MigrationError,
   applyMigration,
+  type BackupArtifact,
   createCheckpoint,
   createMigrationArtifact,
+  type MigrationArtifact,
+  MigrationError,
   restoreCheckpoint,
 } from "@mekka/migration-engine";
 import {
-  ProtocolError,
   createErrorEnvelope,
   hasCapability,
+  ProtocolError,
   parseBranchId,
   parseGeneration,
   parseTenantIdentity,
@@ -949,6 +949,7 @@ export async function openBranchService(options: BranchServiceOptions): Promise<
           conflict: 409,
           quota: 429,
           unsupported: 501,
+          not_found: 404,
           infrastructure: 503,
         };
         const status = statusByCode[protocolError.code];

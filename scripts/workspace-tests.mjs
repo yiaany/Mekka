@@ -28,6 +28,7 @@ const bunTestWorkspaces = new Set([
   "apps/sqlite-meta",
   "packages/auth-core",
   "packages/branch-core",
+  "packages/engine-core",
   "packages/migration-engine",
   "packages/onboarding-core",
   "packages/policy-engine",

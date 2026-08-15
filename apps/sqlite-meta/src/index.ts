@@ -14,6 +14,7 @@ import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core/sql
 import { openAgentTokenStore } from "./agent-token-store";
 import { createSqliteMetaApp } from "./app";
 import type { LocalAuthRuntime } from "./auth";
+import { openEngineController, readEngineConfiguration } from "./engine";
 import {
   isInternalProxyRequest as matchesInternalProxy,
   readInternalProxyToken,
@@ -46,6 +47,7 @@ await mkdir(join(dataDirectory, "auth"), { recursive: true });
 
 const adapters = new Map<string, StorageAdapter>();
 const agentTokens = openAgentTokenStore(join(dataDirectory, "auth", "agent-access.sqlite"));
+const engineController = openEngineController(readEngineConfiguration(process.env));
 const productionTenant = parseTenantIdentity({
   organizationId: process.env.NEXT_PUBLIC_STUDIO_ORGANIZATION_ID ?? "org-local",
   projectId: "local",
@@ -196,6 +198,7 @@ const app = createSqliteMetaApp({
     return { tenant: context.tenant, storage: resolveStorage(context.tenant) };
   },
   recordAudit() {},
+  engine: engineController,
   checkpointDirectory: dataDirectory,
 })
   .all("/auth/*", async ({ request }) => (await getAuthRuntime()).handlePublicRequest(request))
@@ -355,6 +358,7 @@ function close(): void {
   authRuntime?.close();
   agentTokens.close();
   mcpRuntime?.close();
+  engineController.close();
   for (const adapter of adapters.values()) adapter.close();
 }
 

@@ -33,6 +33,7 @@ import {
   type StorageValue,
 } from "@mekka/storage-core/sqlite";
 import { Elysia } from "elysia";
+import type { EngineStatus } from "./engine";
 
 export type SqliteMetaColumn = Readonly<{
   name: string;
@@ -100,7 +101,13 @@ export type SqliteMetaDependencies = Readonly<{
   resolveProject(context: TenantContext): Promise<SqliteMetaProject> | SqliteMetaProject;
   recordAudit(event: SqliteMetaAuditEvent): void;
   checkpointDirectory: string;
+  engine?: SqliteMetaEngineDependencies;
   now?: () => number;
+}>;
+
+export type SqliteMetaEngineDependencies = Readonly<{
+  status(): EngineStatus;
+  testConnection(): Promise<EngineStatus>;
 }>;
 
 type ColumnInput = Readonly<{
@@ -421,6 +428,10 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
           false,
         );
       }),
+    )
+    .get("/engine/status", async ({ request }) => handleEngine(request, dependencies, "status"))
+    .post("/engine/test-connection", async ({ request }) =>
+      handleEngine(request, dependencies, "testConnection"),
     );
 }
 
@@ -446,6 +457,35 @@ async function handle<T>(
     }
     return Response.json(await operation(context, project), {
       headers: { "x-correlation-id": context.correlationId },
+    });
+  } catch (error) {
+    const metaError = toMetaError(error);
+    const correlationId = resolveCorrelationId(request.headers);
+    return Response.json(createErrorEnvelope(metaError.code, correlationId), {
+      status: metaError.status,
+      headers: { "x-correlation-id": correlationId },
+    });
+  }
+}
+
+async function handleEngine(
+  request: Request,
+  dependencies: SqliteMetaDependencies,
+  operation: "status" | "testConnection",
+): Promise<Response> {
+  try {
+    if (dependencies.engine === undefined) {
+      throw new MetaError("not_found", "The engine status API is not configured.");
+    }
+    const context = await dependencies.authenticate(request);
+    const result = await (operation === "status"
+      ? dependencies.engine.status()
+      : dependencies.engine.testConnection());
+    return Response.json(result, {
+      headers: {
+        "x-correlation-id": context.correlationId,
+        "cache-control": "no-store",
+      },
     });
   } catch (error) {
     const metaError = toMetaError(error);
@@ -1399,6 +1439,8 @@ class MetaError extends Error {
         return 429;
       case "unsupported":
         return 501;
+      case "not_found":
+        return 404;
       case "infrastructure":
         return 503;
       case "validation":

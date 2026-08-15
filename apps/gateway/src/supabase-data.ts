@@ -63,6 +63,7 @@ export function createSupabaseErrorBody(code: ErrorCode): Readonly<{
     conflict: "The request conflicts with the current resource state.",
     quota: "A resource quota was exceeded.",
     unsupported: "The requested operation is not supported.",
+    not_found: "The requested resource does not exist.",
     infrastructure: "The service is temporarily unavailable.",
   };
   return Object.freeze({

@@ -1,0 +1,24 @@
+{
+  "name": "@mekka/engine-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./libsql": {
+      "types": "./dist/libsql.d.ts",
+      "default": "./dist/libsql.js"
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite.d.ts",
+      "default": "./dist/sqlite.js"
+    }
+  },
+  "dependencies": {
+    "@libsql/client": "catalog:",
+    "@mekka/storage-core": "workspace:*"
+  }
+}

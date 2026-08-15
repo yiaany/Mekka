@@ -12,6 +12,10 @@
       "types": "./dist/libsql.d.ts",
       "default": "./dist/libsql.js"
     },
+    "./replica": {
+      "types": "./dist/replica.d.ts",
+      "default": "./dist/replica.js"
+    },
     "./sqlite": {
       "types": "./dist/sqlite.d.ts",
       "default": "./dist/sqlite.js"

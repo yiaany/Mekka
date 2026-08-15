@@ -212,7 +212,7 @@ async function executeStatement<Row extends Record<string, EngineValue>>(
   return normalizeResult<Row>(result);
 }
 
-function normalizeResult<Row extends Record<string, EngineValue>>(
+export function normalizeResult<Row extends Record<string, EngineValue>>(
   result: ResultSet,
 ): EngineResult<Row> {
   const rows = result.rows.map((row) => {
@@ -352,7 +352,7 @@ function validateLibsqlUrl(value: string, allowLocalhost: boolean): URL {
   return url;
 }
 
-function readServerToken(tokenReference: string): string {
+export function readServerToken(tokenReference: string): string {
   const token = process.env[tokenReference];
   if (typeof token !== "string" || token.trim().length === 0) {
     throw new EngineError(
@@ -372,7 +372,7 @@ function isSafeToRetry(error: EngineError): boolean {
   return error.code === "ENGINE_TIMEOUT" || error.code === "ENGINE_UNAVAILABLE";
 }
 
-function mapLibsqlError(error: unknown): EngineError {
+export function mapLibsqlError(error: unknown): EngineError {
   if (error instanceof EngineError) return error;
   if (error instanceof TransportTimeoutError) {
     return new EngineError("ENGINE_TIMEOUT", "The remote engine request timed out.", error);

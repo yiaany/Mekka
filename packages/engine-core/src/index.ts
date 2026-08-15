@@ -1,7 +1,8 @@
 export * from "./libsql";
+export * from "./replica";
 export * from "./sqlite";
 
-export type EngineKind = "libsql-remote" | "sqlite";
+export type EngineKind = "libsql-remote" | "libsql-replica" | "sqlite";
 
 export type EngineDialect = "sqlite";
 

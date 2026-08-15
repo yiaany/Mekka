@@ -104,6 +104,59 @@ describe("engine configuration", () => {
       }),
     ).toThrow(/MEKKA_LIBSQL_REQUEST_TIMEOUT_MS/);
   });
+
+  test("reads libsql-replica configuration and requires a local replica path", () => {
+    const configuration = readEngineConfiguration({
+      MEKKA_DATA_ENGINE: "libsql-replica",
+      MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+      MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
+      MEKKA_LIBSQL_REPLICA_FALLBACK: "primary",
+      MEKKA_LIBSQL_REPLICA_SYNC_INTERVAL_MS: "5000",
+    });
+    expect(configuration.engineKind).toBe("libsql-replica");
+    expect(configuration.url).toBe("https://db.example.turso.io");
+    expect(configuration.replicaPath).toBe("C:\\data\\replica.db");
+    expect(configuration.replicaFallbackPolicy).toBe("primary");
+    expect(configuration.replicaSyncIntervalMs).toBe(5000);
+  });
+
+  test("defaults replica fallback to safe-error and disables the sync timer", () => {
+    const configuration = readEngineConfiguration({
+      MEKKA_DATA_ENGINE: "libsql-replica",
+      MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+      MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
+    });
+    expect(configuration.replicaFallbackPolicy).toBe("safe-error");
+    expect(configuration.replicaSyncIntervalMs).toBeNull();
+  });
+
+  test("rejects incomplete libsql-replica configuration", () => {
+    expect(() => readEngineConfiguration({ MEKKA_DATA_ENGINE: "libsql-replica" })).toThrow(
+      /MEKKA_LIBSQL_URL/,
+    );
+    expect(() =>
+      readEngineConfiguration({
+        MEKKA_DATA_ENGINE: "libsql-replica",
+        MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+      }),
+    ).toThrow(/MEKKA_LIBSQL_REPLICA_PATH/);
+    expect(() =>
+      readEngineConfiguration({
+        MEKKA_DATA_ENGINE: "libsql-replica",
+        MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+        MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
+        MEKKA_LIBSQL_REPLICA_FALLBACK: "banana",
+      }),
+    ).toThrow(/MEKKA_LIBSQL_REPLICA_FALLBACK/);
+    expect(() =>
+      readEngineConfiguration({
+        MEKKA_DATA_ENGINE: "libsql-replica",
+        MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+        MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
+        MEKKA_LIBSQL_REPLICA_SYNC_INTERVAL_MS: "500",
+      }),
+    ).toThrow(/MEKKA_LIBSQL_REPLICA_SYNC_INTERVAL_MS/);
+  });
 });
 
 describe("engine controller", () => {
@@ -158,6 +211,7 @@ describe("engine status API", () => {
       engineKind: "bun-sqlite",
       url: null,
       requestTimeoutMs: null,
+      replica: null,
       lastTestConnection: null,
     });
     const { app } = await createEngineFixture({
@@ -181,6 +235,7 @@ describe("engine status API", () => {
       engineKind: "libsql-remote",
       url: "https://db.example.turso.io",
       requestTimeoutMs: 200,
+      replica: null,
       lastTestConnection: null,
     });
     const tested: EngineStatus = Object.freeze({

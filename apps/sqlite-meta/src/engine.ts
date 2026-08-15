@@ -2,11 +2,14 @@ import {
   defaultLibsqlRequestTimeoutMs,
   EngineError,
   openLibsqlEngine,
+  openReplicaLibsqlEngine,
+  type ReplicaLibsqlFallbackPolicy,
+  type ReplicaLibsqlStatus,
   testLibsqlConnection,
 } from "@mekka/engine-core";
 import { openStorageAdapter } from "@mekka/storage-core";
 
-export type SqliteMetaEngineKind = "bun-sqlite" | "libsql-remote";
+export type SqliteMetaEngineKind = "bun-sqlite" | "libsql-remote" | "libsql-replica";
 
 export type EngineLastTest = Readonly<{
   testedAt: number;
@@ -21,6 +24,11 @@ export type EngineStatus = Readonly<{
   engineKind: SqliteMetaEngineKind;
   url: string | null;
   requestTimeoutMs: number | null;
+  replica: {
+    state: ReplicaLibsqlStatus["state"];
+    lastSyncAtMs: number | null;
+    lastWriteAtMs: number | null;
+  } | null;
   lastTestConnection: EngineLastTest | null;
 }>;
 
@@ -37,6 +45,9 @@ export type EngineConfiguration = Readonly<{
   tokenReference: string | undefined;
   requestTimeoutMs: number;
   allowLocalhost: boolean;
+  replicaPath: string | undefined;
+  replicaFallbackPolicy: ReplicaLibsqlFallbackPolicy;
+  replicaSyncIntervalMs: number | null;
   fetch?: typeof fetch;
 }>;
 
@@ -47,10 +58,16 @@ export function readEngineConfiguration(
   const requestTimeoutMs = readRequestTimeoutMs(env.MEKKA_LIBSQL_REQUEST_TIMEOUT_MS);
   return Object.freeze({
     engineKind,
-    url: engineKind === "libsql-remote" ? readRequiredUrl(env.MEKKA_LIBSQL_URL) : undefined,
+    url:
+      engineKind === "libsql-remote" || engineKind === "libsql-replica"
+        ? readRequiredUrl(env.MEKKA_LIBSQL_URL)
+        : undefined,
     tokenReference: env.MEKKA_LIBSQL_TOKEN_ENV?.trim(),
     requestTimeoutMs,
     allowLocalhost: env.MEKKA_LOCAL_DEV === "1",
+    replicaPath: engineKind === "libsql-replica" ? readRequiredReplicaPath(env) : undefined,
+    replicaFallbackPolicy: readReplicaFallbackPolicy(env.MEKKA_LIBSQL_REPLICA_FALLBACK),
+    replicaSyncIntervalMs: readReplicaSyncIntervalMs(env.MEKKA_LIBSQL_REPLICA_SYNC_INTERVAL_MS),
   });
 }
 
@@ -58,7 +75,7 @@ export function openEngineController(configuration: EngineConfiguration): Engine
   if (configuration.engineKind === "bun-sqlite") {
     return createLocalEngineController();
   }
-  const engine = openLibsqlEngine({
+  const libsqlOptions = {
     url: configuration.url as string,
     ...(configuration.tokenReference === undefined
       ? {}
@@ -66,7 +83,11 @@ export function openEngineController(configuration: EngineConfiguration): Engine
     requestTimeoutMs: configuration.requestTimeoutMs,
     allowLocalhost: configuration.allowLocalhost,
     ...(configuration.fetch === undefined ? {} : { fetch: configuration.fetch }),
-  });
+  };
+  if (configuration.engineKind === "libsql-replica") {
+    return createReplicaLibsqlController(configuration, libsqlOptions);
+  }
+  const engine = openLibsqlEngine(libsqlOptions);
   let lastTestConnection: EngineLastTest | null = null;
   return Object.freeze({
     engineKind: "libsql-remote",
@@ -75,18 +96,11 @@ export function openEngineController(configuration: EngineConfiguration): Engine
         engineKind: "libsql-remote",
         url: redactUrl(configuration.url as string),
         requestTimeoutMs: configuration.requestTimeoutMs,
+        replica: null,
         lastTestConnection,
       }),
     testConnection: async () => {
-      const result = await testLibsqlConnection({
-        url: configuration.url as string,
-        ...(configuration.tokenReference === undefined
-          ? {}
-          : { tokenReference: configuration.tokenReference }),
-        requestTimeoutMs: configuration.requestTimeoutMs,
-        allowLocalhost: configuration.allowLocalhost,
-        ...(configuration.fetch === undefined ? {} : { fetch: configuration.fetch }),
-      });
+      const result = await testLibsqlConnection(libsqlOptions);
       lastTestConnection = Object.freeze({
         testedAt: Date.now(),
         ok: result.ok,
@@ -99,8 +113,64 @@ export function openEngineController(configuration: EngineConfiguration): Engine
         engineKind: "libsql-remote",
         url: redactUrl(configuration.url as string),
         requestTimeoutMs: configuration.requestTimeoutMs,
+        replica: null,
         lastTestConnection,
       });
+    },
+    close: () => {
+      void engine.close();
+    },
+  });
+}
+
+function createReplicaLibsqlController(
+  configuration: EngineConfiguration,
+  libsqlOptions: {
+    url: string;
+    tokenReference?: string;
+    requestTimeoutMs: number;
+    allowLocalhost: boolean;
+    fetch?: typeof fetch;
+  },
+): EngineController {
+  const engine = openReplicaLibsqlEngine({
+    primary: libsqlOptions,
+    replicaPath: configuration.replicaPath as string,
+    fallbackPolicy: configuration.replicaFallbackPolicy,
+    ...(configuration.replicaSyncIntervalMs === null
+      ? {}
+      : { syncIntervalMs: configuration.replicaSyncIntervalMs }),
+  });
+  let lastTestConnection: EngineLastTest | null = null;
+  const buildStatus = (replica: ReplicaLibsqlStatus | null): EngineStatus =>
+    Object.freeze({
+      engineKind: "libsql-replica",
+      url: redactUrl(configuration.url as string),
+      requestTimeoutMs: configuration.requestTimeoutMs,
+      replica:
+        replica === null
+          ? null
+          : Object.freeze({
+              state: replica.state,
+              lastSyncAtMs: replica.lastSyncAtMs,
+              lastWriteAtMs: replica.lastWriteAtMs,
+            }),
+      lastTestConnection,
+    });
+  return Object.freeze({
+    engineKind: "libsql-replica",
+    status: () => buildStatus(engine.status()),
+    testConnection: async () => {
+      const result = await testLibsqlConnection(libsqlOptions);
+      lastTestConnection = Object.freeze({
+        testedAt: Date.now(),
+        ok: result.ok,
+        engineVersion: result.ok ? result.engineVersion : null,
+        latencyMs: result.ok ? result.latencyMs : null,
+        errorCode: result.ok ? null : result.error.code,
+        errorMessage: result.ok ? null : result.error.message,
+      });
+      return buildStatus(engine.status());
     },
     close: () => {
       void engine.close();
@@ -117,6 +187,7 @@ function createLocalEngineController(): EngineController {
         engineKind: "bun-sqlite",
         url: null,
         requestTimeoutMs: null,
+        replica: null,
         lastTestConnection,
       }),
     testConnection: async () => {
@@ -158,6 +229,7 @@ function createLocalEngineController(): EngineController {
         engineKind: "bun-sqlite",
         url: null,
         requestTimeoutMs: null,
+        replica: null,
         lastTestConnection,
       });
     },
@@ -168,7 +240,8 @@ function createLocalEngineController(): EngineController {
 function readEngineKind(value: string | undefined): SqliteMetaEngineKind {
   if (value === undefined || value === "bun-sqlite") return "bun-sqlite";
   if (value === "libsql-remote") return "libsql-remote";
-  throw new Error('MEKKA_DATA_ENGINE must be "bun-sqlite" or "libsql-remote".');
+  if (value === "libsql-replica") return "libsql-replica";
+  throw new Error('MEKKA_DATA_ENGINE must be "bun-sqlite", "libsql-remote" or "libsql-replica".');
 }
 
 function readRequestTimeoutMs(value: string | undefined): number {
@@ -182,9 +255,38 @@ function readRequestTimeoutMs(value: string | undefined): number {
 
 function readRequiredUrl(value: string | undefined): string {
   if (value === undefined || value.trim().length === 0) {
-    throw new Error("MEKKA_LIBSQL_URL is required when MEKKA_DATA_ENGINE=libsql-remote.");
+    throw new Error(
+      "MEKKA_LIBSQL_URL is required when MEKKA_DATA_ENGINE is libsql-remote or libsql-replica.",
+    );
   }
   return value.trim();
+}
+
+function readRequiredReplicaPath(
+  env: Readonly<Record<string, string | undefined>>,
+): string {
+  const value = env.MEKKA_LIBSQL_REPLICA_PATH;
+  if (value === undefined || value.trim().length === 0) {
+    throw new Error("MEKKA_LIBSQL_REPLICA_PATH is required when MEKKA_DATA_ENGINE=libsql-replica.");
+  }
+  return value.trim();
+}
+
+function readReplicaFallbackPolicy(value: string | undefined): ReplicaLibsqlFallbackPolicy {
+  if (value === undefined || value.trim().length === 0) return "safe-error";
+  if (value === "primary" || value === "safe-error") return value;
+  throw new Error('MEKKA_LIBSQL_REPLICA_FALLBACK must be "primary" or "safe-error".');
+}
+
+function readReplicaSyncIntervalMs(value: string | undefined): number | null {
+  if (value === undefined || value.trim().length === 0) return null;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1_000 || parsed > 3_600_000) {
+    throw new Error(
+      "MEKKA_LIBSQL_REPLICA_SYNC_INTERVAL_MS must be an integer between 1000 and 3600000.",
+    );
+  }
+  return parsed;
 }
 
 function redactUrl(value: string): string {

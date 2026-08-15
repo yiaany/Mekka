@@ -57,6 +57,12 @@ secrets.toml
 *.dump
 *.snapshot
 
+# Dead Studio assets kept only on disk
+apps/studio/public/archive/
+apps/studio/public/favicon/archive/
+apps/studio/public/img/vault.png
+apps/studio/public/img/eastwood-fatal-error.svg
+
 # Private agent prompts and session transcripts
 MASTER_PROMPT*
 **/CLAUDE.md

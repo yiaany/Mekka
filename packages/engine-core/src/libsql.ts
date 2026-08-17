@@ -5,18 +5,50 @@ import {
   type ResultSet,
   type Transaction,
 } from "@libsql/client";
+import { randomUUID } from "node:crypto";
 import { StorageAdapterError, validateStatement } from "@mekka/storage-core";
 import {
   type Engine,
   type EngineCapabilities,
   EngineError,
+  type EngineErrorCode,
+  type EngineExecuteOptions,
   type EngineExecutor,
+  type EngineOutcome,
   type EngineResult,
   type EngineStatement,
   type EngineValue,
 } from "./index";
 
 type TransportFetch = (input: Request | URL | string, init?: RequestInit) => Promise<Response>;
+
+export type LibsqlOperationRoute =
+  | "execute"
+  | "transaction:begin"
+  | "transaction:commit"
+  | "transaction:rollback"
+  | "connection-test"
+  | "replica-sync"
+  | "replica-read";
+
+/**
+ * One observable operation. The event is intentionally minimal: request count, latency, a typed
+ * error code and a route. It never contains SQL text, parameter values, URLs or tokens.
+ */
+export type LibsqlOperationEvent = Readonly<{
+  /** Operation id assigned by the engine or supplied by the caller, for correlation on manual retry. */
+  operationId: string;
+  route: LibsqlOperationRoute;
+  outcome: EngineOutcome;
+  /** Typed engine error code, or null when the operation succeeded. */
+  errorCode: EngineErrorCode | null;
+  /** Bounded round-trip latency in milliseconds. */
+  latencyMs: number;
+  /** Number of send attempts performed for this operation (reads may retry once). */
+  attempts: number;
+}>;
+
+export type LibsqlOperationEventObserver = (event: LibsqlOperationEvent) => void;
 
 export type LibsqlEngineOptions = Readonly<{
   /** Database URL. Production requires https://; http:// is accepted only for loopback hosts when `allowLocalhost` is enabled. */
@@ -37,6 +69,16 @@ export type LibsqlEngineOptions = Readonly<{
    * transport stub here; production callers should not set this option.
    */
   fetch?: TransportFetch;
+  /**
+   * Generates an operation id for every operation. Defaults to a random UUID. Operation ids are used for
+   * correlation and safe manual retry only; nothing is ever deduplicated by them.
+   */
+  operationIdProvider?: () => string;
+  /**
+   * Minimal observability sink: one event per operation with request count, latency, a typed error code
+   * and a route. Events never contain SQL text, parameter values, URLs or tokens.
+   */
+  onOperation?: LibsqlOperationEventObserver;
 }>;
 
 export type LibsqlConnectionTestResult =
@@ -56,6 +98,7 @@ const readOnlyFirstKeywords = new Set(["EXPLAIN", "SELECT"]);
 
 export function openLibsqlEngine(options: LibsqlEngineOptions): Engine {
   const config = validateLibsqlConfig(options);
+  const operationIdProvider = options.operationIdProvider ?? defaultLibsqlOperationIdProvider;
   const client = createClient({
     url: config.url.href,
     ...(config.token === undefined ? {} : { authToken: config.token }),
@@ -66,29 +109,68 @@ export function openLibsqlEngine(options: LibsqlEngineOptions): Engine {
   let closed = false;
   let inTransaction = false;
 
+  const emitOperation = (event: LibsqlOperationEvent): void => {
+    if (options.onOperation === undefined) return;
+    try {
+      options.onOperation(Object.freeze(event));
+    } catch {
+      // Observability must never break the data path.
+    }
+  };
+
   const execute = <Row extends Record<string, EngineValue> = Record<string, EngineValue>>(
     statement: EngineStatement,
+    executeOptions?: EngineExecuteOptions,
   ): Promise<EngineResult<Row>> => {
     if (closed) {
       return Promise.reject(
         new EngineError("ENGINE_CLOSED", "Engine is closed; no further statements are accepted."),
       );
     }
+    const operationId = resolveOperationId(executeOptions, operationIdProvider);
     return (async () => {
       let error: unknown;
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        const startedAt = performance.now();
         try {
-          return await executeStatement(client, statement);
+          const result = await executeStatement<Row>(client, statement);
+          emitOperation({
+            operationId,
+            route: "execute",
+            outcome: "ok",
+            errorCode: null,
+            latencyMs: measureLatency(startedAt),
+            attempts: attempt + 1,
+          });
+          return result;
         } catch (caught) {
           error = caught;
           const mapped = mapLibsqlError(caught);
           if (attempt === 0 && isReadOnlyStatement(statement.sql) && isSafeToRetry(mapped)) {
             continue;
           }
-          throw mapped;
+          const classified = associateOperationId(mapped, operationId);
+          emitOperation({
+            operationId,
+            route: "execute",
+            outcome: classified.outcome,
+            errorCode: classified.code,
+            latencyMs: measureLatency(startedAt),
+            attempts: attempt + 1,
+          });
+          throw classified;
         }
       }
-      throw mapLibsqlError(error);
+      const mapped = associateOperationId(mapLibsqlError(error), operationId);
+      emitOperation({
+        operationId,
+        route: "execute",
+        outcome: mapped.outcome,
+        errorCode: mapped.code,
+        latencyMs: 0,
+        attempts: 2,
+      });
+      throw mapped;
     })();
   };
 
@@ -106,16 +188,80 @@ export function openLibsqlEngine(options: LibsqlEngineOptions): Engine {
 
     return (async () => {
       inTransaction = true;
+      const beginId = operationIdProvider();
+      const beganAt = performance.now();
       const remote = await client.transaction("write").catch((error) => {
         inTransaction = false;
-        throw mapLibsqlError(error);
+        const mapped = associateOperationId(mapLibsqlError(error), beginId);
+        emitOperation({
+          operationId: beginId,
+          route: "transaction:begin",
+          outcome: mapped.outcome,
+          errorCode: mapped.code,
+          latencyMs: measureLatency(beganAt),
+          attempts: 1,
+        });
+        throw mapped;
+      });
+      emitOperation({
+        operationId: beginId,
+        route: "transaction:begin",
+        outcome: "ok",
+        errorCode: null,
+        latencyMs: measureLatency(beganAt),
+        attempts: 1,
       });
       try {
-        const result = await callback(Object.freeze({ execute: withTransaction(remote) }));
-        await remote.commit();
+        const result = await callback(Object.freeze({ execute: withTransaction(remote, emitOperation) }));
+        const commitId = operationIdProvider();
+        const commitStartedAt = performance.now();
+        try {
+          await remote.commit();
+          emitOperation({
+            operationId: commitId,
+            route: "transaction:commit",
+            outcome: "ok",
+            errorCode: null,
+            latencyMs: measureLatency(commitStartedAt),
+            attempts: 1,
+          });
+        } catch (error) {
+          const mapped = associateOperationId(mapLibsqlError(error), commitId);
+          emitOperation({
+            operationId: commitId,
+            route: "transaction:commit",
+            outcome: mapped.outcome,
+            errorCode: mapped.code,
+            latencyMs: measureLatency(commitStartedAt),
+            attempts: 1,
+          });
+          throw mapped;
+        }
         return result;
       } catch (error) {
-        await remote.rollback().catch(() => undefined);
+        const rollbackId = operationIdProvider();
+        const rollbackStartedAt = performance.now();
+        try {
+          await remote.rollback();
+          emitOperation({
+            operationId: rollbackId,
+            route: "transaction:rollback",
+            outcome: "ok",
+            errorCode: null,
+            latencyMs: measureLatency(rollbackStartedAt),
+            attempts: 1,
+          });
+        } catch (rollbackError) {
+          const mapped = associateOperationId(mapLibsqlError(rollbackError), rollbackId);
+          emitOperation({
+            operationId: rollbackId,
+            route: "transaction:rollback",
+            outcome: mapped.outcome,
+            errorCode: mapped.code,
+            latencyMs: measureLatency(rollbackStartedAt),
+            attempts: 1,
+          });
+        }
         throw error instanceof Error ? error : mapLibsqlError(error);
       } finally {
         remote.close();
@@ -141,6 +287,15 @@ export function openLibsqlEngine(options: LibsqlEngineOptions): Engine {
 export async function testLibsqlConnection(
   options: LibsqlEngineOptions,
 ): Promise<LibsqlConnectionTestResult> {
+  const emitOperation = (event: LibsqlOperationEvent): void => {
+    if (options.onOperation === undefined) return;
+    try {
+      options.onOperation(Object.freeze(event));
+    } catch {
+      // Observability must never break the data path.
+    }
+  };
+  const operationId = resolveOperationId(undefined, options.operationIdProvider ?? defaultLibsqlOperationIdProvider);
   try {
     const config = validateLibsqlConfig(options);
     const startedAt = performance.now();
@@ -169,6 +324,14 @@ export async function testLibsqlConnection(
           `The remote engine version ${engineVersion} is below the required minimum ${minimum}.`,
         );
       }
+      emitOperation({
+        operationId,
+        route: "connection-test",
+        outcome: "ok",
+        errorCode: null,
+        latencyMs: measureLatency(startedAt),
+        attempts: 1,
+      });
       return Object.freeze({
         ok: true,
         engineVersion,
@@ -178,25 +341,72 @@ export async function testLibsqlConnection(
       client.close();
     }
   } catch (error) {
+    const mapped = associateOperationId(mapLibsqlError(error), operationId);
+    emitOperation({
+      operationId,
+      route: "connection-test",
+      outcome: mapped.outcome,
+      errorCode: mapped.code,
+      latencyMs: 0,
+      attempts: 1,
+    });
     return Object.freeze({
       ok: false,
-      error: mapLibsqlError(error),
+      error: mapped,
     });
   }
 }
 
-function withTransaction(remote: Transaction): EngineExecutor["execute"] {
+function withTransaction(
+  remote: Transaction,
+  emitOperation: (event: LibsqlOperationEvent) => void,
+): EngineExecutor["execute"] {
   return <Row extends Record<string, EngineValue> = Record<string, EngineValue>>(
     statement: EngineStatement,
+    executeOptions?: EngineExecuteOptions,
   ): Promise<EngineResult<Row>> => {
+    const operationId = resolveOperationId(executeOptions, defaultLibsqlOperationIdProvider);
+    const startedAt = performance.now();
     try {
+      // Validation happens before the statement reaches the wire: the outcome is always "failed".
       validateStatement(statement);
-      return remote
-        .execute({ sql: statement.sql, args: [...(statement.parameters ?? [])] })
-        .then((result) => normalizeResult<Row>(result));
     } catch (error) {
-      throw mapLibsqlError(error);
+      const mapped = associateOperationId(mapLibsqlError(error), operationId);
+      emitOperation({
+        operationId,
+        route: "execute",
+        outcome: mapped.outcome,
+        errorCode: mapped.code,
+        latencyMs: 0,
+        attempts: 1,
+      });
+      return Promise.reject(mapped);
     }
+    return remote
+      .execute({ sql: statement.sql, args: [...(statement.parameters ?? [])] })
+      .then((result) => {
+        emitOperation({
+          operationId,
+          route: "execute",
+          outcome: "ok",
+          errorCode: null,
+          latencyMs: measureLatency(startedAt),
+          attempts: 1,
+        });
+        return normalizeResult<Row>(result);
+      })
+      .catch((error: unknown) => {
+        const mapped = associateOperationId(mapLibsqlError(error), operationId);
+        emitOperation({
+          operationId,
+          route: "execute",
+          outcome: mapped.outcome,
+          errorCode: mapped.code,
+          latencyMs: measureLatency(startedAt),
+          attempts: 1,
+        });
+        throw mapped;
+      });
   };
 }
 
@@ -363,6 +573,29 @@ export function readServerToken(tokenReference: string): string {
   return token;
 }
 
+export const defaultLibsqlOperationIdProvider = (): string => randomUUID();
+
+function resolveOperationId(
+  options: EngineExecuteOptions | undefined,
+  fallbackProvider: () => string,
+): string {
+  const provided = options?.operationId?.trim();
+  return provided === undefined || provided.length === 0 ? fallbackProvider() : provided;
+}
+
+/**
+ * Returns the given error with the operation id attached, preserving the safe outcome
+ * classification. Does not deduplicate anything: the id is correlation-only.
+ */
+export function associateOperationId(error: EngineError, operationId: string): EngineError {
+  if (error.operationId !== null) return error;
+  return new EngineError(error.code, error.message, error.cause, error.outcome, operationId);
+}
+
+function measureLatency(startedAt: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAt));
+}
+
 function isReadOnlyStatement(sql: string): boolean {
   const first = /^\s*([A-Za-z]+)/.exec(sql)?.[1]?.toUpperCase();
   return first !== undefined && readOnlyFirstKeywords.has(first);
@@ -373,9 +606,13 @@ function isSafeToRetry(error: EngineError): boolean {
 }
 
 export function mapLibsqlError(error: unknown): EngineError {
-  if (error instanceof EngineError) return error;
+  if (error instanceof EngineError) {
+    // A classified error may still need its operation id attached by the caller.
+    return error;
+  }
   if (error instanceof TransportTimeoutError) {
-    return new EngineError("ENGINE_TIMEOUT", "The remote engine request timed out.", error);
+    // The request may have reached the server before the timeout fired: the outcome is unknown.
+    return new EngineError("ENGINE_TIMEOUT", "The remote engine request timed out.", error, "unknown");
   }
   if (error instanceof StorageAdapterError) {
     switch (error.code) {
@@ -413,6 +650,13 @@ export function mapLibsqlError(error: unknown): EngineError {
         return new EngineError(
           "ENGINE_CONFLICT",
           "The remote engine rejected the operation because of a conflicting state.",
+          error,
+        );
+      }
+      if (serverStatus === 429) {
+        return new EngineError(
+          "ENGINE_RATE_LIMITED",
+          "The remote engine is rate limiting requests; retry later.",
           error,
         );
       }
@@ -463,16 +707,19 @@ export function mapLibsqlError(error: unknown): EngineError {
       );
     }
     if (code === "CLIENT_CLOSED" || code === "TRANSACTION_CLOSED") {
+      // The connection died mid-request; a mutation may have been applied.
       return new EngineError(
         "ENGINE_FAILED",
         "The remote engine operation failed because the connection was closed.",
         error,
+        "unknown",
       );
     }
     return new EngineError("ENGINE_FAILED", "The remote engine operation failed.", error);
   }
   if (error instanceof TypeError) {
-    return new EngineError("ENGINE_UNAVAILABLE", "The remote engine could not be reached.", error);
+    // DNS/request-level failures cannot prove whether the request was sent; conservative unknown.
+    return new EngineError("ENGINE_UNAVAILABLE", "The remote engine could not be reached.", error, "unknown");
   }
   return new EngineError(
     "ENGINE_FAILED",

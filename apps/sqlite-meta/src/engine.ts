@@ -3,9 +3,13 @@ import {
   EngineError,
   openLibsqlEngine,
   openReplicaLibsqlEngine,
+  type EngineErrorCode,
+  type EngineOutcome,
   type ReplicaLibsqlFallbackPolicy,
   type ReplicaLibsqlStatus,
   testLibsqlConnection,
+  type LibsqlOperationEventObserver,
+  type LibsqlOperationRoute,
 } from "@mekka/engine-core";
 import { openStorageAdapter } from "@mekka/storage-core";
 
@@ -20,6 +24,20 @@ export type EngineLastTest = Readonly<{
   errorMessage: string | null;
 }>;
 
+/**
+ * Minimal engine signals: request count, latency, typed error code and route. Never contains
+ * SQL payloads, parameter values, URLs or tokens.
+ */
+export type EngineSignals = Readonly<{
+  requestCount: number;
+  errorCount: number;
+  lastRoute: LibsqlOperationRoute | null;
+  lastOutcome: EngineOutcome | null;
+  lastErrorCode: EngineErrorCode | null;
+  lastLatencyMs: number | null;
+  lastOperationId: string | null;
+}>;
+
 export type EngineStatus = Readonly<{
   engineKind: SqliteMetaEngineKind;
   url: string | null;
@@ -30,6 +48,7 @@ export type EngineStatus = Readonly<{
     lastWriteAtMs: number | null;
   } | null;
   lastTestConnection: EngineLastTest | null;
+  signals: EngineSignals | null;
 }>;
 
 export type EngineController = Readonly<{
@@ -75,6 +94,7 @@ export function openEngineController(configuration: EngineConfiguration): Engine
   if (configuration.engineKind === "bun-sqlite") {
     return createLocalEngineController();
   }
+  const signals = createSignalCollector();
   const libsqlOptions = {
     url: configuration.url as string,
     ...(configuration.tokenReference === undefined
@@ -83,9 +103,10 @@ export function openEngineController(configuration: EngineConfiguration): Engine
     requestTimeoutMs: configuration.requestTimeoutMs,
     allowLocalhost: configuration.allowLocalhost,
     ...(configuration.fetch === undefined ? {} : { fetch: configuration.fetch }),
+    onOperation: signals.observer,
   };
   if (configuration.engineKind === "libsql-replica") {
-    return createReplicaLibsqlController(configuration, libsqlOptions);
+    return createReplicaLibsqlController(configuration, libsqlOptions, signals);
   }
   const engine = openLibsqlEngine(libsqlOptions);
   let lastTestConnection: EngineLastTest | null = null;
@@ -98,6 +119,7 @@ export function openEngineController(configuration: EngineConfiguration): Engine
         requestTimeoutMs: configuration.requestTimeoutMs,
         replica: null,
         lastTestConnection,
+        signals: signals.status(),
       }),
     testConnection: async () => {
       const result = await testLibsqlConnection(libsqlOptions);
@@ -115,6 +137,7 @@ export function openEngineController(configuration: EngineConfiguration): Engine
         requestTimeoutMs: configuration.requestTimeoutMs,
         replica: null,
         lastTestConnection,
+        signals: signals.status(),
       });
     },
     close: () => {
@@ -131,12 +154,15 @@ function createReplicaLibsqlController(
     requestTimeoutMs: number;
     allowLocalhost: boolean;
     fetch?: typeof fetch;
+    onOperation: LibsqlOperationEventObserver;
   },
+  signals: ReturnType<typeof createSignalCollector>,
 ): EngineController {
   const engine = openReplicaLibsqlEngine({
     primary: libsqlOptions,
     replicaPath: configuration.replicaPath as string,
     fallbackPolicy: configuration.replicaFallbackPolicy,
+    onOperation: signals.observer,
     ...(configuration.replicaSyncIntervalMs === null
       ? {}
       : { syncIntervalMs: configuration.replicaSyncIntervalMs }),
@@ -156,6 +182,7 @@ function createReplicaLibsqlController(
               lastWriteAtMs: replica.lastWriteAtMs,
             }),
       lastTestConnection,
+      signals: signals.status(),
     });
   return Object.freeze({
     engineKind: "libsql-replica",
@@ -178,6 +205,40 @@ function createReplicaLibsqlController(
   });
 }
 
+function createSignalCollector(): Readonly<{
+  observer: LibsqlOperationEventObserver;
+  status(): EngineSignals;
+}> {
+  let requestCount = 0;
+  let errorCount = 0;
+  let lastRoute: LibsqlOperationRoute | null = null;
+  let lastOutcome: EngineOutcome | null = null;
+  let lastErrorCode: EngineErrorCode | null = null;
+  let lastLatencyMs: number | null = null;
+  let lastOperationId: string | null = null;
+  return Object.freeze({
+    observer: (event) => {
+      requestCount += 1;
+      if (event.outcome !== "ok") errorCount += 1;
+      lastRoute = event.route;
+      lastOutcome = event.outcome;
+      lastErrorCode = event.errorCode;
+      lastLatencyMs = event.latencyMs;
+      lastOperationId = event.operationId;
+    },
+    status: () =>
+      Object.freeze({
+        requestCount,
+        errorCount,
+        lastRoute,
+        lastOutcome,
+        lastErrorCode,
+        lastLatencyMs,
+        lastOperationId,
+      }),
+  });
+}
+
 function createLocalEngineController(): EngineController {
   let lastTestConnection: EngineLastTest | null = null;
   return Object.freeze({
@@ -189,6 +250,7 @@ function createLocalEngineController(): EngineController {
         requestTimeoutMs: null,
         replica: null,
         lastTestConnection,
+        signals: null,
       }),
     testConnection: async () => {
       try {
@@ -231,6 +293,7 @@ function createLocalEngineController(): EngineController {
         requestTimeoutMs: null,
         replica: null,
         lastTestConnection,
+        signals: null,
       });
     },
     close: () => undefined,

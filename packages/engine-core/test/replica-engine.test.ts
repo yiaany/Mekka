@@ -6,6 +6,7 @@ import {
   type EngineValue,
   openReplicaLibsqlEngine,
   routeReplicaLibsqlOperation,
+  type LibsqlOperationEvent,
   type ReplicaLibsqlEngine,
   type ReplicaLibsqlReplicaDriver,
 } from "../src/index";
@@ -37,6 +38,8 @@ type StubReplicaDriver = Readonly<{
   setReads(readRows: readonly Record<string, EngineValue>[]): void;
   setSyncBehavior(behavior: "ok" | "fail" | "hang"): void;
   setReadBehavior(behavior: "ok" | "fail"): void;
+  setSyncError(error: Error, failures: number): void;
+  setReadError(error: Error | null): void;
 }>;
 
 const engines: ReplicaLibsqlEngine[] = [];
@@ -130,6 +133,9 @@ function createStubReplicaDriver(): StubReplicaDriver {
   let reads: readonly Record<string, EngineValue>[] = [];
   let syncBehavior: "ok" | "fail" | "hang" = "ok";
   let readBehavior: "ok" | "fail" = "ok";
+  let syncFailures = 0;
+  let syncError: Error | null = null;
+  let readError: Error | null = null;
   let syncCount = 0;
   let closed = false;
   const driver: ReplicaLibsqlReplicaDriver = {
@@ -137,6 +143,7 @@ function createStubReplicaDriver(): StubReplicaDriver {
       statement: EngineStatement,
     ): Promise<EngineResult<Row>> => {
       executedSql.push(statement.sql);
+      if (readError !== null) throw readError;
       if (readBehavior === "fail") {
         throw new EngineError("ENGINE_UNAVAILABLE", "Replica read failed.");
       }
@@ -144,6 +151,10 @@ function createStubReplicaDriver(): StubReplicaDriver {
     },
     sync: async () => {
       syncCount += 1;
+      if (syncFailures > 0) {
+        syncFailures -= 1;
+        throw syncError ?? new Error("Replica sync failed.");
+      }
       if (syncBehavior === "fail") throw new Error("Replica sync failed.");
       if (syncBehavior === "hang") await new Promise<void>(() => undefined);
     },
@@ -165,6 +176,13 @@ function createStubReplicaDriver(): StubReplicaDriver {
     setReadBehavior(behavior: "ok" | "fail") {
       readBehavior = behavior;
     },
+    setSyncError(error: Error, failures: number) {
+      syncError = error;
+      syncFailures = failures;
+    },
+    setReadError(error: Error | null) {
+      readError = error;
+    },
   };
 }
 
@@ -176,7 +194,9 @@ function openTestEngine(
       fallbackPolicy: "primary" | "safe-error";
       syncOnOpen: boolean;
       syncIntervalMs: number;
+      syncRetryDelayMs: number;
       now: () => number;
+      onOperation: (event: LibsqlOperationEvent) => void;
     }>
   > = {},
 ): ReplicaLibsqlEngine {
@@ -190,7 +210,9 @@ function openTestEngine(
     fallbackPolicy: options.fallbackPolicy ?? "safe-error",
     syncOnOpen: options.syncOnOpen ?? true,
     ...(options.syncIntervalMs === undefined ? {} : { syncIntervalMs: options.syncIntervalMs }),
+    ...(options.syncRetryDelayMs === undefined ? {} : { syncRetryDelayMs: options.syncRetryDelayMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.onOperation === undefined ? {} : { onOperation: options.onOperation }),
     createReplicaDriver: () => driver.driver,
   });
   engines.push(engine);
@@ -479,5 +501,119 @@ describe("libsql-replica engine contract", () => {
     });
 
     await safeEngine.close();
+  });
+
+  test("sync retries a transport-level failure once with bounded backoff and recovers", async () => {
+    const transport = createStubTransport();
+    const driver = createStubReplicaDriver();
+    driver.setSyncError(new TypeError("socket hang up"), 1);
+    const engine = openTestEngine(transport, driver, {
+      syncOnOpen: false,
+      syncRetryDelayMs: 0,
+    });
+
+    const result = await engine.syncNow();
+    expect(result.ok).toBe(true);
+    expect(result.state).toBe("ready");
+    expect(driver.getSyncCount()).toBe(2);
+  });
+
+  test("sync bounds its retries and reports the typed transport failure", async () => {
+    const transport = createStubTransport();
+    const driver = createStubReplicaDriver();
+    driver.setSyncError(new TypeError("socket hang up"), 2);
+    const events: LibsqlOperationEvent[] = [];
+    const engine = openTestEngine(transport, driver, {
+      syncOnOpen: false,
+      syncRetryDelayMs: 0,
+      onOperation: (event) => events.push(event),
+    });
+
+    const result = await engine.syncNow();
+    expect(result.ok).toBe(false);
+    expect(driver.getSyncCount()).toBe(2);
+    expect(engine.status().state).toBe("unavailable");
+    expect(result.error?.code).toBe("ENGINE_UNAVAILABLE");
+    expect(result.error?.outcome).toBe("unknown");
+    expect(result.error?.operationId).not.toBeNull();
+    expect(events[0]).toMatchObject({
+      route: "replica-sync",
+      outcome: "unknown",
+      errorCode: "ENGINE_UNAVAILABLE",
+      attempts: 2,
+    });
+    expect(JSON.stringify(events)).not.toContain("engine.test");
+  });
+
+  test("sync never retries deterministic failures", async () => {
+    const transport = createStubTransport();
+    const driver = createStubReplicaDriver();
+    driver.setSyncError(new EngineError("ENGINE_AUTH", "Replica sync was rejected."), 1);
+    const engine = openTestEngine(transport, driver, { syncOnOpen: false, syncRetryDelayMs: 0 });
+
+    const result = await engine.syncNow();
+    expect(result.ok).toBe(false);
+    expect(driver.getSyncCount()).toBe(1);
+    expect(result.error?.code).toBe("ENGINE_AUTH");
+    expect(result.error?.outcome).toBe("failed");
+  });
+
+  test("replica read failures classify outcomes and emit signals without SQL", async () => {
+    const transport = createStubTransport();
+    const driver = createStubReplicaDriver();
+    driver.setReadError(new TypeError("socket hang up"));
+    const events: LibsqlOperationEvent[] = [];
+    const engine = openTestEngine(transport, driver, {
+      syncOnOpen: true,
+      onOperation: (event) => events.push(event),
+    });
+    await engine.syncNow();
+
+    const caught = (await engine
+      .executeTypedRead({ sql: "SELECT id, secret FROM accounts" })
+      .catch((error: unknown) => error)) as EngineError;
+    expect(caught.code).toBe("ENGINE_UNAVAILABLE");
+    expect(caught.outcome).toBe("unknown");
+    expect(caught.operationId).not.toBeNull();
+
+    const readEvents = events.filter((event) => event.route === "replica-read");
+    expect(readEvents[0]).toMatchObject({
+      outcome: "unknown",
+      errorCode: "ENGINE_UNAVAILABLE",
+      attempts: 1,
+    });
+    expect(JSON.stringify(readEvents)).not.toContain("SELECT");
+    expect(JSON.stringify(readEvents)).not.toContain("secret");
+  });
+
+  test("replica read events are emitted for successful local reads", async () => {
+    const transport = createStubTransport();
+    const driver = createStubReplicaDriver();
+    driver.setReads([{ id: 1 }]);
+    const events: LibsqlOperationEvent[] = [];
+    const engine = openTestEngine(transport, driver, {
+      onOperation: (event) => events.push(event),
+    });
+    await engine.syncNow();
+
+    await engine.executeTypedRead({ sql: "SELECT id FROM accounts" });
+
+    expect(events.filter((event) => event.route === "replica-read")[0]).toMatchObject({
+      outcome: "ok",
+      errorCode: null,
+      attempts: 1,
+    });
+  });
+
+  test("syncRetryDelayMs is validated and bounded", () => {
+    expect(() =>
+      openReplicaLibsqlEngine({
+        primary: { url: "https://engine.test", fetch: createStubTransport().fetch },
+        replicaPath: "C:\\tmp\\replica.db",
+        fallbackPolicy: "safe-error",
+        syncOnOpen: false,
+        syncRetryDelayMs: 6_000,
+      }),
+    ).toThrow(/syncRetryDelayMs/);
   });
 });

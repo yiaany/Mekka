@@ -203,6 +203,98 @@ describe("engine controller", () => {
       else process.env.MEKKA_TEST_LIBSQL_TOKEN = previous;
     }
   });
+
+  test("libsql-remote controller records minimal signals without SQL, URLs or tokens", async () => {
+    const previous = process.env.MEKKA_TEST_LIBSQL_TOKEN;
+    process.env.MEKKA_TEST_LIBSQL_TOKEN = "server-token-1234567890";
+    try {
+      const controller = openEngineController({
+        engineKind: "libsql-remote",
+        url: "https://db.example.turso.io",
+        tokenReference: "MEKKA_TEST_LIBSQL_TOKEN",
+        requestTimeoutMs: 200,
+        allowLocalhost: false,
+        fetch: async () => new Response("{}", { status: 401 }),
+      });
+
+      const before = controller.status();
+      expect(before.signals).toEqual({
+        requestCount: 0,
+        errorCount: 0,
+        lastRoute: null,
+        lastOutcome: null,
+        lastErrorCode: null,
+        lastLatencyMs: null,
+        lastOperationId: null,
+      });
+
+      const after = await controller.testConnection();
+      expect(after.lastTestConnection?.errorCode).toBe("ENGINE_AUTH");
+      expect(after.signals?.requestCount).toBe(1);
+      expect(after.signals?.errorCount).toBe(1);
+      expect(after.signals?.lastRoute).toBe("connection-test");
+      expect(after.signals?.lastOutcome).toBe("failed");
+      expect(after.signals?.lastErrorCode).toBe("ENGINE_AUTH");
+      expect(after.signals?.lastOperationId).not.toBeNull();
+      expect(JSON.stringify(after.signals)).not.toContain("server-token-1234567890");
+      expect(JSON.stringify(after.signals)).not.toContain("db.example.turso.io");
+    } finally {
+      if (previous === undefined) delete process.env.MEKKA_TEST_LIBSQL_TOKEN;
+      else process.env.MEKKA_TEST_LIBSQL_TOKEN = previous;
+    }
+  });
+
+  test("libsql-remote controller counts successful and failed operations separately", async () => {
+    let failing = false;
+    const controller = openEngineController({
+      engineKind: "libsql-remote",
+      url: "https://db.example.turso.io",
+      requestTimeoutMs: 200,
+      allowLocalhost: false,
+      fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (failing) return new Response("{}", { status: 401 });
+        const request = new Request(input, init);
+        if (request.method === "GET") return new Response(null, { status: 404 });
+        const pipeline = JSON.parse(await request.text()) as {
+          requests?: Array<{ type?: string }>;
+        };
+        const results = (pipeline.requests ?? []).map((entry) =>
+          entry.type === "close" || entry.type === "store_sql"
+            ? { type: "ok", response: { type: entry.type } }
+            : {
+                type: "ok",
+                response: {
+                  type: "execute",
+                  result: {
+                    cols: [{ name: "version", decltype: null }],
+                    rows: [[{ type: "text", value: "3.45.1" }]],
+                    affected_row_count: 0,
+                  },
+                },
+              },
+        );
+        return new Response(
+          JSON.stringify({ baton: "b1", base_url: "http://engine.test", results }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+    });
+
+    const ok = await controller.testConnection();
+    expect(ok.lastTestConnection?.ok).toBe(true);
+    expect(ok.signals?.requestCount).toBe(1);
+    expect(ok.signals?.errorCount).toBe(0);
+    expect(ok.signals?.lastOutcome).toBe("ok");
+    expect(ok.signals?.lastErrorCode).toBeNull();
+
+    failing = true;
+    const failed = await controller.testConnection();
+    expect(failed.lastTestConnection?.ok).toBe(false);
+    expect(failed.signals?.requestCount).toBe(2);
+    expect(failed.signals?.errorCount).toBe(1);
+    expect(failed.signals?.lastOutcome).toBe("failed");
+    expect(failed.signals?.lastErrorCode).toBe("ENGINE_AUTH");
+  });
 });
 
 describe("engine status API", () => {
@@ -213,6 +305,7 @@ describe("engine status API", () => {
       requestTimeoutMs: null,
       replica: null,
       lastTestConnection: null,
+      signals: null,
     });
     const { app } = await createEngineFixture({
       status: () => status,
@@ -237,6 +330,7 @@ describe("engine status API", () => {
       requestTimeoutMs: 200,
       replica: null,
       lastTestConnection: null,
+      signals: null,
     });
     const tested: EngineStatus = Object.freeze({
       ...status,

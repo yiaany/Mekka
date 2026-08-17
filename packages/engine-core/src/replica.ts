@@ -4,16 +4,21 @@ import {
   type EngineCapabilities,
   EngineError,
   type EngineExecutor,
+  type EngineOutcome,
   type EngineResult,
   type EngineStatement,
   type EngineValue,
 } from "./index";
 import {
+  associateOperationId,
+  defaultLibsqlOperationIdProvider,
   mapLibsqlError,
   normalizeResult,
   openLibsqlEngine,
   readServerToken,
   type LibsqlEngineOptions,
+  type LibsqlOperationEvent,
+  type LibsqlOperationEventObserver,
 } from "./libsql";
 
 export type ReplicaLibsqlFallbackPolicy = "primary" | "safe-error";
@@ -77,6 +82,17 @@ export type ReplicaLibsqlEngineOptions = Readonly<{
    * inject a deterministic driver here; production callers should not set this option.
    */
   createReplicaDriver?: (config: ReplicaDriverConfig) => ReplicaLibsqlReplicaDriver;
+  /**
+   * Delay between the two bounded sync attempts, in milliseconds. The sync retries once with
+   * this delay only when the upstream failure is transport-level (outcome `unknown`). Bounded
+   * to `[0, 5000]`; defaults to 200.
+   */
+  syncRetryDelayMs?: number;
+  /**
+   * Minimal observability sink for replica-local operations (replica reads and syncs). Events
+   * never contain SQL text, parameter values, URLs or tokens.
+   */
+  onOperation?: LibsqlOperationEventObserver;
 }>;
 
 export type ReplicaLibsqlEngine = Readonly<{
@@ -119,12 +135,18 @@ const replicaLibsqlCapabilities: EngineCapabilities = Object.freeze({
 
 const minimumSyncIntervalMs = 1_000;
 const maximumSyncIntervalMs = 3_600_000;
+/** Bounded sync retry: at most one retry on top of the initial attempt. */
+const maximumSyncAttempts = 2;
+const defaultSyncRetryDelayMs = 200;
+const maximumSyncRetryDelayMs = 5_000;
 
 export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): ReplicaLibsqlEngine {
   const replicaUrl = validateReplicaPath(options.replicaPath);
   const primary = openLibsqlEngine(options.primary);
   const syncIntervalMs = validateSyncIntervalMs(options.syncIntervalMs);
+  const syncRetryDelayMs = validateSyncRetryDelayMs(options.syncRetryDelayMs);
   const now = options.now ?? (() => Date.now());
+  const operationIdProvider = options.primary.operationIdProvider ?? defaultLibsqlOperationIdProvider;
   const token =
     options.primary.tokenReference === undefined
       ? undefined
@@ -149,6 +171,15 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
     driverCreationError = mapLibsqlError(error);
   }
 
+  const emitOperation = (event: LibsqlOperationEvent): void => {
+    if (options.onOperation === undefined) return;
+    try {
+      options.onOperation(Object.freeze(event));
+    } catch {
+      // Observability must never break the data path.
+    }
+  };
+
   let closed = false;
   let syncing: Promise<ReplicaSyncResult> | null = null;
   let state: ReplicaLibsqlState = "unavailable";
@@ -172,24 +203,76 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
     }
     if (syncing !== null) return syncing;
     syncing = (async () => {
+      const operationId = operationIdProvider();
       if (driver === null || driverCreationError !== null) {
         state = "unavailable";
         const error = driverCreationError ?? new EngineError(
           "ENGINE_UNAVAILABLE",
           "The local replica could not be created; no sync is possible.",
         );
-        return Object.freeze({ ok: false, state, syncedAtMs: null, error });
+        const classified = associateOperationId(error, operationId);
+        emitOperation({
+          operationId,
+          route: "replica-sync",
+          outcome: classified.outcome,
+          errorCode: classified.code,
+          latencyMs: 0,
+          attempts: 1,
+        });
+        return Object.freeze({ ok: false, state, syncedAtMs: null, error: classified });
       }
-      const syncedAt = now();
       try {
-        await driver.sync();
-        lastSyncAtMs = syncedAt;
-        state = isStale() ? "stale" : "ready";
-        return Object.freeze({ ok: true, state, syncedAtMs: syncedAt, error: null });
-      } catch (error) {
-        state = "unavailable";
-        const mapped = mapLibsqlError(error);
-        return Object.freeze({ ok: false, state, syncedAtMs: null, error: mapped });
+        for (let attempt = 1; attempt <= maximumSyncAttempts; attempt += 1) {
+          const startedAt = performance.now();
+          const syncedAt = now();
+          try {
+            await driver.sync();
+            lastSyncAtMs = syncedAt;
+            state = isStale() ? "stale" : "ready";
+            emitOperation({
+              operationId,
+              route: "replica-sync",
+              outcome: "ok",
+              errorCode: null,
+              latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+              attempts: attempt,
+            });
+            return Object.freeze({ ok: true, state, syncedAtMs: syncedAt, error: null });
+          } catch (error) {
+            const mapped = mapLibsqlError(error);
+            state = "unavailable";
+            const retryable =
+              attempt < maximumSyncAttempts && mapped.outcome === "unknown" && !closed;
+            if (retryable) {
+              await sleep(syncRetryDelayMs);
+              continue;
+            }
+            const classified = associateOperationId(mapped, operationId);
+            emitOperation({
+              operationId,
+              route: "replica-sync",
+              outcome: classified.outcome,
+              errorCode: classified.code,
+              latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+              attempts: attempt,
+            });
+            return Object.freeze({ ok: false, state, syncedAtMs: null, error: classified });
+          }
+        }
+        const error = new EngineError(
+          "ENGINE_UNAVAILABLE",
+          "Replica sync exceeded its bounded retry attempts.",
+        );
+        const classified = associateOperationId(error, operationId);
+        emitOperation({
+          operationId,
+          route: "replica-sync",
+          outcome: "unknown",
+          errorCode: classified.code,
+          latencyMs: 0,
+          attempts: maximumSyncAttempts,
+        });
+        return Object.freeze({ ok: false, state, syncedAtMs: null, error: classified });
       } finally {
         syncing = null;
       }
@@ -237,10 +320,20 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
         new EngineError("ENGINE_CLOSED", "Replica engine is closed; no statements are accepted."),
       );
     }
+    const operationId = operationIdProvider();
     try {
       validateStatement(statement);
     } catch (error) {
-      return Promise.reject(mapLibsqlError(error));
+      const mapped = associateOperationId(mapLibsqlError(error), operationId);
+      emitOperation({
+        operationId,
+        route: "replica-read",
+        outcome: "failed",
+        errorCode: mapped.code,
+        latencyMs: 0,
+        attempts: 1,
+      });
+      return Promise.reject(mapped);
     }
     if (state === "unavailable" || isStale()) {
       if (options.fallbackPolicy === "primary" && state === "unavailable") {
@@ -251,27 +344,55 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
         return primary.execute<Row>(statement);
       }
       return Promise.reject(
-        new EngineError(
-          "ENGINE_UNAVAILABLE",
-          "The local replica is unavailable and the configured fallback policy is safe-error. " +
-            "Run a manual sync before retrying the read.",
+        associateOperationId(
+          new EngineError(
+            "ENGINE_UNAVAILABLE",
+            "The local replica is unavailable and the configured fallback policy is safe-error. " +
+              "Run a manual sync before retrying the read.",
+          ),
+          operationId,
         ),
       );
     }
     if (driver === null) {
       return Promise.reject(
-        new EngineError(
-          "ENGINE_UNAVAILABLE",
-          "The local replica could not be created and the configured fallback policy is safe-error. " +
-            "Reconfigure the replica before retrying the read.",
+        associateOperationId(
+          new EngineError(
+            "ENGINE_UNAVAILABLE",
+            "The local replica could not be created and the configured fallback policy is safe-error. " +
+              "Reconfigure the replica before retrying the read.",
+          ),
+          operationId,
         ),
       );
     }
-    return driver.execute<Row>(statement).catch((error: unknown) => {
-      state = "unavailable";
-      if (options.fallbackPolicy === "primary") return primary.execute<Row>(statement);
-      throw mapLibsqlError(error);
-    });
+    const startedAt = performance.now();
+    return driver.execute<Row>(statement)
+      .then((result) => {
+        emitOperation({
+          operationId,
+          route: "replica-read",
+          outcome: "ok",
+          errorCode: null,
+          latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          attempts: 1,
+        });
+        return result;
+      })
+      .catch((error: unknown) => {
+        const mapped = associateOperationId(mapLibsqlError(error), operationId);
+        emitOperation({
+          operationId,
+          route: "replica-read",
+          outcome: mapped.outcome,
+          errorCode: mapped.code,
+          latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          attempts: 1,
+        });
+        state = "unavailable";
+        if (options.fallbackPolicy === "primary") return primary.execute<Row>(statement);
+        throw mapped;
+      });
   };
 
   const executeTypedRead = <Row extends Record<string, EngineValue> = Record<string, EngineValue>>(
@@ -377,4 +498,21 @@ function validateSyncIntervalMs(value: number | undefined): number | null {
     );
   }
   return value;
+}
+
+function validateSyncRetryDelayMs(value: number | undefined): number {
+  if (value === undefined) return defaultSyncRetryDelayMs;
+  if (!Number.isSafeInteger(value) || value < 0 || value > maximumSyncRetryDelayMs) {
+    throw new EngineError(
+      "ENGINE_FAILED",
+      `syncRetryDelayMs must be an integer between 0 and ${maximumSyncRetryDelayMs}.`,
+    );
+  }
+  return value;
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 }

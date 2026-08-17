@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { type Engine, EngineError, openLibsqlEngine, testLibsqlConnection } from "../src/index";
+import {
+  type Engine,
+  EngineError,
+  openLibsqlEngine,
+  testLibsqlConnection,
+  type LibsqlOperationEvent,
+} from "../src/index";
 
 type RecordedRequest = Readonly<{
   method: string;
@@ -438,5 +444,235 @@ describe("libsql engine contract", () => {
       name: "EngineError",
       code: "ENGINE_CLOSED",
     });
+  });
+});
+
+describe("operation outcome classification and signals", () => {
+  test("statements rejected before send carry a failed outcome and the operation id", async () => {
+    const transport = createStubTransport();
+    const engine = openTestEngine(transport);
+
+    const caught = await engine
+      .execute({ sql: "BEGIN IMMEDIATE" }, { operationId: "op-forbidden" })
+      .catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(EngineError);
+    expect((caught as EngineError).code).toBe("ENGINE_STATEMENT_FORBIDDEN");
+    expect((caught as EngineError).outcome).toBe("failed");
+    expect((caught as EngineError).operationId).toBe("op-forbidden");
+    expect(transport.requests.filter((request) => request.method === "POST")).toHaveLength(0);
+  });
+
+  test("a hung mutation returns an unknown outcome with the operation id and is never retried", async () => {
+    const transport = createStubTransport();
+    let hangs = 0;
+    transport.setHang((request) => {
+      if (request.method !== "POST") return false;
+      hangs += 1;
+      return true;
+    });
+    const engine = openTestEngine(transport, { requestTimeoutMs: 50 });
+
+    const caught = (await engine
+      .execute(
+        { sql: "INSERT INTO t (v) VALUES (?)", parameters: [1] },
+        { operationId: "op-write-1" },
+      )
+      .catch((error: unknown) => error)) as EngineError;
+    expect(caught.code).toBe("ENGINE_TIMEOUT");
+    expect(caught.outcome).toBe("unknown");
+    expect(caught.operationId).toBe("op-write-1");
+    expect(hangs).toBe(1);
+  });
+
+  test("a hung read reports an unknown final outcome after exactly one bounded retry", async () => {
+    const transport = createStubTransport();
+    let hangs = 0;
+    transport.setHang((request) => {
+      if (request.method !== "POST") return false;
+      hangs += 1;
+      return true;
+    });
+    const events: LibsqlOperationEvent[] = [];
+    const engine = openTestEngine(transport, {
+      requestTimeoutMs: 50,
+      onOperation: (event) => events.push(event),
+    });
+
+    const caught = (await engine.execute({ sql: "SELECT 1" }).catch((error: unknown) => error)) as EngineError;
+    expect(caught.code).toBe("ENGINE_TIMEOUT");
+    expect(caught.outcome).toBe("unknown");
+    expect(caught.operationId).not.toBeNull();
+    expect(hangs).toBe(2);
+    expect(events[0]?.attempts).toBe(2);
+    expect(events[0]?.outcome).toBe("unknown");
+  });
+
+  test("a manual retry with the same operation id succeeds once the upstream recovers", async () => {
+    const transport = createStubTransport();
+    let hanging = true;
+    transport.setHang(() => hanging);
+    const engine = openTestEngine(transport, { requestTimeoutMs: 50 });
+
+    const first = (await engine
+      .execute({ sql: "INSERT INTO t (v) VALUES (1)" }, { operationId: "op-manual" })
+      .catch((error: unknown) => error)) as EngineError;
+    expect(first.code).toBe("ENGINE_TIMEOUT");
+    expect(first.outcome).toBe("unknown");
+    expect(first.operationId).toBe("op-manual");
+
+    hanging = false;
+    const second = await engine.execute(
+      { sql: "INSERT INTO t (v) VALUES (1)" },
+      { operationId: "op-manual" },
+    );
+    expect(second.changes).toBe(1);
+  });
+
+  test("server responses classify as failed outcomes even with transient-looking codes", async () => {
+    const scenarios: Array<{ status: number; expected: string }> = [
+      { status: 401, expected: "ENGINE_AUTH" },
+      { status: 409, expected: "ENGINE_CONFLICT" },
+      { status: 500, expected: "ENGINE_UNAVAILABLE" },
+    ];
+    for (const scenario of scenarios) {
+      const transport = createStubTransport();
+      transport.setFailure(scenario.status, JSON.stringify({ error: "server error" }));
+      const engine = openTestEngine(transport);
+      const caught = (await engine
+        .execute({ sql: "SELECT 1" })
+        .catch((error: unknown) => error)) as EngineError;
+      expect(caught.code, `status ${scenario.status}`).toBe(scenario.expected);
+      expect(caught.outcome, `status ${scenario.status}`).toBe("failed");
+      expect(caught.operationId, `status ${scenario.status}`).not.toBeNull();
+    }
+  });
+
+  test("rate limit responses map to ENGINE_RATE_LIMITED without leaking details", async () => {
+    const transport = createStubTransport();
+    transport.setFailure(429, JSON.stringify({ error: "rate limited", retry_after: 5 }));
+    const engine = openTestEngine(transport);
+
+    const caught = (await engine
+      .execute({ sql: "INSERT INTO t (v) VALUES (1)" })
+      .catch((error: unknown) => error)) as EngineError;
+    expect(caught.code).toBe("ENGINE_RATE_LIMITED");
+    expect(caught.outcome).toBe("failed");
+    expect(caught.message).not.toContain("rate limited");
+  });
+
+  test("network-level failures classify as unknown outcomes", async () => {
+    const engine = openTestEngine(createStubTransport(), {
+      fetch: async () => {
+        throw new TypeError("fetch failed");
+      },
+    });
+
+    const caught = (await engine
+      .execute({ sql: "INSERT INTO t (v) VALUES (1)" })
+      .catch((error: unknown) => error)) as EngineError;
+    expect(caught.code).toBe("ENGINE_UNAVAILABLE");
+    expect(caught.outcome).toBe("unknown");
+    expect(caught.operationId).not.toBeNull();
+  });
+
+  test("operation events never leak SQL, parameter values, URLs or tokens", async () => {
+    const previous = process.env.MEKKA_TEST_LIBSQL_TOKEN;
+    process.env.MEKKA_TEST_LIBSQL_TOKEN = "supersecret-server-token";
+    try {
+      const events: LibsqlOperationEvent[] = [];
+      const transport = createStubTransport();
+      const engine = openTestEngine(transport, {
+        tokenReference: "MEKKA_TEST_LIBSQL_TOKEN",
+        onOperation: (event) => events.push(event),
+      });
+
+      await engine.execute({
+        sql: "SELECT * FROM accounts WHERE secret = ?",
+        parameters: ["teenage-mutant-value"],
+      });
+      transport.setFailure(401, '{"error":"unauthorized"}');
+      await engine
+        .execute({
+          sql: "INSERT INTO t (v) VALUES (?)",
+          parameters: ["teenage-mutant-value"],
+        })
+        .catch(() => undefined);
+
+      expect(events).toHaveLength(2);
+      expect(events[0]).toMatchObject({ route: "execute", outcome: "ok", errorCode: null });
+      expect(events[0]?.latencyMs).toBeGreaterThanOrEqual(0);
+      expect(events[0]?.attempts).toBe(1);
+      expect(events[1]).toMatchObject({ route: "execute", outcome: "failed", errorCode: "ENGINE_AUTH" });
+
+      const serialized = JSON.stringify(events);
+      expect(serialized).not.toContain("SELECT");
+      expect(serialized).not.toContain("INSERT INTO");
+      expect(serialized).not.toContain("teenage-mutant-value");
+      expect(serialized).not.toContain("engine.test");
+      expect(serialized).not.toContain("supersecret-server-token");
+    } finally {
+      if (previous === undefined) delete process.env.MEKKA_TEST_LIBSQL_TOKEN;
+      else process.env.MEKKA_TEST_LIBSQL_TOKEN = previous;
+    }
+  });
+
+  test("transactions emit per-phase events with typed outcomes", async () => {
+    const events: LibsqlOperationEvent[] = [];
+    const transport = createStubTransport();
+    const engine = openTestEngine(transport, { onOperation: (event) => events.push(event) });
+
+    await engine
+      .transaction(async (tx) => {
+        await tx.execute({ sql: "INSERT INTO t (v) VALUES (1)" });
+        throw new Error("boom");
+      })
+      .catch(() => undefined);
+
+    expect(events.map((event) => event.route)).toEqual([
+      "transaction:begin",
+      "execute",
+      "transaction:rollback",
+    ]);
+    for (const event of events) {
+      expect(event.outcome).toBe("ok");
+      expect(event.operationId).not.toBeNull();
+    }
+  });
+
+  test("testLibsqlConnection classifies outcomes and emits connection-test signals", async () => {
+    const events: LibsqlOperationEvent[] = [];
+    const timeoutTransport = createStubTransport();
+    timeoutTransport.setHang((request) => request.method === "POST");
+    const timeoutResult = await testLibsqlConnection({
+      url: "https://engine.test",
+      requestTimeoutMs: 50,
+      fetch: timeoutTransport.fetch,
+      onOperation: (event) => events.push(event),
+    });
+    expect(timeoutResult.ok).toBe(false);
+    if (!timeoutResult.ok) {
+      expect(timeoutResult.error.code).toBe("ENGINE_TIMEOUT");
+      expect(timeoutResult.error.outcome).toBe("unknown");
+      expect(timeoutResult.error.operationId).not.toBeNull();
+    }
+    expect(events[0]).toMatchObject({
+      route: "connection-test",
+      outcome: "unknown",
+      errorCode: "ENGINE_TIMEOUT",
+      attempts: 1,
+    });
+
+    const rateTransport = createStubTransport();
+    rateTransport.setFailure(429, '{"error":"rate limited"}');
+    const rateResult = await testLibsqlConnection({
+      url: "https://engine.test",
+      requestTimeoutMs: 200,
+      fetch: rateTransport.fetch,
+    });
+    expect(rateResult.ok).toBe(false);
+    if (!rateResult.ok) {
+      expect(rateResult.error.code).toBe("ENGINE_RATE_LIMITED");
+      expect(rateResult.error.outcome).toBe("failed");
+    }
   });
 });

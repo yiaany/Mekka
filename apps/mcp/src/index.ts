@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { VerifiedAuthAccessToken } from "@mekka/auth-core";
+import type { EngineExecutor } from "@mekka/engine-core";
 import type { BranchService } from "@mekka/branch-core";
 import {
   createMigrationArtifact,
@@ -21,7 +22,7 @@ import {
   type TenantIdentity,
 } from "@mekka/protocol";
 import { parseQuery } from "@mekka/query-ast";
-import { buildSchemaManifest, type SchemaManifest } from "@mekka/schema-manifest";
+import { buildSchemaManifestAsync, type SchemaManifest } from "@mekka/schema-manifest";
 import { compileSelect } from "@mekka/sqlite-compiler";
 import type { StorageAdapter, StorageValue } from "@mekka/storage-core";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -39,7 +40,7 @@ export const mcpProtocolVersion = "2025-11-25";
 
 export type McpProject = Readonly<{
   tenant: TenantIdentity;
-  storage: StorageAdapter;
+  storage: StorageAdapter | EngineExecutor;
   policies: PolicyDocument;
 }>;
 
@@ -222,7 +223,7 @@ export function createMcpServer(context: TenantContext, dependencies: McpDepende
     { mimeType: "application/json", description: "Current public schema manifest." },
     async () =>
       safeMcpOperation(async () =>
-        resourceJson("schema://current", inspectSchema(await project())),
+        resourceJson("schema://current", await inspectSchema(await project())),
       ),
   );
   server.registerResource(
@@ -232,7 +233,7 @@ export function createMcpServer(context: TenantContext, dependencies: McpDepende
     async (uri, variables) =>
       safeMcpOperation(async () => {
         if (variables.branchId !== context.tenant.branchId) throw new ProtocolError("forbidden");
-        return resourceJson(uri.href, inspectSchema(await project()));
+        return resourceJson(uri.href, await inspectSchema(await project()));
       }),
   );
   server.registerResource(
@@ -253,7 +254,7 @@ export function createMcpServer(context: TenantContext, dependencies: McpDepende
     { mimeType: "application/json", description: "Migration metadata without SQL text." },
     async () =>
       safeMcpOperation(async () =>
-        resourceJson("migrations://history", listMigrations(await project())),
+        resourceJson("migrations://history", await listMigrations(await project())),
       ),
   );
   server.registerResource(
@@ -290,7 +291,7 @@ export function createMcpServer(context: TenantContext, dependencies: McpDepende
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
-    async () => safeMcpOperation(async () => toolJson(inspectSchema(await project()))),
+    async () => safeMcpOperation(async () => toolJson(await inspectSchema(await project()))),
   );
   server.registerTool(
     "explain_query",
@@ -306,7 +307,7 @@ export function createMcpServer(context: TenantContext, dependencies: McpDepende
     async ({ table, query }) =>
       safeMcpOperation(async () => {
         const authorizedProject = await project();
-        const manifest = buildSchemaManifest(authorizedProject.storage);
+        const manifest = await inspectSchema(authorizedProject);
         const ast = parseQuery(manifest, table, query);
         const statement = compileSelect(manifest, ast);
         return toolJson({
@@ -330,7 +331,7 @@ export function createMcpServer(context: TenantContext, dependencies: McpDepende
       inputSchema: {},
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
-    async () => safeMcpOperation(async () => toolJson(listMigrations(await project()))),
+    async () => safeMcpOperation(async () => toolJson(await listMigrations(await project()))),
   );
   server.registerTool(
     "get_policy_summary",
@@ -620,7 +621,7 @@ export async function openMcpMutationWorkflow(
       cleanupExpiredPreviews(catalog, now());
       const preview = requireActivePreview(catalog, context.tenant, now());
       if (!sameTenant(project.tenant, context.tenant)) throw new ProtocolError("forbidden");
-      const expectedSchemaHash = buildSchemaManifest(project.storage).hash;
+      const expectedSchemaHash = (await inspectSchema(project)).hash;
       const requestHash = hashRequest({
         operation: "propose_migration",
         parentTenant: preview.parentTenant,
@@ -754,7 +755,7 @@ export async function openMcpMutationWorkflow(
         return proposal;
       if (proposal.state !== "applied" || proposal.previewSchemaHash === null)
         throw new ProtocolError("conflict");
-      if (buildSchemaManifest(project.storage).hash !== proposal.previewSchemaHash)
+      if ((await inspectSchema(project)).hash !== proposal.previewSchemaHash)
         throw new ProtocolError("conflict");
       const updated = catalog
         .query<never, [string]>(
@@ -1482,26 +1483,31 @@ function resolveAuthorizedProject(
   });
 }
 
-function inspectSchema(project: McpProject): SchemaManifest {
-  return buildSchemaManifest(project.storage);
+function inspectSchema(project: McpProject): Promise<SchemaManifest> {
+  return buildSchemaManifestAsync(asyncExecutor(project.storage));
 }
 
-function listMigrations(project: McpProject): readonly MigrationSummary[] {
-  const table = project.storage.execute<{ name: StorageValue }>({
-    sql: "SELECT name FROM pragma_table_list WHERE schema = ? AND type = ? AND name = ?",
-    parameters: ["main", "table", "_mekka_migrations"],
-  }).rows[0];
+async function listMigrations(project: McpProject): Promise<readonly MigrationSummary[]> {
+  const storage = asyncExecutor(project.storage);
+  const table = (
+    await storage.execute<{ name: StorageValue }>({
+      sql: "SELECT name FROM pragma_table_list WHERE schema = ? AND type = ? AND name = ?",
+      parameters: ["main", "table", "_mekka_migrations"],
+    })
+  ).rows[0];
   if (table?.name !== "_mekka_migrations") return Object.freeze([]);
 
-  const rows = project.storage.execute<{
-    id: StorageValue;
-    hash: StorageValue;
-    actorId: StorageValue;
-    appliedSchemaHash: StorageValue;
-  }>({
-    sql: "SELECT id, hash, actor_id AS actorId, applied_schema_hash AS appliedSchemaHash FROM _mekka_migrations WHERE state = ? ORDER BY id LIMIT 100",
-    parameters: ["applied"],
-  }).rows;
+  const rows = (
+    await storage.execute<{
+      id: StorageValue;
+      hash: StorageValue;
+      actorId: StorageValue;
+      appliedSchemaHash: StorageValue;
+    }>({
+      sql: "SELECT id, hash, actor_id AS actorId, applied_schema_hash AS appliedSchemaHash FROM _mekka_migrations WHERE state = ? ORDER BY id LIMIT 100",
+      parameters: ["applied"],
+    })
+  ).rows;
   return Object.freeze(
     rows.map((row) =>
       Object.freeze({
@@ -1512,6 +1518,14 @@ function listMigrations(project: McpProject): readonly MigrationSummary[] {
       }),
     ),
   );
+}
+
+function asyncExecutor(storage: StorageAdapter | EngineExecutor) {
+  return Object.freeze({
+    execute: async <Row extends Record<string, StorageValue> = Record<string, StorageValue>>(
+      statement: Readonly<{ sql: string; parameters?: readonly StorageValue[] }>,
+    ) => storage.execute<Row>(statement),
+  });
 }
 
 function policySummary(document: PolicyDocument): Readonly<Record<string, unknown>> {

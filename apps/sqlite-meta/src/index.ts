@@ -2,6 +2,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { policyFormatVersion } from "@mekka/policy-engine";
+import { openSqliteEngine, type Engine } from "@mekka/engine-core";
 import {
   createCorrelationId,
   createTenantCacheKey,
@@ -11,6 +12,7 @@ import {
   parseTenantIdentityFromHeaders,
 } from "@mekka/protocol";
 import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core/sqlite";
+import { createAsyncSchemaManifestCache } from "@mekka/schema-manifest";
 import { openAgentTokenStore } from "./agent-token-store";
 import { createSqliteMetaApp } from "./app";
 import type { LocalAuthRuntime } from "./auth";
@@ -20,6 +22,7 @@ import {
   readInternalProxyToken,
 } from "./internal-proxy";
 import type { LocalMcpRuntime, McpApprovalRecord } from "./mcp-runtime";
+import { openPreviewDependencies } from "./preview-configuration";
 
 const port = readPort(process.env.SQLITE_META_PORT ?? "3001");
 export const agentAccessTtlMs = 60 * 60_000;
@@ -46,8 +49,10 @@ await mkdir(dataDirectory, { recursive: true });
 await mkdir(join(dataDirectory, "auth"), { recursive: true });
 
 const adapters = new Map<string, StorageAdapter>();
+const engines = new Map<string, Engine>();
 const agentTokens = openAgentTokenStore(join(dataDirectory, "auth", "agent-access.sqlite"));
 const engineController = openEngineController(readEngineConfiguration(process.env));
+const previewDependencies = openPreviewDependencies(process.env, isLocalDevelopment);
 const productionTenant = parseTenantIdentity({
   organizationId: process.env.NEXT_PUBLIC_STUDIO_ORGANIZATION_ID ?? "org-local",
   projectId: "local",
@@ -101,14 +106,18 @@ async function getMcpRuntime(): Promise<LocalMcpRuntime> {
 }
 
 async function getMcpDependencies() {
-  const [runtime, mcp] = await Promise.all([getMcpRuntime(), import("@mekka/mcp")]);
+  const mcp = await import("@mekka/mcp");
+  const runtime = engineController.engine === null ? await getMcpRuntime() : undefined;
   return {
     createMcpHttpResponse: mcp.createMcpHttpResponse,
     dependencies: {
       resolveProject(context: ReturnType<typeof createTenantContext>) {
         return {
           tenant: context.tenant,
-          storage: resolveStorage(context.tenant),
+          storage:
+            engineController.engine === null
+              ? resolveStorage(context.tenant)
+              : resolveDataProject(context.tenant).engine,
           policies: Object.freeze({
             formatVersion: policyFormatVersion,
             tables: Object.freeze([]),
@@ -116,7 +125,7 @@ async function getMcpDependencies() {
         };
       },
       listLogs: () => Object.freeze([]),
-      mutations: runtime.mutations,
+      ...(runtime === undefined ? {} : { mutations: runtime.mutations }),
       tokenVerifier: {
         async verifyAccessToken(token: string) {
           const auth = await getAuthRuntime();
@@ -187,7 +196,14 @@ const app = createSqliteMetaApp({
         {
           id: "studio-local-admin",
           tenant,
-          actions: ["schema:read", "schema:manage", "data:read", "data:write", "sql:execute"],
+          actions: [
+            "schema:read",
+            "schema:manage",
+            "data:read",
+            "data:write",
+            "sql:execute",
+            "preview:manage",
+          ],
           expiresAt: Number.MAX_SAFE_INTEGER,
         },
       ],
@@ -195,10 +211,11 @@ const app = createSqliteMetaApp({
     });
   },
   resolveProject(context) {
-    return { tenant: context.tenant, storage: resolveStorage(context.tenant) };
+    return resolveDataProject(context.tenant);
   },
   recordAudit() {},
   engine: engineController,
+  previews: previewDependencies,
   checkpointDirectory: dataDirectory,
 })
   .all("/auth/*", async ({ request }) => (await getAuthRuntime()).handlePublicRequest(request))
@@ -238,6 +255,15 @@ const app = createSqliteMetaApp({
       let grantIdentity = Object.freeze({ ...verified, tokenId: randomUUID() });
       let previewCreated = false;
       if (mode === "write") {
+        if (engineController.engine !== null) {
+          return Response.json(
+            {
+              error: "unsupported",
+              message: "Write-mode MCP previews are unavailable in this self-hosted profile.",
+            },
+            { status: 501, headers: { "cache-control": "no-store" } },
+          );
+        }
         const [runtime, { mcpPreviewCreateAction }] = await Promise.all([
           getMcpRuntime(),
           import("@mekka/mcp"),
@@ -359,6 +385,7 @@ function close(): void {
   agentTokens.close();
   mcpRuntime?.close();
   engineController.close();
+  for (const engine of engines.values()) void engine.close();
   for (const adapter of adapters.values()) adapter.close();
 }
 
@@ -411,7 +438,29 @@ function writeApprovalConflict(approval: McpApprovalRecord | null) {
 }
 
 function resolveProductionStorage(): StorageAdapter {
+  if (engineController.engine !== null) {
+    throw new ProtocolError("unsupported");
+  }
   return openTenantStorage(productionTenant, undefined);
+}
+
+function resolveDataProject(tenant: typeof productionTenant) {
+  if (engineController.engine !== null) {
+    if (!sameTenant(tenant, productionTenant)) throw new ProtocolError("forbidden");
+    return Object.freeze({
+      tenant,
+      engine: engineController.engine,
+      schemaCache: createAsyncSchemaManifestCache(engineController.engine),
+    });
+  }
+  const localStorage = resolveStorage(tenant);
+  const engine = openTenantEngine(tenant, resolveTenantDatabasePath(tenant));
+  return Object.freeze({
+    tenant,
+    engine,
+    localStorage,
+    schemaCache: createAsyncSchemaManifestCache(engine),
+  });
 }
 
 function resolveStorage(tenant: typeof productionTenant): StorageAdapter {
@@ -440,12 +489,38 @@ function openTenantStorage(
   return storage;
 }
 
+function resolveTenantDatabasePath(tenant: typeof productionTenant): string {
+  const key = createTenantCacheKey(tenant, "sqlite-meta-local");
+  const branch = mcpRuntime?.branches
+    .listBranches(productionTenant)
+    .find((candidate) => sameTenant(candidate.tenant, tenant));
+  return (
+    branch?.databasePath ??
+    join(dataDirectory, `${createHash("sha256").update(key).digest("hex")}.sqlite`)
+  );
+}
+
+function openTenantEngine(tenant: typeof productionTenant, databasePath: string): Engine {
+  const key = createTenantCacheKey(tenant, "sqlite-meta-local");
+  let engine = engines.get(key);
+  if (engine === undefined) {
+    engine = openSqliteEngine({ databaseDirectory: dataDirectory, databasePath });
+    engines.set(key, engine);
+  }
+  return engine;
+}
+
 function closeTenantStorage(tenant: typeof productionTenant): void {
   const key = createTenantCacheKey(tenant, "sqlite-meta-local");
   const storage = adapters.get(key);
   if (!storage) return;
   storage.close();
   adapters.delete(key);
+  const engine = engines.get(key);
+  if (engine !== undefined) {
+    void engine.close();
+    engines.delete(key);
+  }
 }
 
 function sameTenant(left: typeof productionTenant, right: typeof productionTenant): boolean {

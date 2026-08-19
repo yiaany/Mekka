@@ -68,6 +68,7 @@ export type EngineErrorCode =
   | "ENGINE_TIMEOUT"
   | "ENGINE_UNAVAILABLE"
   | "ENGINE_CONFLICT"
+  | "ENGINE_NOT_FOUND"
   | "ENGINE_UNSUPPORTED"
   | "ENGINE_FAILED";
 

@@ -62,6 +62,17 @@ export type SchemaManifestCache = Readonly<{
   invalidate(): void;
 }>;
 
+export type AsyncSchemaExecutor = Readonly<{
+  execute<Row extends Record<string, StorageValue> = Record<string, StorageValue>>(
+    statement: Readonly<{ sql: string; parameters?: readonly StorageValue[] }>,
+  ): Promise<Readonly<{ rows: readonly Row[] }>>;
+}>;
+
+export type AsyncSchemaManifestCache = Readonly<{
+  get(): Promise<SchemaManifest>;
+  invalidate(): void;
+}>;
+
 export type SchemaManifestErrorCode =
   | "SCHEMA_MANIFEST_ENGINE_UNSUPPORTED"
   | "SCHEMA_MANIFEST_MALFORMED";
@@ -127,6 +138,275 @@ export function createSchemaManifestCache(
       cached = undefined;
     },
   });
+}
+
+export async function buildSchemaManifestAsync(
+  storage: AsyncSchemaExecutor,
+  options: SchemaManifestOptions = {},
+): Promise<SchemaManifest> {
+  const internalTablePrefix = options.internalTablePrefix ?? defaultInternalTablePrefix;
+  validateInternalTablePrefix(internalTablePrefix);
+
+  await verifySqliteVersionAsync(storage);
+  const schemaVersion = await readSchemaVersionAsync(storage);
+  const tables = await readTablesAsync(storage, internalTablePrefix);
+  const canonical = JSON.stringify({ formatVersion: schemaManifestFormatVersion, tables });
+  return freezeManifest({
+    formatVersion: schemaManifestFormatVersion,
+    schemaVersion,
+    hash: createHash("sha256").update(canonical).digest("hex"),
+    tables,
+  });
+}
+
+export function createAsyncSchemaManifestCache(
+  storage: AsyncSchemaExecutor,
+  options: SchemaManifestOptions = {},
+): AsyncSchemaManifestCache {
+  let cached: SchemaManifest | undefined;
+  let pending: Promise<SchemaManifest> | undefined;
+  return Object.freeze({
+    async get(): Promise<SchemaManifest> {
+      const schemaVersion = await readSchemaVersionAsync(storage);
+      if (cached !== undefined && cached.schemaVersion === schemaVersion) return cached;
+      pending ??= buildSchemaManifestAsync(storage, options).then(
+        (manifest) => {
+          cached = manifest;
+          pending = undefined;
+          return manifest;
+        },
+        (error) => {
+          pending = undefined;
+          throw error;
+        },
+      );
+      return pending;
+    },
+    invalidate(): void {
+      cached = undefined;
+      pending = undefined;
+    },
+  });
+}
+
+async function readSchemaVersionAsync(storage: AsyncSchemaExecutor): Promise<number> {
+  const row = (
+    await storage.execute<{ schemaVersion: StorageValue }>({
+      sql: "SELECT schema_version AS schemaVersion FROM pragma_schema_version",
+    })
+  ).rows[0];
+  return readNonNegativeInteger(row?.schemaVersion, "schema version");
+}
+
+async function verifySqliteVersionAsync(storage: AsyncSchemaExecutor): Promise<void> {
+  const row = (
+    await storage.execute<{ sqliteVersion: StorageValue }>({
+      sql: "SELECT sqlite_version() AS sqliteVersion",
+    })
+  ).rows[0];
+  const version = readSqliteVersion(readString(row?.sqliteVersion, "SQLite version"));
+  if (compareVersions(version, minimumSqliteVersion) < 0) {
+    throw new SchemaManifestError(
+      "SCHEMA_MANIFEST_ENGINE_UNSUPPORTED",
+      `SQLite ${version.join(".")} does not support PRAGMA table_list; SQLite ${minimumSqliteVersion.join(".")} or later is required.`,
+    );
+  }
+}
+
+async function readTablesAsync(
+  storage: AsyncSchemaExecutor,
+  internalTablePrefix: string,
+): Promise<readonly SchemaTable[]> {
+  const rows = (
+    await storage.execute<{
+      name: StorageValue;
+      schema: StorageValue;
+      type: StorageValue;
+    }>({
+      sql: "SELECT name, schema, type FROM pragma_table_list WHERE schema = ? AND type = ? ORDER BY name",
+      parameters: ["main", "table"],
+    })
+  ).rows;
+  const tables = rows
+    .map((row) => ({
+      name: readString(row.name, "table name"),
+      schema: readString(row.schema, "table schema"),
+      type: readString(row.type, "table type"),
+    }))
+    .filter((table) => table.schema === "main" && table.type === "table")
+    .filter((table) => !isInternalTable(table.name, internalTablePrefix));
+  return Promise.all(
+    tables.map(async (table) =>
+      Object.freeze({
+        name: table.name,
+        columns: await readColumnsAsync(storage, table.name),
+        foreignKeys: await readForeignKeysAsync(storage, table.name),
+        indexes: await readIndexesAsync(storage, table.name),
+      }),
+    ),
+  );
+}
+
+async function readColumnsAsync(
+  storage: AsyncSchemaExecutor,
+  tableName: string,
+): Promise<readonly SchemaColumn[]> {
+  const rows = (
+    await storage.execute<{
+      cid: StorageValue;
+      name: StorageValue;
+      type: StorageValue;
+      notnull: StorageValue;
+      dflt_value: StorageValue;
+      pk: StorageValue;
+      hidden: StorageValue;
+    }>({
+      sql: 'SELECT cid, name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?) ORDER BY cid',
+      parameters: [tableName],
+    })
+  ).rows;
+  return rows.map((row) =>
+    Object.freeze({
+      name: readString(row.name, `column name in ${tableName}`),
+      type: readString(row.type, `column type in ${tableName}`),
+      notNull: readBooleanInteger(row.notnull, `notnull in ${tableName}`),
+      defaultValue: readNullableString(row.dflt_value, `default value in ${tableName}`),
+      primaryKeyPosition: readNonNegativeInteger(row.pk, `primary key position in ${tableName}`),
+      hidden: readHiddenColumnKind(row.hidden, tableName),
+    }),
+  );
+}
+
+async function readForeignKeysAsync(
+  storage: AsyncSchemaExecutor,
+  tableName: string,
+): Promise<readonly SchemaForeignKey[]> {
+  const rows = (
+    await storage.execute<{
+      id: StorageValue;
+      seq: StorageValue;
+      table: StorageValue;
+      from: StorageValue;
+      to: StorageValue;
+      on_update: StorageValue;
+      on_delete: StorageValue;
+      match: StorageValue;
+    }>({
+      sql: 'SELECT id, seq, "table", "from", "to", on_update, on_delete, "match" FROM pragma_foreign_key_list(?) ORDER BY id, seq',
+      parameters: [tableName],
+    })
+  ).rows;
+  const foreignKeys = new Map<
+    number,
+    {
+      columns: string[];
+      referencedColumns: (string | null)[];
+      referencedTable: string;
+      onUpdate: string;
+      onDelete: string;
+      match: string;
+    }
+  >();
+  for (const row of rows) {
+    const id = readNonNegativeInteger(row.id, `foreign key id in ${tableName}`);
+    const values = {
+      referencedTable: readString(row.table, `foreign key table in ${tableName}`),
+      onUpdate: readString(row.on_update, `foreign key update action in ${tableName}`),
+      onDelete: readString(row.on_delete, `foreign key delete action in ${tableName}`),
+      match: readString(row.match, `foreign key match in ${tableName}`),
+    };
+    const current = foreignKeys.get(id);
+    if (current === undefined) {
+      foreignKeys.set(id, {
+        columns: [readString(row.from, `foreign key column in ${tableName}`)],
+        referencedColumns: [
+          readNullableString(row.to, `foreign key target column in ${tableName}`),
+        ],
+        ...values,
+      });
+    } else {
+      if (
+        current.referencedTable !== values.referencedTable ||
+        current.onUpdate !== values.onUpdate ||
+        current.onDelete !== values.onDelete ||
+        current.match !== values.match
+      )
+        throw malformed(`Foreign key ${id} in ${tableName} has inconsistent metadata.`);
+      current.columns.push(readString(row.from, `foreign key column in ${tableName}`));
+      current.referencedColumns.push(
+        readNullableString(row.to, `foreign key target column in ${tableName}`),
+      );
+    }
+  }
+  return [...foreignKeys.entries()].map(([id, foreignKey]) =>
+    Object.freeze({
+      id,
+      columns: Object.freeze(foreignKey.columns),
+      referencedTable: foreignKey.referencedTable,
+      referencedColumns: Object.freeze(foreignKey.referencedColumns),
+      onUpdate: foreignKey.onUpdate,
+      onDelete: foreignKey.onDelete,
+      match: foreignKey.match,
+    }),
+  );
+}
+
+async function readIndexesAsync(
+  storage: AsyncSchemaExecutor,
+  tableName: string,
+): Promise<readonly SchemaIndex[]> {
+  const rows = (
+    await storage.execute<{
+      name: StorageValue;
+      unique: StorageValue;
+      origin: StorageValue;
+      partial: StorageValue;
+    }>({
+      sql: 'SELECT name, "unique", origin, partial FROM pragma_index_list(?) ORDER BY name',
+      parameters: [tableName],
+    })
+  ).rows;
+  return Promise.all(
+    rows.map(async (row) => {
+      const name = readString(row.name, `index name in ${tableName}`);
+      return Object.freeze({
+        name,
+        unique: readBooleanInteger(row.unique, `index uniqueness in ${tableName}`),
+        origin: readIndexOrigin(row.origin, tableName),
+        partial: readBooleanInteger(row.partial, `index partial flag in ${tableName}`),
+        columns: await readIndexColumnsAsync(storage, name),
+      });
+    }),
+  );
+}
+
+async function readIndexColumnsAsync(
+  storage: AsyncSchemaExecutor,
+  indexName: string,
+): Promise<readonly SchemaIndexColumn[]> {
+  const rows = (
+    await storage.execute<{
+      seqno: StorageValue;
+      cid: StorageValue;
+      name: StorageValue;
+      desc: StorageValue;
+      coll: StorageValue;
+      key: StorageValue;
+    }>({
+      sql: 'SELECT seqno, cid, name, "desc", coll, "key" FROM pragma_index_xinfo(?) ORDER BY seqno',
+      parameters: [indexName],
+    })
+  ).rows;
+  return rows.map((row) =>
+    Object.freeze({
+      sequence: readNonNegativeInteger(row.seqno, `index sequence in ${indexName}`),
+      columnId: readInteger(row.cid, `index column id in ${indexName}`),
+      name: readNullableString(row.name, `index column name in ${indexName}`),
+      descending: readBooleanInteger(row.desc, `index direction in ${indexName}`),
+      collation: readString(row.coll, `index collation in ${indexName}`),
+      key: readBooleanInteger(row.key, `index key flag in ${indexName}`),
+    }),
+  );
 }
 
 function readSchemaVersion(storage: StorageExecutor): number {

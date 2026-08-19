@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mekka-local": {
+      "type": "local",
+      "command": ["bun", "scripts/mcp-opencode-local.ts"],
+      "enabled": true
+    }
+  },
+  "experimental": {
+    "mcp_timeout": 30000
+  }
+}

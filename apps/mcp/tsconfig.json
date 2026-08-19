@@ -9,6 +9,7 @@
   "references": [
     { "path": "../../packages/auth-core" },
     { "path": "../../packages/branch-core" },
+    { "path": "../../packages/engine-core" },
     { "path": "../../packages/policy-engine" },
     { "path": "../../packages/protocol" },
     { "path": "../../packages/query-ast" },

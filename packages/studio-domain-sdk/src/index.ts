@@ -269,6 +269,39 @@ export type StudioOnboardingClient = Readonly<{
   retry(id: string, idempotencyKey: string): Promise<StudioOnboarding>;
 }>;
 
+export type StudioPreviewState = "provisioning" | "ready" | "failed" | "deleting";
+export type StudioPreview = Readonly<{
+  name: string;
+  state: StudioPreviewState;
+  resourceId: string;
+  hostname: string | null;
+  createdAt: number;
+  updatedAt: number;
+  promotedAt: number | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  schemaHash: string;
+}>;
+export type StudioPreviewPromotion = Readonly<{
+  name: string;
+  state: "ready";
+  promotedAt: number;
+  schemaHash: string;
+}>;
+export type StudioPreviewClient = Readonly<{
+  list(input?: Readonly<{ signal?: AbortSignal }>): Promise<readonly StudioPreview[]>;
+  create(options?: StudioMutationOptions): Promise<StudioPreview>;
+  get(name: string, input?: Readonly<{ signal?: AbortSignal }>): Promise<StudioPreview>;
+  refreshStatus(name: string, input?: Readonly<{ signal?: AbortSignal }>): Promise<StudioPreview>;
+  delete(name: string, options?: StudioMutationOptions): Promise<StudioPreview>;
+  promote(
+    name: string,
+    confirmed: boolean,
+    idempotencyKey: string,
+    options?: StudioMutationOptions,
+  ): Promise<StudioPreviewPromotion>;
+}>;
+
 export class StudioDomainError extends Error {
   constructor(
     readonly code: ErrorCode,
@@ -736,6 +769,120 @@ export function createStudioOnboardingClient(
   });
 }
 
+export function createStudioPreviewClient(
+  input: Readonly<{
+    baseUrl: string;
+    tenant: TenantIdentity | TenantIdentityInput;
+    getCredential?: () => Promise<StudioCredential | undefined> | StudioCredential | undefined;
+    fetch?: typeof globalThis.fetch;
+    requestTimeoutMs?: number;
+    mutationTimeoutMs?: number;
+  }>,
+): StudioPreviewClient {
+  const baseUrl = normalizeBaseUrl(input.baseUrl);
+  const tenant = parseTenantIdentity(input.tenant);
+  const fetcher = input.fetch ?? globalThis.fetch;
+  const requestTimeoutMs = readTimeout(
+    input.requestTimeoutMs,
+    defaultRequestTimeoutMs,
+    "requestTimeoutMs",
+  );
+  const mutationTimeoutMs = readMutationTimeout(input.mutationTimeoutMs);
+
+  return Object.freeze({
+    async list(options = {}) {
+      return parsePreviewList(
+        await request(
+          fetcher,
+          baseUrl,
+          tenant,
+          input.getCredential,
+          "previews",
+          options.signal,
+          requestTimeoutMs,
+        ),
+      );
+    },
+    async create(options = {}) {
+      return parsePreview(
+        await requestWithMethod(
+          fetcher,
+          baseUrl,
+          tenant,
+          input.getCredential,
+          "previews",
+          "POST",
+          undefined,
+          options.signal,
+        ),
+      );
+    },
+    async get(name, options = {}) {
+      assertPreviewName(name);
+      return parsePreview(
+        await request(
+          fetcher,
+          baseUrl,
+          tenant,
+          input.getCredential,
+          `previews/${encodeURIComponent(name)}`,
+          options.signal,
+          requestTimeoutMs,
+        ),
+      );
+    },
+    async refreshStatus(name, options = {}) {
+      assertPreviewName(name);
+      return parsePreview(
+        await request(
+          fetcher,
+          baseUrl,
+          tenant,
+          input.getCredential,
+          `previews/${encodeURIComponent(name)}/status`,
+          options.signal,
+          requestTimeoutMs,
+        ),
+      );
+    },
+    async delete(name, options = {}) {
+      assertPreviewName(name);
+      return parsePreview(
+        await requestWithMethod(
+          fetcher,
+          baseUrl,
+          tenant,
+          input.getCredential,
+          `previews/${encodeURIComponent(name)}`,
+          "DELETE",
+          undefined,
+          options.signal,
+        ),
+      );
+    },
+    async promote(name, confirmed, idempotencyKey, options = {}) {
+      assertPreviewName(name);
+      if (typeof confirmed !== "boolean") {
+        throw new StudioDomainError("validation", 400, createCorrelationId());
+      }
+      return parsePreviewPromotion(
+        await mutationRequest(
+          fetcher,
+          baseUrl,
+          tenant,
+          input.getCredential,
+          `previews/${encodeURIComponent(name)}/promote`,
+          "POST",
+          { confirmed },
+          idempotencyKey,
+          options.signal,
+          mutationTimeoutMs,
+        ),
+      );
+    },
+  });
+}
+
 async function request(
   fetcher: typeof globalThis.fetch,
   baseUrl: string,
@@ -1071,6 +1218,24 @@ function readBoundedText(value: unknown, maximum: number): string {
   return value;
 }
 
+function readBoundedTextOrEmpty(value: unknown, maximum = 256): string {
+  if (typeof value !== "string" || value.length > maximum) throw malformedResponse();
+  return value;
+}
+
+function readPreviewNameField(value: unknown): string {
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) {
+    throw malformedResponse();
+  }
+  return value;
+}
+
+function assertPreviewName(value: string): void {
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) {
+    throw new StudioDomainError("validation", 400, createCorrelationId());
+  }
+}
+
 function readIsoDate(value: unknown): string {
   const text = readBoundedText(value, 64);
   if (new Date(text).toISOString() !== text) throw malformedResponse();
@@ -1242,6 +1407,37 @@ function parseConnection(value: unknown): Readonly<{ apiUrl: string; publishable
   const publishableKey = readString(record.publishableKey);
   if (!/^https:\/\//.test(apiUrl) || !/^pk_/.test(publishableKey)) throw malformedResponse();
   return Object.freeze({ apiUrl, publishableKey });
+}
+
+function parsePreviewList(value: unknown): readonly StudioPreview[] {
+  return Object.freeze(readArray(value, 200).map(parsePreview));
+}
+
+function parsePreview(value: unknown): StudioPreview {
+  const record = readRecord(value);
+  return Object.freeze({
+    name: readPreviewNameField(record.name),
+    state: readOneOf(record.state, ["provisioning", "ready", "failed", "deleting"] as const),
+    resourceId: readBoundedTextOrEmpty(record.resourceId),
+    hostname: record.hostname === null ? null : readString(record.hostname),
+    createdAt: readNonNegativeInteger(record.createdAt),
+    updatedAt: readNonNegativeInteger(record.updatedAt),
+    promotedAt: record.promotedAt === null ? null : readNonNegativeInteger(record.promotedAt),
+    errorCode: record.errorCode === null ? null : readBoundedTextOrEmpty(record.errorCode),
+    errorMessage: record.errorMessage === null ? null : readBoundedTextOrEmpty(record.errorMessage),
+    schemaHash: readSchemaHash(record.schemaHash),
+  });
+}
+
+function parsePreviewPromotion(value: unknown): StudioPreviewPromotion {
+  const record = readRecord(value);
+  if (record.state !== "ready") throw malformedResponse();
+  return Object.freeze({
+    name: readPreviewNameField(record.name),
+    state: "ready",
+    promotedAt: readNonNegativeInteger(record.promotedAt),
+    schemaHash: readSchemaHash(record.schemaHash),
+  });
 }
 
 function parseError(

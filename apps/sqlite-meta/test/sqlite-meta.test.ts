@@ -8,7 +8,8 @@ import {
   type TenantContext,
   tenantHeaders,
 } from "@mekka/protocol";
-import { createSchemaManifestCache } from "@mekka/schema-manifest";
+import { openSqliteEngine, type Engine } from "@mekka/engine-core";
+import { createAsyncSchemaManifestCache, createSchemaManifestCache } from "@mekka/schema-manifest";
 import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
 import { createStudioDomainClient } from "@mekka/studio-domain-sdk";
 import { createSqliteMetaApp, type SqliteMetaAuditEvent } from "../src/app";
@@ -16,9 +17,11 @@ import { openLocalAuthRuntime } from "../src/auth";
 import { isInternalProxyRequest, readInternalProxyToken } from "../src/internal-proxy";
 
 const temporaryDirectories: string[] = [];
+const testEngines: Engine[] = [];
 const correlationId = "018e6c28-0000-7000-8000-000000000001";
 
 afterEach(async () => {
+  await Promise.all(testEngines.splice(0).map((engine) => engine.close()));
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => removeTemporaryDirectory(directory)),
   );
@@ -53,6 +56,11 @@ async function createFixture(
     databaseDirectory: directory,
     databasePath: join(directory, "project.sqlite"),
   });
+  const engine = openSqliteEngine({
+    databaseDirectory: directory,
+    databasePath: join(directory, "project.sqlite"),
+  });
+  testEngines.push(engine);
   const audits: SqliteMetaAuditEvent[] = [];
   const context = createContext(actions);
   const app = createSqliteMetaApp({
@@ -64,8 +72,9 @@ async function createFixture(
     },
     resolveProject: () => ({
       tenant: context.tenant,
-      storage: adapter,
-      schemaCache: createSchemaManifestCache(adapter),
+      engine,
+      localStorage: adapter,
+      schemaCache: createAsyncSchemaManifestCache(engine),
     }),
     recordAudit: (event) => {
       onAudit?.(event);
@@ -200,7 +209,11 @@ describe("sqlite-meta management API", () => {
       const readOnlyContext = createContext(["schema:read"]);
       const readOnlyApp = createSqliteMetaApp({
         authenticate: () => readOnlyContext,
-        resolveProject: () => ({ tenant: readOnlyContext.tenant, storage: fixture.adapter }),
+        resolveProject: () => ({
+          tenant: readOnlyContext.tenant,
+          engine: testEngines.at(-1) as Engine,
+          localStorage: fixture.adapter,
+        }),
         recordAudit: () => undefined,
         checkpointDirectory: temporaryDirectories.at(-1) ?? tmpdir(),
         now: () => 1,
@@ -807,6 +820,36 @@ describe("sqlite-meta management API", () => {
       fixture.adapter.close();
     }
   });
+});
+
+test("bounds JSON request and result bodies", async () => {
+  const fixture = await createFixture(["schema:manage", "data:read"]);
+  try {
+    const oversizedRequest = await fixture.app.handle(
+      request(
+        "/tables",
+        "POST",
+        { name: "too_large", columns: [], padding: "x".repeat(64 * 1024) },
+        "oversized-request-001",
+      ),
+    );
+    expect(oversizedRequest.status).toBe(429);
+    expect(await oversizedRequest.json()).toMatchObject({ error: { code: "quota" } });
+
+    fixture.adapter.execute({ sql: 'CREATE TABLE "large_rows" ("value" TEXT)' });
+    const value = "x".repeat(16_000);
+    for (let index = 0; index < 100; index += 1) {
+      fixture.adapter.execute({
+        sql: 'INSERT INTO "large_rows" ("value") VALUES (?)',
+        parameters: [value],
+      });
+    }
+    const oversizedResult = await fixture.app.handle(request("/rows/large_rows?limit=100"));
+    expect(oversizedResult.status).toBe(429);
+    expect(await oversizedResult.json()).toMatchObject({ error: { code: "quota" } });
+  } finally {
+    fixture.adapter.close();
+  }
 });
 
 test("auth session secret fallback is local-development only", async () => {

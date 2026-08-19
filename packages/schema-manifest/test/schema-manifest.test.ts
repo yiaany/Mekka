@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core";
 import {
   buildSchemaManifest,
+  buildSchemaManifestAsync,
   createSchemaManifestCache,
   isReservedSchemaIdentifier,
   SchemaManifestError,
@@ -61,8 +62,12 @@ describe("SQLite schema manifest", () => {
 
       const first = buildSchemaManifest(adapter);
       const second = buildSchemaManifest(adapter);
+      const asynchronous = await buildSchemaManifestAsync({
+        execute: async (statement) => adapter.execute(statement),
+      });
 
       expect(second).toEqual(first);
+      expect(asynchronous).toEqual(first);
       expect(first).toEqual({
         formatVersion: schemaManifestFormatVersion,
         schemaVersion: first.schemaVersion,

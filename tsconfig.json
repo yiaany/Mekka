@@ -15,6 +15,7 @@
     { "path": "./packages/onboarding-core" },
     { "path": "./packages/studio-domain-sdk" },
     { "path": "./packages/testkit" },
+    { "path": "./packages/turso-branch" },
     { "path": "./apps/gateway" },
     { "path": "./apps/mcp" },
     { "path": "./apps/sqlite-meta" },

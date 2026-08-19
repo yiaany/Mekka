@@ -4,6 +4,7 @@ import {
   createStudioAuthAdminClient,
   createStudioDomainClient,
   createStudioOnboardingClient,
+  createStudioPreviewClient,
   createStudioStorageClient,
   type StudioCredential,
   StudioDomainError,
@@ -595,6 +596,170 @@ describe("Studio Domain SDK", () => {
       publishableKey: "pk_publishable_value",
     });
     expect(Object.keys(result.connection ?? {})).not.toContain("serviceRoleKey");
+  });
+
+  test("manages previews through the tenant contract without exposing provider secrets", async () => {
+    const requests: Request[] = [];
+    const client = createStudioPreviewClient({
+      baseUrl: "http://studio-backend.local/sqlite-meta",
+      tenant,
+      getCredential: () => ({ kind: "session", token: "session-token-value" }),
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.method === "POST" && request.url.endsWith("/previews")) {
+          return Response.json({
+            name: "mekka-org-main-project-main-environmen-1a2b3c4d5e6f",
+            state: "provisioning",
+            resourceId: "",
+            hostname: null,
+            createdAt: 1,
+            updatedAt: 1,
+            promotedAt: null,
+            errorCode: null,
+            errorMessage: null,
+            schemaHash: "a".repeat(64),
+            token: "db-token-must-not-leak",
+          });
+        }
+        if (request.url.endsWith("/status")) {
+          return Response.json({
+            name: "mekka-org-main-project-main-environmen-1a2b3c4d5e6f",
+            state: "failed",
+            resourceId: "id-mekka-org-main",
+            hostname: "mekka-org-main.example.turso.io",
+            createdAt: 1,
+            updatedAt: 2,
+            promotedAt: null,
+            errorCode: "ENGINE_NOT_FOUND",
+            errorMessage: "The provider resource no longer exists; delete the preview.",
+            schemaHash: "a".repeat(64),
+          });
+        }
+        if (request.method === "DELETE") {
+          return Response.json({
+            name: "mekka-org-main-project-main-environmen-1a2b3c4d5e6f",
+            state: "deleting",
+            resourceId: "id-mekka-org-main",
+            hostname: "mekka-org-main.example.turso.io",
+            createdAt: 1,
+            updatedAt: 3,
+            promotedAt: null,
+            errorCode: null,
+            errorMessage: null,
+            schemaHash: "a".repeat(64),
+          });
+        }
+        if (request.url.endsWith("/promote")) {
+          return Response.json({
+            name: "mekka-org-main-project-main-environmen-1a2b3c4d5e6f",
+            state: "ready",
+            promotedAt: 4,
+            schemaHash: "a".repeat(64),
+          });
+        }
+        if (request.url.endsWith("/previews")) {
+          return Response.json([
+            {
+              name: "mekka-org-main-project-main-environmen-1a2b3c4d5e6f",
+              state: "ready",
+              resourceId: "id-mekka-org-main",
+              hostname: "mekka-org-main.example.turso.io",
+              createdAt: 1,
+              updatedAt: 2,
+              promotedAt: null,
+              errorCode: null,
+              errorMessage: null,
+              schemaHash: "a".repeat(64),
+              token: "db-token-must-not-leak",
+            },
+          ]);
+        }
+        return Response.json({ error: { code: "not_found" } }, { status: 404 });
+      },
+    });
+    const previewName = "mekka-org-main-project-main-environmen-1a2b3c4d5e6f";
+
+    const created = await client.create();
+    expect(created.state).toBe("provisioning");
+    expect(JSON.stringify(created)).not.toContain("db-token");
+    expect(requests[0]?.headers.get("authorization")).toBe("Bearer session-token-value");
+    expect(requests[0]?.headers.has("idempotency-key")).toBe(false);
+
+    const listed = await client.list();
+    expect(listed).toHaveLength(1);
+    expect(JSON.stringify(listed)).not.toContain("db-token");
+
+    const refreshed = await client.refreshStatus(previewName);
+    expect(refreshed.state).toBe("failed");
+    expect(refreshed.errorCode).toBe("ENGINE_NOT_FOUND");
+
+    const deleted = await client.delete(previewName);
+    expect(deleted.state).toBe("deleting");
+    expect(requests.some((request) => request.method === "DELETE")).toBe(true);
+
+    const promoted = await client.promote(previewName, true, "preview-promote-000001");
+    expect(promoted.state).toBe("ready");
+    expect(promoted.promotedAt).toBe(4);
+    const promoteRequest = requests.find((request) => request.url.endsWith("/promote"));
+    expect(promoteRequest?.headers.get("idempotency-key")).toBe("preview-promote-000001");
+    expect(promoteRequest?.headers.get(tenantHeaders.generation)).toBe("7");
+  });
+
+  test("maps preview provider failures to typed errors and rejects malformed previews", async () => {
+    const client = createStudioPreviewClient({
+      baseUrl: "http://studio-backend.local/sqlite-meta",
+      tenant,
+      getCredential: () => ({ kind: "session", token: "session-token-value" }),
+      fetch: async (_input, init) => {
+        const request = new Request(_input, init);
+        if (request.url.endsWith("/promote")) {
+          const payload = (await request.json()) as { confirmed?: boolean };
+          if (payload.confirmed !== true) {
+            return Response.json({ error: { code: "validation" } }, { status: 400 });
+          }
+        }
+        if (!request.url.endsWith("previews")) {
+          return Response.json({ error: { code: "conflict" } }, { status: 409 });
+        }
+        return Response.json([
+          {
+            name: "invalid preview name",
+            state: "ready",
+            resourceId: "id",
+            hostname: null,
+            createdAt: 1,
+            updatedAt: 1,
+            promotedAt: null,
+            errorCode: null,
+            errorMessage: null,
+            schemaHash: "not-a-hash",
+          },
+        ]);
+      },
+    });
+
+    await expect(client.get("Invalid_Name")).rejects.toMatchObject({ code: "validation" });
+    await expect(
+      client.get("mekka-org-main-project-main-envir-1a2b3c4d5e6f"),
+    ).rejects.toMatchObject({
+      code: "conflict",
+    });
+    await expect(
+      client.promote(
+        "mekka-org-main-project-main-envir-1a2b3c4d5e6f",
+        false,
+        "preview-promote-000002",
+      ),
+    ).rejects.toMatchObject({ code: "validation" });
+    await expect(
+      client.promote(
+        "mekka-org-main-project-main-envir-1a2b3c4d5e6f",
+        true,
+        "preview-promote-000002",
+      ),
+    ).rejects.toMatchObject({ code: "conflict" });
+    await expect(client.list()).rejects.toMatchObject({ code: "infrastructure" });
   });
 });
 

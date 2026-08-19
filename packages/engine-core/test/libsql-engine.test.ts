@@ -498,7 +498,9 @@ describe("operation outcome classification and signals", () => {
       onOperation: (event) => events.push(event),
     });
 
-    const caught = (await engine.execute({ sql: "SELECT 1" }).catch((error: unknown) => error)) as EngineError;
+    const caught = (await engine
+      .execute({ sql: "SELECT 1" })
+      .catch((error: unknown) => error)) as EngineError;
     expect(caught.code).toBe("ENGINE_TIMEOUT");
     expect(caught.outcome).toBe("unknown");
     expect(caught.operationId).not.toBeNull();
@@ -602,7 +604,11 @@ describe("operation outcome classification and signals", () => {
       expect(events[0]).toMatchObject({ route: "execute", outcome: "ok", errorCode: null });
       expect(events[0]?.latencyMs).toBeGreaterThanOrEqual(0);
       expect(events[0]?.attempts).toBe(1);
-      expect(events[1]).toMatchObject({ route: "execute", outcome: "failed", errorCode: "ENGINE_AUTH" });
+      expect(events[1]).toMatchObject({
+        route: "execute",
+        outcome: "failed",
+        errorCode: "ENGINE_AUTH",
+      });
 
       const serialized = JSON.stringify(events);
       expect(serialized).not.toContain("SELECT");

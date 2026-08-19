@@ -134,6 +134,7 @@ try {
   ) {
     throw new Error("Production Auth cookie did not resolve to an active session.");
   }
+  const agentGrantRequestedAt = Date.now();
   const agentGrant = await requestJson("/api/platform/project-auth/local/agent-token", {
     authorization,
     method: "POST",
@@ -143,7 +144,10 @@ try {
     throw new Error("Production Auth did not issue a temporary Agent Access token.");
   }
   const agentLifetimeMs = agentGrant.expiresAt - Date.now();
-  if (agentLifetimeMs < 55 * 60_000 || agentLifetimeMs > 60 * 60_000) {
+  if (
+    agentLifetimeMs < 55 * 60_000 ||
+    agentGrant.expiresAt > agentGrantRequestedAt + 60 * 60_000 + 5_000
+  ) {
     throw new Error(
       `Production Auth issued an invalid Agent Access lifetime: ${agentLifetimeMs}ms.`,
     );

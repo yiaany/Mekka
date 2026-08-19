@@ -2,10 +2,19 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 import { tenantHeaders } from "@mekka/protocol";
 
-const readPaths = new Set(["tables", "schema/health", "columns", "indexes"]);
+const readPaths = new Set([
+  "tables",
+  "schema/health",
+  "columns",
+  "indexes",
+  "previews",
+  "engine/status",
+]);
 const readPathPatterns = [
   /^tables\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
   /^rows\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
+  /^previews\/[a-z0-9][a-z0-9-]{0,63}$/,
+  /^previews\/[a-z0-9][a-z0-9-]{0,63}\/status$/,
 ];
 const mutationPaths = [
   /^tables$/,
@@ -15,6 +24,15 @@ const mutationPaths = [
   /^indexes$/,
   /^rows\/[A-Za-z_][A-Za-z0-9_]{0,63}$/,
   /^sql$/,
+  /^previews$/,
+  /^previews\/[a-z0-9][a-z0-9-]{0,63}$/,
+  /^previews\/[a-z0-9][a-z0-9-]{0,63}\/promote$/,
+  /^engine\/test-connection$/,
+];
+const idempotencyExemptMutationPaths = [
+  /^previews$/,
+  /^previews\/[a-z0-9][a-z0-9-]{0,63}$/,
+  /^engine\/test-connection$/,
 ];
 const maxUpstreamResponseBytes = 2 * 1024 * 1024;
 const forwardedHeaders = [
@@ -59,7 +77,8 @@ export default async function handler(
   }
   if (
     req.method !== "GET" &&
-    typeof req.headers["idempotency-key"] !== "string"
+    typeof req.headers["idempotency-key"] !== "string" &&
+    !idempotencyExemptMutationPaths.some((pattern) => pattern.test(path ?? ""))
   ) {
     return res
       .status(400)

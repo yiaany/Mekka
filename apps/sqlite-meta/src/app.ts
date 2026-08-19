@@ -1,19 +1,17 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import type { Engine, EngineExecutor, EngineValue } from "@mekka/engine-core";
 import {
-  applyMigration,
+  type BackupArtifact,
   createCheckpoint,
   createMigrationArtifact,
   discardCheckpoint,
-  MigrationError,
-  preflightMigration,
+  type MigrationArtifact,
 } from "@mekka/migration-engine";
 import {
   createErrorEnvelope,
-  type ErrorCode,
   hasCapability,
-  ProtocolError,
   parseTenantIdentityFromHeaders,
   resolveCorrelationId,
   type TenantContext,
@@ -21,19 +19,27 @@ import {
 } from "@mekka/protocol";
 import {
   buildSchemaManifest,
+  buildSchemaManifestAsync,
+  type AsyncSchemaManifestCache,
   isReservedSchemaIdentifier,
   type SchemaManifest,
-  type SchemaManifestCache,
   type SchemaTable,
 } from "@mekka/schema-manifest";
-import {
-  openStorageAdapter,
-  type StorageAdapter,
-  type StorageExecutor,
-  type StorageValue,
-} from "@mekka/storage-core/sqlite";
+import { openStorageAdapter, type StorageAdapter } from "@mekka/storage-core/sqlite";
 import { Elysia } from "elysia";
 import type { EngineStatus } from "./engine";
+import { MetaError, toMetaError } from "./errors";
+import {
+  createPreview,
+  deletePreview,
+  getPreview,
+  listPreviews,
+  type PreviewRecordAudit,
+  promotePreview,
+  readPreviewName,
+  refreshPreviewStatus,
+  type SqliteMetaPreviewDependencies,
+} from "./previews";
 
 export type SqliteMetaColumn = Readonly<{
   name: string;
@@ -72,8 +78,9 @@ export type SqliteMetaSchemaHealth = Readonly<{
 
 export type SqliteMetaProject = Readonly<{
   tenant: TenantIdentity;
-  storage: StorageAdapter;
-  schemaCache?: SchemaManifestCache;
+  engine: Engine;
+  localStorage?: StorageAdapter;
+  schemaCache?: AsyncSchemaManifestCache;
 }>;
 
 export type SqliteMetaAuditEvent = Readonly<{
@@ -88,7 +95,11 @@ export type SqliteMetaAuditEvent = Readonly<{
     | "update_row"
     | "delete_row"
     | "run_sql_read"
-    | "run_sql_write";
+    | "run_sql_write"
+    | "preview_create"
+    | "preview_delete"
+    | "preview_status"
+    | "preview_promote";
   actorId: string;
   migrationHash?: string;
   checkpointId?: string | null;
@@ -102,6 +113,7 @@ export type SqliteMetaDependencies = Readonly<{
   recordAudit(event: SqliteMetaAuditEvent): void;
   checkpointDirectory: string;
   engine?: SqliteMetaEngineDependencies;
+  previews?: SqliteMetaPreviewDependencies;
   now?: () => number;
 }>;
 
@@ -122,7 +134,7 @@ type RowInput = Readonly<Record<string, RowValue>>;
 type SqlOperation = "read" | "write";
 type RowMutationResponse = Readonly<{ changes: number; idempotencyKey: string }>;
 type SqlWriteResponse = Readonly<{
-  rows: readonly Readonly<Record<string, StorageValue>>[];
+  rows: readonly Readonly<Record<string, EngineValue>>[];
   changes: number;
   idempotencyKey: string;
 }>;
@@ -135,23 +147,25 @@ const schemaHashPattern = /^[a-f0-9]{64}$/;
 const allowedTypes = new Set(["INTEGER", "TEXT", "REAL", "BLOB", "NUMERIC"]);
 const maxRowPageSize = 200;
 const maxSqlLength = 8_192;
+const maxRequestBodyBytes = 64 * 1024;
+const maxResultBodyBytes = 1024 * 1024;
 
 export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
   const now = dependencies.now ?? Date.now;
   return new Elysia({ name: "sqlite-meta" })
     .get("/tables", async ({ request }) =>
-      handle(request, dependencies, now, "schema:read", (_context, project) =>
-        tablesDto(manifest(project)),
+      handle(request, dependencies, now, "schema:read", async (_context, project) =>
+        tablesDto(await manifest(project)),
       ),
     )
     .get("/tables/:table", async ({ request, params }) =>
-      handle(request, dependencies, now, "schema:read", (_context, project) =>
-        tableDto(requireTable(manifest(project), readRouteIdentifier(params.table, "table"))),
+      handle(request, dependencies, now, "schema:read", async (_context, project) =>
+        tableDto(requireTable(await manifest(project), readRouteIdentifier(params.table, "table"))),
       ),
     )
     .get("/schema/health", async ({ request }) =>
-      handle(request, dependencies, now, "schema:read", (_context, project) => {
-        const schema = manifest(project);
+      handle(request, dependencies, now, "schema:read", async (_context, project) => {
+        const schema = await manifest(project);
         return Object.freeze({
           status: "ok" as const,
           formatVersion: schema.formatVersion,
@@ -161,9 +175,9 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
       }),
     )
     .get("/rows/:table", async ({ request, params }) =>
-      handle(request, dependencies, now, "data:read", (_context, project) => {
+      handle(request, dependencies, now, "data:read", async (_context, project) => {
         const table = readRouteIdentifier(params.table, "table");
-        const definition = requireTable(manifest(project), table);
+        const definition = requireTable(await manifest(project), table);
         const search = new URL(request.url).searchParams;
         const limit = readBoundedQueryInteger(search.get("limit"), 50, 1, maxRowPageSize);
         const offset = readBoundedQueryInteger(search.get("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
@@ -181,16 +195,20 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
               };
         const where =
           filter === undefined ? "" : ` WHERE ${quote(filter.column)} LIKE ? ESCAPE '\\'`;
-        const parameters: StorageValue[] =
+        const parameters: EngineValue[] =
           filter === undefined ? [] : [`%${escapeLike(filter.value)}%`];
-        const totalCount = project.storage.execute<{ count: number }>({
-          sql: `SELECT COUNT(*) AS count FROM ${quote(table)}${where}`,
-          parameters,
-        }).rows[0]?.count;
-        const rows = project.storage.execute<Record<string, StorageValue>>({
-          sql: `SELECT * FROM ${quote(table)}${where} LIMIT ? OFFSET ?`,
-          parameters: [...parameters, limit, offset],
-        }).rows;
+        const totalCount = (
+          await project.engine.execute<{ count: number }>({
+            sql: `SELECT COUNT(*) AS count FROM ${quote(table)}${where}`,
+            parameters,
+          })
+        ).rows[0]?.count;
+        const rows = (
+          await project.engine.execute<Record<string, EngineValue>>({
+            sql: `SELECT * FROM ${quote(table)}${where} LIMIT ? OFFSET ?`,
+            parameters: [...parameters, limit, offset],
+          })
+        ).rows;
         return Object.freeze({
           rows: Object.freeze(rows.map(rowDto)),
           totalCount: typeof totalCount === "number" ? totalCount : 0,
@@ -202,7 +220,7 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
     .post("/rows/:table", async ({ request, params }) =>
       handle(request, dependencies, now, "data:write", async (context, project) => {
         const table = readRouteIdentifier(params.table, "table");
-        const definition = requireTable(manifest(project), table);
+        const definition = requireTable(await manifest(project), table);
         const values = readRowValues(await readBody(request), definition, true);
         const idempotencyKey = readIdempotencyKey(request.headers);
         const columns = Object.keys(values);
@@ -213,18 +231,20 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
           idempotencyKey,
           { operation: "create_row", table, values },
           `INSERT ${table}`,
-          (transaction) =>
-            transaction.execute({
-              sql: `INSERT INTO ${quote(table)} (${columns.map(quote).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-              parameters: columns.map((column) => values[column] as StorageValue),
-            }).changes,
+          async (transaction) =>
+            (
+              await transaction.execute({
+                sql: `INSERT INTO ${quote(table)} (${columns.map(quote).join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+                parameters: columns.map((column) => values[column] as EngineValue),
+              })
+            ).changes,
         );
       }),
     )
     .patch("/rows/:table", async ({ request, params }) =>
       handle(request, dependencies, now, "data:write", async (context, project) => {
         const table = readRouteIdentifier(params.table, "table");
-        const definition = requireTable(manifest(project), table);
+        const definition = requireTable(await manifest(project), table);
         const body = await readBody(request);
         const key = readRowKey(body, definition);
         const values = readRowValues(readRecord(body.values, "values"), definition, false);
@@ -239,18 +259,20 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
           idempotencyKey,
           { operation: "update_row", table, key, values },
           `UPDATE ${table}`,
-          (transaction) =>
-            transaction.execute({
-              sql: `UPDATE ${quote(table)} SET ${columns.map((column) => `${quote(column)} = ?`).join(", ")} WHERE ${quote(key.column)} IS ?`,
-              parameters: [...columns.map((column) => values[column] as StorageValue), key.value],
-            }).changes,
+          async (transaction) =>
+            (
+              await transaction.execute({
+                sql: `UPDATE ${quote(table)} SET ${columns.map((column) => `${quote(column)} = ?`).join(", ")} WHERE ${quote(key.column)} IS ?`,
+                parameters: [...columns.map((column) => values[column] as EngineValue), key.value],
+              })
+            ).changes,
         );
       }),
     )
     .delete("/rows/:table", async ({ request, params }) =>
       handle(request, dependencies, now, "data:write", async (context, project) => {
         const table = readRouteIdentifier(params.table, "table");
-        const definition = requireTable(manifest(project), table);
+        const definition = requireTable(await manifest(project), table);
         const key = readDeleteRowKey(request, definition);
         const idempotencyKey = readIdempotencyKey(request.headers);
         return mutateRowIdempotently(
@@ -260,11 +282,13 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
           idempotencyKey,
           { operation: "delete_row", table, key },
           `DELETE ${table}`,
-          (transaction) =>
-            transaction.execute({
-              sql: `DELETE FROM ${quote(table)} WHERE ${quote(key.column)} IS ?`,
-              parameters: [key.value],
-            }).changes,
+          async (transaction) =>
+            (
+              await transaction.execute({
+                sql: `DELETE FROM ${quote(table)} WHERE ${quote(key.column)} IS ?`,
+                parameters: [key.value],
+              })
+            ).changes,
         );
       }),
     )
@@ -295,7 +319,7 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
         const table = readRouteIdentifier(params.table, "table");
         const name = readIdentifier(body, "name");
         const expectedSchemaHash = readSchemaHash(body);
-        requireTable(manifest(project), table);
+        requireTable(await manifest(project), table);
         return mutate(
           context,
           project,
@@ -327,10 +351,12 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
       }),
     )
     .get("/columns", async ({ request }) =>
-      handle(request, dependencies, now, "schema:read", (_context, project) => {
+      handle(request, dependencies, now, "schema:read", async (_context, project) => {
         const table = new URL(request.url).searchParams.get("table");
         const tables =
-          table === null ? manifest(project).tables : [requireTable(manifest(project), table)];
+          table === null
+            ? (await manifest(project)).tables
+            : [requireTable(await manifest(project), table)];
         return tables.flatMap((candidate) =>
           tableDto(candidate).columns.map((column) => ({ table: candidate.name, ...column })),
         );
@@ -342,7 +368,7 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
         const table = readIdentifier(body, "table");
         const column = readColumn(body);
         const expectedSchemaHash = readSchemaHash(body);
-        requireTable(manifest(project), table);
+        requireTable(await manifest(project), table);
         if (column.primaryKey === true || column.nullable === false) {
           throw new MetaError(
             "unsupported",
@@ -369,7 +395,7 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
         const column = readRouteIdentifier(params.column, "column");
         const name = readIdentifier(body, "name");
         const expectedSchemaHash = readSchemaHash(body);
-        const current = requireTable(manifest(project), table);
+        const current = requireTable(await manifest(project), table);
         if (
           !current.columns.some(
             (candidate) => candidate.name === column && candidate.hidden === "none",
@@ -391,10 +417,12 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
       }),
     )
     .get("/indexes", async ({ request }) =>
-      handle(request, dependencies, now, "schema:read", (_context, project) => {
+      handle(request, dependencies, now, "schema:read", async (_context, project) => {
         const table = new URL(request.url).searchParams.get("table");
         const tables =
-          table === null ? manifest(project).tables : [requireTable(manifest(project), table)];
+          table === null
+            ? (await manifest(project)).tables
+            : [requireTable(await manifest(project), table)];
         return tables.flatMap((candidate) => tableDto(candidate).indexes);
       }),
     )
@@ -406,7 +434,7 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
         const columns = readIdentifierArray(body, "columns");
         const unique = readOptionalBoolean(body, "unique") ?? false;
         const expectedSchemaHash = readSchemaHash(body);
-        const current = requireTable(manifest(project), table);
+        const current = requireTable(await manifest(project), table);
         for (const column of columns) {
           if (
             !current.columns.some(
@@ -426,6 +454,52 @@ export function createSqliteMetaApp(dependencies: SqliteMetaDependencies) {
           expectedSchemaHash,
           `CREATE ${unique ? "UNIQUE " : ""}INDEX ${quote(name)} ON ${quote(table)} (${columns.map(quote).join(", ")})`,
           false,
+        );
+      }),
+    )
+    .get("/previews", async ({ request }) =>
+      handle(request, dependencies, now, "preview:manage", (_context, project) =>
+        listPreviews(requirePreviews(dependencies, now), project),
+      ),
+    )
+    .post("/previews", async ({ request }) =>
+      handle(request, dependencies, now, "preview:manage", async (context, project) => {
+        const previews = requirePreviews(dependencies, now);
+        const audit = previewAudit(dependencies, context);
+        return createPreview(previews, context, project, audit);
+      }),
+    )
+    .get("/previews/:name", async ({ request, params }) =>
+      handle(request, dependencies, now, "preview:manage", (_context, project) =>
+        getPreview(requirePreviews(dependencies, now), project, readPreviewName(params.name)),
+      ),
+    )
+    .get("/previews/:name/status", async ({ request, params }) =>
+      handle(request, dependencies, now, "preview:manage", async (_context, project) => {
+        const previews = requirePreviews(dependencies, now);
+        const audit = previewAudit(dependencies, _context);
+        return refreshPreviewStatus(previews, project, readPreviewName(params.name), audit);
+      }),
+    )
+    .delete("/previews/:name", async ({ request, params }) =>
+      handle(request, dependencies, now, "preview:manage", async (context, project) => {
+        const previews = requirePreviews(dependencies, now);
+        const audit = previewAudit(dependencies, context);
+        return deletePreview(previews, project, readPreviewName(params.name), audit);
+      }),
+    )
+    .post("/previews/:name/promote", async ({ request, params }) =>
+      handle(request, dependencies, now, "preview:manage", async (context, project) => {
+        const previews = requirePreviews(dependencies, now);
+        const audit = previewAudit(dependencies, context);
+        const body = await readBody(request);
+        return promotePreview(
+          previews,
+          project,
+          readPreviewName(params.name),
+          body.confirmed === true,
+          readIdempotencyKey(request.headers),
+          audit,
         );
       }),
     )
@@ -455,7 +529,7 @@ async function handle<T>(
     if (!sameTenant(project.tenant, context.tenant)) {
       throw new MetaError("forbidden", "Resolved project does not match request tenant.");
     }
-    return Response.json(await operation(context, project), {
+    return jsonResponse(await operation(context, project), {
       headers: { "x-correlation-id": context.correlationId },
     });
   } catch (error) {
@@ -466,6 +540,26 @@ async function handle<T>(
       headers: { "x-correlation-id": correlationId },
     });
   }
+}
+
+function requirePreviews(
+  dependencies: SqliteMetaDependencies,
+  now: () => number,
+): SqliteMetaPreviewDependencies {
+  if (dependencies.previews === undefined) {
+    throw new MetaError(
+      "unsupported",
+      "Provider-backed previews are not configured for this deployment.",
+    );
+  }
+  return Object.freeze({ adapter: dependencies.previews.adapter, now });
+}
+
+function previewAudit(
+  dependencies: SqliteMetaDependencies,
+  context: TenantContext,
+): PreviewRecordAudit {
+  return (action) => dependencies.recordAudit({ action, actorId: context.actor.id });
 }
 
 async function handleEngine(
@@ -481,7 +575,7 @@ async function handleEngine(
     const result = await (operation === "status"
       ? dependencies.engine.status()
       : dependencies.engine.testConnection());
-    return Response.json(result, {
+    return jsonResponse(result, {
       headers: {
         "x-correlation-id": context.correlationId,
         "cache-control": "no-store",
@@ -527,20 +621,20 @@ async function handleSql(
     if (!sameTenant(project.tenant, context.tenant)) {
       throw new MetaError("forbidden", "Resolved project does not match request tenant.");
     }
-    assertSqlTables(sql, manifest(project));
+    assertSqlTables(sql, await manifest(project));
     if (operation === "write") {
-      const result = executeSqlWriteIdempotently(
+      const result = await executeSqlWriteIdempotently(
         project,
         context,
         dependencies,
         readIdempotencyKey(request.headers),
         sql,
       );
-      return Response.json(result, { headers: { "x-correlation-id": context.correlationId } });
+      return jsonResponse(result, { headers: { "x-correlation-id": context.correlationId } });
     }
-    const result = project.storage.execute<Record<string, StorageValue>>({ sql });
+    const result = await project.engine.execute<Record<string, EngineValue>>({ sql });
     recordDataAudit(dependencies, context, "run_sql_read", sql, result.changes);
-    return Response.json(
+    return jsonResponse(
       Object.freeze({ rows: Object.freeze(result.rows.map(rowDto)), changes: result.changes }),
       { headers: { "x-correlation-id": context.correlationId } },
     );
@@ -554,26 +648,28 @@ async function handleSql(
   }
 }
 
-function executeSqlWriteIdempotently(
+async function executeSqlWriteIdempotently(
   project: SqliteMetaProject,
   context: TenantContext,
   dependencies: SqliteMetaDependencies,
   idempotencyKey: string,
   sql: string,
-): SqlWriteResponse {
+): Promise<SqlWriteResponse> {
   const requestHash = createHash("sha256")
     .update(stableJson({ operation: "run_sql_write", sql }))
     .digest("hex");
-  const response = project.storage.transaction((transaction) => {
-    initializeRowMutationTables(transaction);
+  const response = await project.engine.transaction(async (transaction) => {
+    await initializeRowMutationTables(transaction);
     const tenant = tenantParameters(context.tenant);
-    const existing = transaction.execute<IdempotencyLedgerRow>({
-      sql: `SELECT request_hash, response_payload FROM _mekka_idempotency_ledger
+    const existing = (
+      await transaction.execute<IdempotencyLedgerRow>({
+        sql: `SELECT request_hash, response_payload FROM _mekka_idempotency_ledger
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
           AND branch_id = ? AND generation = ? AND actor_kind = ? AND actor_id = ?
           AND idempotency_key = ?`,
-      parameters: [...tenant, context.actor.kind, context.actor.id, idempotencyKey],
-    }).rows[0];
+        parameters: [...tenant, context.actor.kind, context.actor.id, idempotencyKey],
+      })
+    ).rows[0];
     if (existing !== undefined) {
       if (existing.request_hash !== requestHash) {
         throw new MetaError("conflict", "Idempotency key was reused with a different request.");
@@ -581,7 +677,7 @@ function executeSqlWriteIdempotently(
       return parseSqlWriteResponse(existing.response_payload);
     }
 
-    const executed = transaction.execute<Record<string, StorageValue>>({ sql });
+    const executed = await transaction.execute<Record<string, EngineValue>>({ sql });
     if (executed.rows.length > maxRowPageSize) {
       throw new MetaError("quota", `SQL writes may return at most ${maxRowPageSize} rows.`);
     }
@@ -596,7 +692,7 @@ function executeSqlWriteIdempotently(
       statementHash: createHash("sha256").update(sql).digest("hex"),
       rowCount: executed.changes,
     });
-    transaction.execute({
+    await transaction.execute({
       sql: `INSERT INTO _mekka_idempotency_ledger (
           organization_id, project_id, environment_id, branch_id, generation,
           actor_kind, actor_id, idempotency_key, request_hash, status, response_payload
@@ -610,7 +706,7 @@ function executeSqlWriteIdempotently(
         JSON.stringify(result),
       ],
     });
-    transaction.execute({
+    await transaction.execute({
       sql: `INSERT INTO _mekka_audit_outbox (
           organization_id, project_id, environment_id, branch_id, generation, payload
         ) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -618,7 +714,7 @@ function executeSqlWriteIdempotently(
     });
     return result;
   });
-  flushAuditOutbox(project.storage, dependencies, context.tenant);
+  await flushAuditOutbox(project.engine, dependencies, context.tenant);
   return response;
 }
 
@@ -828,7 +924,7 @@ function readStringField(body: Record<string, unknown>, name: string): string {
   return value;
 }
 
-function rowDto(row: Record<string, StorageValue>): Record<string, RowValue> {
+function rowDto(row: Record<string, EngineValue>): Record<string, RowValue> {
   const result: Record<string, RowValue> = {};
   for (const [column, value] of Object.entries(row)) {
     if (typeof value === "string" || typeof value === "number" || value === null)
@@ -880,33 +976,35 @@ function recordDataAudit(
   });
 }
 
-function mutateRowIdempotently(
+async function mutateRowIdempotently(
   project: SqliteMetaProject,
   context: TenantContext,
   dependencies: SqliteMetaDependencies,
   idempotencyKey: string,
   request: Readonly<Record<string, unknown>>,
   statement: string,
-  mutation: (transaction: StorageExecutor) => number,
-): RowMutationResponse {
+  mutation: (transaction: EngineExecutor) => Promise<number>,
+): Promise<RowMutationResponse> {
   const requestHash = createHash("sha256").update(stableJson(request)).digest("hex");
-  const response = project.storage.transaction((transaction) => {
-    initializeRowMutationTables(transaction);
+  const response = await project.engine.transaction(async (transaction) => {
+    await initializeRowMutationTables(transaction);
     const tenant = tenantParameters(context.tenant);
-    const existing = transaction.execute<IdempotencyLedgerRow>({
-      sql: `SELECT request_hash, response_payload FROM _mekka_idempotency_ledger
+    const existing = (
+      await transaction.execute<IdempotencyLedgerRow>({
+        sql: `SELECT request_hash, response_payload FROM _mekka_idempotency_ledger
         WHERE organization_id = ? AND project_id = ? AND environment_id = ?
           AND branch_id = ? AND generation = ? AND actor_kind = ? AND actor_id = ?
           AND idempotency_key = ?`,
-      parameters: [...tenant, context.actor.kind, context.actor.id, idempotencyKey],
-    }).rows[0];
+        parameters: [...tenant, context.actor.kind, context.actor.id, idempotencyKey],
+      })
+    ).rows[0];
     if (existing !== undefined) {
       if (existing.request_hash !== requestHash) {
         throw new MetaError("conflict", "Idempotency key was reused with a different request.");
       }
       return parseRowMutationResponse(existing.response_payload);
     }
-    const changes = mutation(transaction);
+    const changes = await mutation(transaction);
     const result = Object.freeze({ changes, idempotencyKey });
     const audit = Object.freeze({
       action: request.operation as SqliteMetaAuditEvent["action"],
@@ -914,7 +1012,7 @@ function mutateRowIdempotently(
       statementHash: createHash("sha256").update(statement).digest("hex"),
       rowCount: changes,
     });
-    transaction.execute({
+    await transaction.execute({
       sql: `INSERT INTO _mekka_idempotency_ledger (
           organization_id, project_id, environment_id, branch_id, generation,
           actor_kind, actor_id, idempotency_key, request_hash, status, response_payload
@@ -928,7 +1026,7 @@ function mutateRowIdempotently(
         JSON.stringify(result),
       ],
     });
-    transaction.execute({
+    await transaction.execute({
       sql: `INSERT INTO _mekka_audit_outbox (
           organization_id, project_id, environment_id, branch_id, generation, payload
         ) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -936,12 +1034,12 @@ function mutateRowIdempotently(
     });
     return result;
   });
-  flushAuditOutbox(project.storage, dependencies, context.tenant);
+  await flushAuditOutbox(project.engine, dependencies, context.tenant);
   return response;
 }
 
-function initializeRowMutationTables(storage: Pick<StorageAdapter, "execute">): void {
-  storage.execute({
+async function initializeRowMutationTables(storage: EngineExecutor): Promise<void> {
+  await storage.execute({
     sql: `CREATE TABLE IF NOT EXISTS _mekka_idempotency_ledger (
       organization_id TEXT NOT NULL, project_id TEXT NOT NULL, environment_id TEXT NOT NULL,
       branch_id TEXT NOT NULL, generation INTEGER NOT NULL, actor_kind TEXT NOT NULL,
@@ -950,7 +1048,7 @@ function initializeRowMutationTables(storage: Pick<StorageAdapter, "execute">): 
       PRIMARY KEY (organization_id, project_id, environment_id, branch_id, generation, actor_kind, actor_id, idempotency_key)
     ) STRICT`,
   });
-  storage.execute({
+  await storage.execute({
     sql: `CREATE TABLE IF NOT EXISTS _mekka_audit_outbox (
       id INTEGER PRIMARY KEY, organization_id TEXT NOT NULL, project_id TEXT NOT NULL,
       environment_id TEXT NOT NULL, branch_id TEXT NOT NULL, generation INTEGER NOT NULL,
@@ -959,18 +1057,20 @@ function initializeRowMutationTables(storage: Pick<StorageAdapter, "execute">): 
   });
 }
 
-function flushAuditOutbox(
-  storage: StorageAdapter,
+async function flushAuditOutbox(
+  storage: EngineExecutor,
   dependencies: SqliteMetaDependencies,
   tenant: TenantIdentity,
-): void {
-  initializeRowMutationTables(storage);
-  const rows = storage.execute<AuditOutboxRow>({
-    sql: `SELECT id, payload FROM _mekka_audit_outbox
+): Promise<void> {
+  await initializeRowMutationTables(storage);
+  const rows = (
+    await storage.execute<AuditOutboxRow>({
+      sql: `SELECT id, payload FROM _mekka_audit_outbox
       WHERE organization_id = ? AND project_id = ? AND environment_id = ?
         AND branch_id = ? AND generation = ? ORDER BY id LIMIT 100`,
-    parameters: tenantParameters(tenant),
-  }).rows;
+      parameters: tenantParameters(tenant),
+    })
+  ).rows;
   for (const row of rows) {
     let audit: SqliteMetaAuditEvent;
     try {
@@ -979,7 +1079,10 @@ function flushAuditOutbox(
     } catch {
       return;
     }
-    storage.execute({ sql: "DELETE FROM _mekka_audit_outbox WHERE id = ?", parameters: [row.id] });
+    await storage.execute({
+      sql: "DELETE FROM _mekka_audit_outbox WHERE id = ?",
+      parameters: [row.id],
+    });
   }
 }
 
@@ -1021,7 +1124,7 @@ function parseSqlWriteResponse(payload: string): SqlWriteResponse {
     }
     const rows = value.rows.map((row) => {
       const record = readRecord(row, "SQL idempotency row");
-      return rowDto(record as Record<string, StorageValue>);
+      return rowDto(record as Record<string, EngineValue>);
     });
     return Object.freeze({
       rows: Object.freeze(rows),
@@ -1061,7 +1164,7 @@ function stableJson(value: unknown): string {
     .join(",")}}`;
 }
 
-function tenantParameters(tenant: TenantIdentity): readonly StorageValue[] {
+function tenantParameters(tenant: TenantIdentity): readonly EngineValue[] {
   return Object.freeze([
     tenant.organizationId,
     tenant.projectId,
@@ -1071,7 +1174,7 @@ function tenantParameters(tenant: TenantIdentity): readonly StorageValue[] {
   ]);
 }
 
-function mutate(
+async function mutate(
   context: TenantContext,
   project: SqliteMetaProject,
   dependencies: SqliteMetaDependencies,
@@ -1081,7 +1184,7 @@ function mutate(
   expectedSchemaHash: string,
   sql: string,
   destructive: boolean,
-): MutationResult<SqliteMetaTable | SqliteMetaIndex> {
+): Promise<MutationResult<SqliteMetaTable | SqliteMetaIndex>> {
   const idempotencyKey = readIdempotencyKey(headers);
   const artifact = createMigrationArtifact({
     id: migrationId(context, action, table, idempotencyKey),
@@ -1090,12 +1193,12 @@ function mutate(
     expectedSchemaHash,
     sql,
   });
-  const preflight = preflightMigration(project.storage, artifact);
+  const preflight = await preflightEngineMigration(project.engine, artifact);
   const checkpointPath = join(dependencies.checkpointDirectory, `${artifact.id}.sqlite`);
   const deletedTable =
     action === "delete_table"
       ? preflight === null
-        ? tableDto(requireTable(manifest(project), table))
+        ? tableDto(requireTable(await manifest(project), table))
         : readCheckpointTable(checkpointPath, dependencies.checkpointDirectory, table)
       : undefined;
   if (preflight !== null) {
@@ -1106,22 +1209,28 @@ function mutate(
       checkpointId: destructive ? `checkpoint-${artifact.id}` : null,
     });
     return mutationResult(
-      deletedTable ?? replayedResource(project, action, table, sql),
+      deletedTable ?? (await replayedResource(project, action, table, sql)),
       sql,
       destructive ? `checkpoint-${artifact.id}` : null,
     );
   }
+  if (destructive && project.localStorage === undefined) {
+    throw new MetaError(
+      "unsupported",
+      "Destructive schema changes require a configured remote backup provider.",
+    );
+  }
   const checkpoint = destructive
-    ? createCheckpoint(project.storage, {
+    ? createCheckpoint(project.localStorage as StorageAdapter, {
         id: `checkpoint-${artifact.id}`,
         checkpointPath,
         checkpointDirectory: dependencies.checkpointDirectory,
       })
     : undefined;
-  let result: ReturnType<typeof applyMigration>;
+  let result: Awaited<ReturnType<typeof applyEngineMigration>>;
   try {
-    result = applyMigration(
-      project.storage,
+    result = await applyEngineMigration(
+      project.engine,
       artifact,
       checkpoint === undefined ? {} : { checkpoint },
     );
@@ -1137,7 +1246,7 @@ function mutate(
     checkpointId: checkpoint?.id ?? null,
   });
   if (deletedTable !== undefined) return mutationResult(deletedTable, sql, checkpoint?.id ?? null);
-  const current = manifest(project);
+  const current = await manifest(project);
   if (action === "create_index") {
     const index = tableDto(requireTable(current, table)).indexes.find((candidate) =>
       sql.includes(quote(candidate.name)),
@@ -1155,13 +1264,13 @@ function mutate(
   );
 }
 
-function replayedResource(
+async function replayedResource(
   project: SqliteMetaProject,
   action: SqliteMetaAuditEvent["action"],
   table: string,
   sql: string,
-): SqliteMetaTable | SqliteMetaIndex {
-  const current = manifest(project);
+): Promise<SqliteMetaTable | SqliteMetaIndex> {
+  const current = await manifest(project);
   if (action === "create_index") {
     const index = tableDto(requireTable(current, table)).indexes.find((candidate) =>
       sql.includes(quote(candidate.name)),
@@ -1170,6 +1279,112 @@ function replayedResource(
   }
   const targetName = action === "rename_table" ? sql.match(/TO "([^"]+)"$/)?.[1] : table;
   return tableDto(requireTable(current, targetName ?? table));
+}
+
+async function preflightEngineMigration(
+  engine: Engine,
+  artifact: MigrationArtifact,
+): Promise<Readonly<{ migrationHash: string; schemaHash: string }> | null> {
+  const currentSchemaHash = (await buildSchemaManifestAsync(engine)).hash;
+  const ledgerExists =
+    (
+      await engine.execute({
+        sql: "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = '_mekka_migrations'",
+      })
+    ).rows[0] !== undefined;
+  const existing = ledgerExists ? await readEngineMigration(engine, artifact.id) : null;
+  if (existing !== null) {
+    if (existing.hash !== artifact.hash) {
+      throw new MetaError("conflict", "Migration identifier was reused with a different artifact.");
+    }
+    if (existing.state !== "applied") {
+      throw new MetaError("infrastructure", "Migration ledger is in an unexpected state.");
+    }
+    return Object.freeze({ migrationHash: artifact.hash, schemaHash: existing.schemaHash });
+  }
+  if (currentSchemaHash !== artifact.expectedSchemaHash) {
+    throw new MetaError("conflict", "Migration expected schema does not match target.");
+  }
+  return null;
+}
+
+async function applyEngineMigration(
+  engine: Engine,
+  artifact: MigrationArtifact,
+  options: Readonly<{ checkpoint?: BackupArtifact }>,
+): Promise<Readonly<{ migrationHash: string; schemaHash: string }>> {
+  return engine.transaction(async (transaction) => {
+    const currentSchemaHash = (await buildSchemaManifestAsync(transaction)).hash;
+    await transaction.execute({
+      sql: "CREATE TABLE IF NOT EXISTS _mekka_migrations (id TEXT PRIMARY KEY, hash TEXT NOT NULL, actor_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, expected_schema_hash TEXT NOT NULL, state TEXT NOT NULL CHECK (state IN ('applying', 'applied')), applied_schema_hash TEXT)",
+    });
+    const existing = await readEngineMigration(transaction, artifact.id);
+    if (existing !== null) {
+      if (existing.hash !== artifact.hash) {
+        throw new MetaError(
+          "conflict",
+          "Migration identifier was reused with a different artifact.",
+        );
+      }
+      if (existing.state !== "applied") {
+        throw new MetaError("infrastructure", "Migration ledger is in an unexpected state.");
+      }
+      return Object.freeze({ migrationHash: artifact.hash, schemaHash: existing.schemaHash });
+    }
+    if (currentSchemaHash !== artifact.expectedSchemaHash) {
+      throw new MetaError("conflict", "Migration expected schema does not match target.");
+    }
+    if (
+      options.checkpoint !== undefined &&
+      options.checkpoint.sourceSchemaHash !== currentSchemaHash
+    ) {
+      throw new MetaError("conflict", "Schema checkpoint does not match the migration target.");
+    }
+    await transaction.execute({
+      sql: "INSERT INTO _mekka_migrations (id, hash, actor_id, idempotency_key, expected_schema_hash, state, applied_schema_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      parameters: [
+        artifact.id,
+        artifact.hash,
+        artifact.actorId,
+        artifact.idempotencyKey,
+        artifact.expectedSchemaHash,
+        "applying",
+        null,
+      ],
+    });
+    await transaction.execute({ sql: artifact.sql });
+    const schemaHash = (await buildSchemaManifestAsync(transaction)).hash;
+    await transaction.execute({
+      sql: "UPDATE _mekka_migrations SET state = ?, applied_schema_hash = ? WHERE id = ?",
+      parameters: ["applied", schemaHash, artifact.id],
+    });
+    return Object.freeze({ migrationHash: artifact.hash, schemaHash });
+  });
+}
+
+async function readEngineMigration(
+  executor: EngineExecutor,
+  id: string,
+): Promise<Readonly<{ hash: string; state: string; schemaHash: string }> | null> {
+  const row = (
+    await executor.execute<{
+      hash: string;
+      state: string;
+      appliedSchemaHash: string | null;
+    }>({
+      sql: "SELECT hash, state, applied_schema_hash AS appliedSchemaHash FROM _mekka_migrations WHERE id = ?",
+      parameters: [id],
+    })
+  ).rows[0];
+  if (row === undefined) return null;
+  if (
+    typeof row.hash !== "string" ||
+    typeof row.state !== "string" ||
+    typeof row.appliedSchemaHash !== "string"
+  ) {
+    throw new MetaError("infrastructure", "Migration ledger contains an invalid row.");
+  }
+  return Object.freeze({ hash: row.hash, state: row.state, schemaHash: row.appliedSchemaHash });
 }
 
 function readCheckpointTable(path: string, directory: string, table: string): SqliteMetaTable {
@@ -1204,8 +1419,16 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   if (request.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase() !== "application/json") {
     throw new MetaError("validation", "Content-Type must be application/json.");
   }
+  const contentLength = Number(request.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxRequestBodyBytes) {
+    throw new MetaError("quota", "Request body exceeds the allowed size.");
+  }
   try {
-    const value: unknown = await request.json();
+    const text = await request.text();
+    if (new TextEncoder().encode(text).byteLength > maxRequestBodyBytes) {
+      throw new MetaError("quota", "Request body exceeds the allowed size.");
+    }
+    const value: unknown = JSON.parse(text);
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
       throw new MetaError("validation", "Request body must be a JSON object.");
     }
@@ -1218,8 +1441,33 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   }
 }
 
-function manifest(project: SqliteMetaProject): SchemaManifest {
-  return project.schemaCache?.get() ?? buildSchemaManifest(project.storage);
+function jsonResponse(body: unknown, init?: ResponseInit): Response {
+  const serialized = JSON.stringify(body);
+  if (new TextEncoder().encode(serialized).byteLength > maxResultBodyBytes) {
+    throw new MetaError("quota", "Response exceeds the allowed size.");
+  }
+  const headers = new Headers();
+  const sourceHeaders = init?.headers;
+  if (sourceHeaders instanceof Headers) {
+    sourceHeaders.forEach((value, name) => {
+      headers.set(name, value);
+    });
+  } else if (Array.isArray(sourceHeaders)) {
+    for (const [name, value] of sourceHeaders) {
+      if (name !== undefined && value !== undefined) headers.set(name, value);
+    }
+  } else if (sourceHeaders !== undefined) {
+    for (const [name, value] of Object.entries(sourceHeaders)) headers.set(name, value);
+  }
+  headers.set("content-type", "application/json");
+  return new Response(serialized, {
+    ...init,
+    headers,
+  });
+}
+
+async function manifest(project: SqliteMetaProject): Promise<SchemaManifest> {
+  return project.schemaCache?.get() ?? buildSchemaManifestAsync(project.engine);
 }
 
 function tablesDto(schema: SchemaManifest): readonly SqliteMetaTable[] {
@@ -1416,58 +1664,4 @@ function sameTenant(left: TenantIdentity, right: TenantIdentity): boolean {
     left.branchId === right.branchId &&
     left.generation === right.generation
   );
-}
-
-class MetaError extends Error {
-  constructor(
-    readonly code: ErrorCode,
-    override readonly message: string,
-  ) {
-    super(message);
-    this.name = "MetaError";
-  }
-
-  get status(): number {
-    switch (this.code) {
-      case "auth":
-        return 401;
-      case "forbidden":
-        return 403;
-      case "conflict":
-        return 409;
-      case "quota":
-        return 429;
-      case "unsupported":
-        return 501;
-      case "not_found":
-        return 404;
-      case "infrastructure":
-        return 503;
-      case "validation":
-        return 400;
-    }
-    return 503;
-  }
-}
-
-function toMetaError(error: unknown): MetaError {
-  if (error instanceof MetaError) {
-    return error;
-  }
-  if (error instanceof MigrationError) {
-    switch (error.code) {
-      case "MIGRATION_CONFLICT":
-        return new MetaError("conflict", error.message);
-      case "MIGRATION_FORBIDDEN":
-        return new MetaError("forbidden", error.message);
-      case "MIGRATION_VALIDATION":
-        return new MetaError("validation", error.message);
-      case "MIGRATION_INFRASTRUCTURE":
-        return new MetaError("infrastructure", error.message);
-    }
-  }
-  if (error instanceof ProtocolError) {
-    return new MetaError(error.code, error.message);
-  }
-  return new MetaError("infrastructure", "SQLite meta operation failed.");
 }

@@ -7,6 +7,7 @@ import {
   type EngineOutcome,
   type ReplicaLibsqlFallbackPolicy,
   type ReplicaLibsqlStatus,
+  type Engine,
   testLibsqlConnection,
   type LibsqlOperationEventObserver,
   type LibsqlOperationRoute,
@@ -53,6 +54,7 @@ export type EngineStatus = Readonly<{
 
 export type EngineController = Readonly<{
   engineKind: SqliteMetaEngineKind;
+  engine: Engine | null;
   status(): EngineStatus;
   testConnection(): Promise<EngineStatus>;
   close(): void;
@@ -73,7 +75,7 @@ export type EngineConfiguration = Readonly<{
 export function readEngineConfiguration(
   env: Readonly<Record<string, string | undefined>>,
 ): EngineConfiguration {
-  const engineKind = readEngineKind(env.MEKKA_DATA_ENGINE);
+  const engineKind = readEngineKind(env.MEKKA_DATA_ENGINE, env.MEKKA_LOCAL_DEV === "1");
   const requestTimeoutMs = readRequestTimeoutMs(env.MEKKA_LIBSQL_REQUEST_TIMEOUT_MS);
   return Object.freeze({
     engineKind,
@@ -81,7 +83,10 @@ export function readEngineConfiguration(
       engineKind === "libsql-remote" || engineKind === "libsql-replica"
         ? readRequiredUrl(env.MEKKA_LIBSQL_URL)
         : undefined,
-    tokenReference: env.MEKKA_LIBSQL_TOKEN_ENV?.trim(),
+    tokenReference:
+      engineKind === "libsql-remote" || engineKind === "libsql-replica"
+        ? readRequiredTokenReference(env.MEKKA_LIBSQL_TOKEN_ENV)
+        : undefined,
     requestTimeoutMs,
     allowLocalhost: env.MEKKA_LOCAL_DEV === "1",
     replicaPath: engineKind === "libsql-replica" ? readRequiredReplicaPath(env) : undefined,
@@ -112,6 +117,7 @@ export function openEngineController(configuration: EngineConfiguration): Engine
   let lastTestConnection: EngineLastTest | null = null;
   return Object.freeze({
     engineKind: "libsql-remote",
+    engine,
     status: () =>
       Object.freeze({
         engineKind: "libsql-remote",
@@ -186,6 +192,7 @@ function createReplicaLibsqlController(
     });
   return Object.freeze({
     engineKind: "libsql-replica",
+    engine,
     status: () => buildStatus(engine.status()),
     testConnection: async () => {
       const result = await testLibsqlConnection(libsqlOptions);
@@ -243,6 +250,7 @@ function createLocalEngineController(): EngineController {
   let lastTestConnection: EngineLastTest | null = null;
   return Object.freeze({
     engineKind: "bun-sqlite",
+    engine: null,
     status: () =>
       Object.freeze({
         engineKind: "bun-sqlite",
@@ -300,11 +308,27 @@ function createLocalEngineController(): EngineController {
   });
 }
 
-function readEngineKind(value: string | undefined): SqliteMetaEngineKind {
-  if (value === undefined || value === "bun-sqlite") return "bun-sqlite";
+function readEngineKind(
+  value: string | undefined,
+  isLocalDevelopment: boolean,
+): SqliteMetaEngineKind {
+  if (value === undefined) {
+    if (isLocalDevelopment) return "bun-sqlite";
+    throw new Error("MEKKA_DATA_ENGINE is required outside local development.");
+  }
+  if (value === "bun-sqlite") return "bun-sqlite";
   if (value === "libsql-remote") return "libsql-remote";
   if (value === "libsql-replica") return "libsql-replica";
   throw new Error('MEKKA_DATA_ENGINE must be "bun-sqlite", "libsql-remote" or "libsql-replica".');
+}
+
+function readRequiredTokenReference(value: string | undefined): string {
+  if (value === undefined || value.trim().length === 0) {
+    throw new Error(
+      "MEKKA_LIBSQL_TOKEN_ENV is required when MEKKA_DATA_ENGINE is libsql-remote or libsql-replica.",
+    );
+  }
+  return value.trim();
 }
 
 function readRequestTimeoutMs(value: string | undefined): number {
@@ -325,9 +349,7 @@ function readRequiredUrl(value: string | undefined): string {
   return value.trim();
 }
 
-function readRequiredReplicaPath(
-  env: Readonly<Record<string, string | undefined>>,
-): string {
+function readRequiredReplicaPath(env: Readonly<Record<string, string | undefined>>): string {
   const value = env.MEKKA_LIBSQL_REPLICA_PATH;
   if (value === undefined || value.trim().length === 0) {
     throw new Error("MEKKA_LIBSQL_REPLICA_PATH is required when MEKKA_DATA_ENGINE=libsql-replica.");

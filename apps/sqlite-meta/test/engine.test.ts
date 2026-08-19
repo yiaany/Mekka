@@ -6,6 +6,7 @@ import { createTenantContext, ProtocolError, type TenantContext } from "@mekka/p
 import { createSqliteMetaApp } from "../src/app";
 import { type EngineStatus, openEngineController, readEngineConfiguration } from "../src/engine";
 import { isInternalProxyRequest } from "../src/internal-proxy";
+import { openPreviewDependencies } from "../src/preview-configuration";
 
 const temporaryDirectories: string[] = [];
 const internalProxyToken = "engine-test-internal-proxy-token-1234567890";
@@ -69,11 +70,38 @@ function proxyHeaders(): HeadersInit {
 }
 
 describe("engine configuration", () => {
-  test("defaults to bun-sqlite without env configuration", () => {
-    const configuration = readEngineConfiguration({});
+  test("keeps absent Turso previews unsupported and rejects partial configuration", () => {
+    expect(openPreviewDependencies({}, false).adapter).toBeNull();
+    expect(() =>
+      openPreviewDependencies(
+        {
+          MEKKA_TURSO_ORGANIZATION: "acme",
+          MEKKA_TURSO_GROUP: "default",
+          MEKKA_TURSO_SOURCE_DATABASE: "main",
+        },
+        false,
+      ),
+    ).toThrow(/all MEKKA_TURSO/);
+    expect(() =>
+      openPreviewDependencies(
+        {
+          MEKKA_TURSO_ORGANIZATION: "acme",
+          MEKKA_TURSO_GROUP: "default",
+          MEKKA_TURSO_SOURCE_DATABASE: "main",
+          MEKKA_TURSO_API_TOKEN: "test-token",
+          MEKKA_TURSO_REQUEST_TIMEOUT_MS: "invalid",
+        },
+        false,
+      ),
+    ).toThrow(/MEKKA_TURSO_REQUEST_TIMEOUT_MS/);
+  });
+
+  test("defaults to bun-sqlite only in explicit local development", () => {
+    const configuration = readEngineConfiguration({ MEKKA_LOCAL_DEV: "1" });
     expect(configuration.engineKind).toBe("bun-sqlite");
     expect(configuration.url).toBeUndefined();
     expect(configuration.requestTimeoutMs).toBeGreaterThan(0);
+    expect(() => readEngineConfiguration({})).toThrow(/MEKKA_DATA_ENGINE/);
   });
 
   test("reads libsql-remote configuration and validates required values", () => {
@@ -109,6 +137,7 @@ describe("engine configuration", () => {
     const configuration = readEngineConfiguration({
       MEKKA_DATA_ENGINE: "libsql-replica",
       MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+      MEKKA_LIBSQL_TOKEN_ENV: "MEKKA_LIBSQL_TOKEN",
       MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
       MEKKA_LIBSQL_REPLICA_FALLBACK: "primary",
       MEKKA_LIBSQL_REPLICA_SYNC_INTERVAL_MS: "5000",
@@ -124,6 +153,7 @@ describe("engine configuration", () => {
     const configuration = readEngineConfiguration({
       MEKKA_DATA_ENGINE: "libsql-replica",
       MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+      MEKKA_LIBSQL_TOKEN_ENV: "MEKKA_LIBSQL_TOKEN",
       MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
     });
     expect(configuration.replicaFallbackPolicy).toBe("safe-error");
@@ -138,12 +168,14 @@ describe("engine configuration", () => {
       readEngineConfiguration({
         MEKKA_DATA_ENGINE: "libsql-replica",
         MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+        MEKKA_LIBSQL_TOKEN_ENV: "MEKKA_LIBSQL_TOKEN",
       }),
     ).toThrow(/MEKKA_LIBSQL_REPLICA_PATH/);
     expect(() =>
       readEngineConfiguration({
         MEKKA_DATA_ENGINE: "libsql-replica",
         MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+        MEKKA_LIBSQL_TOKEN_ENV: "MEKKA_LIBSQL_TOKEN",
         MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
         MEKKA_LIBSQL_REPLICA_FALLBACK: "banana",
       }),
@@ -152,6 +184,7 @@ describe("engine configuration", () => {
       readEngineConfiguration({
         MEKKA_DATA_ENGINE: "libsql-replica",
         MEKKA_LIBSQL_URL: "https://db.example.turso.io",
+        MEKKA_LIBSQL_TOKEN_ENV: "MEKKA_LIBSQL_TOKEN",
         MEKKA_LIBSQL_REPLICA_PATH: "C:\\data\\replica.db",
         MEKKA_LIBSQL_REPLICA_SYNC_INTERVAL_MS: "500",
       }),

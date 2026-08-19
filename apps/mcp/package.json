@@ -9,6 +9,7 @@
   "dependencies": {
     "@mekka/auth-core": "workspace:*",
     "@mekka/branch-core": "workspace:*",
+    "@mekka/engine-core": "workspace:*",
     "@mekka/migration-engine": "workspace:*",
     "@mekka/policy-engine": "workspace:*",
     "@mekka/protocol": "workspace:*",

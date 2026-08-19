@@ -212,7 +212,9 @@ export function openLibsqlEngine(options: LibsqlEngineOptions): Engine {
         attempts: 1,
       });
       try {
-        const result = await callback(Object.freeze({ execute: withTransaction(remote, emitOperation) }));
+        const result = await callback(
+          Object.freeze({ execute: withTransaction(remote, emitOperation) }),
+        );
         const commitId = operationIdProvider();
         const commitStartedAt = performance.now();
         try {
@@ -295,7 +297,10 @@ export async function testLibsqlConnection(
       // Observability must never break the data path.
     }
   };
-  const operationId = resolveOperationId(undefined, options.operationIdProvider ?? defaultLibsqlOperationIdProvider);
+  const operationId = resolveOperationId(
+    undefined,
+    options.operationIdProvider ?? defaultLibsqlOperationIdProvider,
+  );
   try {
     const config = validateLibsqlConfig(options);
     const startedAt = performance.now();
@@ -612,7 +617,12 @@ export function mapLibsqlError(error: unknown): EngineError {
   }
   if (error instanceof TransportTimeoutError) {
     // The request may have reached the server before the timeout fired: the outcome is unknown.
-    return new EngineError("ENGINE_TIMEOUT", "The remote engine request timed out.", error, "unknown");
+    return new EngineError(
+      "ENGINE_TIMEOUT",
+      "The remote engine request timed out.",
+      error,
+      "unknown",
+    );
   }
   if (error instanceof StorageAdapterError) {
     switch (error.code) {
@@ -719,7 +729,12 @@ export function mapLibsqlError(error: unknown): EngineError {
   }
   if (error instanceof TypeError) {
     // DNS/request-level failures cannot prove whether the request was sent; conservative unknown.
-    return new EngineError("ENGINE_UNAVAILABLE", "The remote engine could not be reached.", error, "unknown");
+    return new EngineError(
+      "ENGINE_UNAVAILABLE",
+      "The remote engine could not be reached.",
+      error,
+      "unknown",
+    );
   }
   return new EngineError(
     "ENGINE_FAILED",

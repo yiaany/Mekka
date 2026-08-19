@@ -39,6 +39,7 @@ const bunTestWorkspaces = new Set([
   "packages/sqlite-compiler",
   "packages/storage-core",
   "packages/studio-domain-sdk",
+  "packages/turso-branch",
 ]);
 
 const vitestWithoutPackageScript = new Set(["packages/common"]);
@@ -98,6 +99,12 @@ function testFiles(directory, prefix = "") {
 function packageTestCommand(workspace, packageJson) {
   const scripts = packageJson.scripts ?? {};
   const extraArguments = packageTestArguments.get(workspace) ?? [];
+  if (workspace === "apps/studio") {
+    // The workspace gate verifies behavior, while Studio coverage remains available
+    // through test:ci. Re-instrumenting the full jsdom suite made this gate exceed
+    // 30 minutes without finding failures on an 8-core development host.
+    return ["run", "--cwd", workspace, "vitest", "--run", ...extraArguments, "--maxWorkers", "4"];
+  }
   if (scripts["test:ci"]) return ["run", "--cwd", workspace, "test:ci", ...extraArguments];
   if (scripts["test:coverage"])
     return ["run", "--cwd", workspace, "test:coverage", ...extraArguments];

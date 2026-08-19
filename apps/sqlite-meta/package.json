@@ -17,6 +17,7 @@
     "@mekka/protocol": "workspace:*",
     "@mekka/schema-manifest": "workspace:*",
     "@mekka/storage-core": "workspace:*",
+    "@mekka/turso-branch": "workspace:*",
     "elysia": "1.4.29",
     "jose": "6.2.3"
   },

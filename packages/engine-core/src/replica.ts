@@ -4,7 +4,6 @@ import {
   type EngineCapabilities,
   EngineError,
   type EngineExecutor,
-  type EngineOutcome,
   type EngineResult,
   type EngineStatement,
   type EngineValue,
@@ -146,13 +145,13 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
   const syncIntervalMs = validateSyncIntervalMs(options.syncIntervalMs);
   const syncRetryDelayMs = validateSyncRetryDelayMs(options.syncRetryDelayMs);
   const now = options.now ?? (() => Date.now());
-  const operationIdProvider = options.primary.operationIdProvider ?? defaultLibsqlOperationIdProvider;
+  const operationIdProvider =
+    options.primary.operationIdProvider ?? defaultLibsqlOperationIdProvider;
   const token =
     options.primary.tokenReference === undefined
       ? undefined
       : readServerToken(options.primary.tokenReference);
-  const createDriver =
-    options.createReplicaDriver ?? createOfficialReplicaDriver;
+  const createDriver = options.createReplicaDriver ?? createOfficialReplicaDriver;
   let driver: ReplicaLibsqlReplicaDriver | null;
   let driverCreationError: EngineError | null = null;
   try {
@@ -206,10 +205,12 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
       const operationId = operationIdProvider();
       if (driver === null || driverCreationError !== null) {
         state = "unavailable";
-        const error = driverCreationError ?? new EngineError(
-          "ENGINE_UNAVAILABLE",
-          "The local replica could not be created; no sync is possible.",
-        );
+        const error =
+          driverCreationError ??
+          new EngineError(
+            "ENGINE_UNAVAILABLE",
+            "The local replica could not be created; no sync is possible.",
+          );
         const classified = associateOperationId(error, operationId);
         emitOperation({
           operationId,
@@ -367,7 +368,8 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
       );
     }
     const startedAt = performance.now();
-    return driver.execute<Row>(statement)
+    return driver
+      .execute<Row>(statement)
       .then((result) => {
         emitOperation({
           operationId,
@@ -410,12 +412,10 @@ export function openReplicaLibsqlEngine(options: ReplicaLibsqlEngineOptions): Re
     executeTypedRead,
     executeTypedWrite: writeToPrimary,
     transaction: <T>(callback: (transaction: EngineExecutor) => Promise<T>): Promise<T> =>
-      primary
-        .transaction(callback)
-        .then((result) => {
-          markWritten();
-          return result;
-        }),
+      primary.transaction(callback).then((result) => {
+        markWritten();
+        return result;
+      }),
     syncNow,
     status: (): ReplicaLibsqlStatus => Object.freeze({ state, lastSyncAtMs, lastWriteAtMs }),
     close(): Promise<void> {
@@ -449,7 +449,9 @@ export async function routeReplicaLibsqlOperation(
 ): Promise<EngineResult> {
   if (operation.kind === "typed-read") {
     return engine.executeTypedRead(operation.statement, {
-      ...(operation.readYourWrites === undefined ? {} : { readYourWrites: operation.readYourWrites }),
+      ...(operation.readYourWrites === undefined
+        ? {}
+        : { readYourWrites: operation.readYourWrites }),
     });
   }
   return engine.execute(operation.statement);

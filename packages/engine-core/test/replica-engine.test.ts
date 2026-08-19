@@ -147,7 +147,11 @@ function createStubReplicaDriver(): StubReplicaDriver {
       if (readBehavior === "fail") {
         throw new EngineError("ENGINE_UNAVAILABLE", "Replica read failed.");
       }
-      return Object.freeze({ rows: Object.freeze(reads) as readonly Row[], changes: 0, lastInsertRowid: 0n });
+      return Object.freeze({
+        rows: Object.freeze(reads) as readonly Row[],
+        changes: 0,
+        lastInsertRowid: 0n,
+      });
     },
     sync: async () => {
       syncCount += 1;
@@ -210,7 +214,9 @@ function openTestEngine(
     fallbackPolicy: options.fallbackPolicy ?? "safe-error",
     syncOnOpen: options.syncOnOpen ?? true,
     ...(options.syncIntervalMs === undefined ? {} : { syncIntervalMs: options.syncIntervalMs }),
-    ...(options.syncRetryDelayMs === undefined ? {} : { syncRetryDelayMs: options.syncRetryDelayMs }),
+    ...(options.syncRetryDelayMs === undefined
+      ? {}
+      : { syncRetryDelayMs: options.syncRetryDelayMs }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.onOperation === undefined ? {} : { onOperation: options.onOperation }),
     createReplicaDriver: () => driver.driver,
@@ -268,7 +274,10 @@ describe("libsql-replica engine contract", () => {
     const engine = openTestEngine(transport, driver);
     await engine.syncNow();
 
-    await engine.executeTypedWrite({ sql: "INSERT INTO accounts (name) VALUES (?)", parameters: ["Ada"] });
+    await engine.executeTypedWrite({
+      sql: "INSERT INTO accounts (name) VALUES (?)",
+      parameters: ["Ada"],
+    });
     await engine.execute({ sql: "CREATE TABLE t (id INTEGER)" });
     await engine.execute({ sql: "SELECT * FROM arbitrary_raw" });
 
@@ -286,11 +295,26 @@ describe("libsql-replica engine contract", () => {
     const engine = openTestEngine(transport, driver);
     await engine.syncNow();
 
-    await routeReplicaLibsqlOperation(engine, { kind: "typed-read", statement: { sql: "SELECT 1" } });
-    await routeReplicaLibsqlOperation(engine, { kind: "typed-write", statement: { sql: "INSERT INTO t (v) VALUES (1)" } });
-    await routeReplicaLibsqlOperation(engine, { kind: "ddl", statement: { sql: "CREATE TABLE t (id INTEGER)" } });
-    await routeReplicaLibsqlOperation(engine, { kind: "migration", statement: { sql: "ALTER TABLE t ADD COLUMN v" } });
-    await routeReplicaLibsqlOperation(engine, { kind: "raw", statement: { sql: "SELECT * FROM raw_meta" } });
+    await routeReplicaLibsqlOperation(engine, {
+      kind: "typed-read",
+      statement: { sql: "SELECT 1" },
+    });
+    await routeReplicaLibsqlOperation(engine, {
+      kind: "typed-write",
+      statement: { sql: "INSERT INTO t (v) VALUES (1)" },
+    });
+    await routeReplicaLibsqlOperation(engine, {
+      kind: "ddl",
+      statement: { sql: "CREATE TABLE t (id INTEGER)" },
+    });
+    await routeReplicaLibsqlOperation(engine, {
+      kind: "migration",
+      statement: { sql: "ALTER TABLE t ADD COLUMN v" },
+    });
+    await routeReplicaLibsqlOperation(engine, {
+      kind: "raw",
+      statement: { sql: "SELECT * FROM raw_meta" },
+    });
 
     expect(driver.executedSql).toEqual(["SELECT 1"]);
     const primary = sentSql(transport);
@@ -307,7 +331,9 @@ describe("libsql-replica engine contract", () => {
     const engine = openTestEngine(transport, driver);
     await engine.syncNow();
 
-    const before = await engine.executeTypedRead<{ version: string }>({ sql: "SELECT version FROM state" });
+    const before = await engine.executeTypedRead<{ version: string }>({
+      sql: "SELECT version FROM state",
+    });
     expect(before.rows).toEqual([{ version: "old-replica" }]);
     expect(driver.executedSql).toHaveLength(1);
 
@@ -381,7 +407,9 @@ describe("libsql-replica engine contract", () => {
     const safeError = openTestEngine(safeTransport, safeDriver, { fallbackPolicy: "safe-error" });
     await safeError.syncNow();
 
-    await expect(safeError.executeTypedRead({ sql: "SELECT * FROM accounts" })).rejects.toMatchObject({
+    await expect(
+      safeError.executeTypedRead({ sql: "SELECT * FROM accounts" }),
+    ).rejects.toMatchObject({
       name: "EngineError",
       code: "ENGINE_UNAVAILABLE",
     });
@@ -435,9 +463,7 @@ describe("libsql-replica engine contract", () => {
       name: "EngineError",
       code: "ENGINE_CLOSED",
     });
-    await expect(
-      engine.transaction(async () => 0),
-    ).rejects.toMatchObject({
+    await expect(engine.transaction(async () => 0)).rejects.toMatchObject({
       name: "EngineError",
       code: "ENGINE_CLOSED",
     });

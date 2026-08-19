@@ -1,0 +1,78 @@
+name: mekka-libsql
+
+services:
+  libsql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mekka/libsql-server:3ec6803-healthcheck
+    restart: unless-stopped
+    environment:
+      SQLD_NODE: primary
+      SQLD_DB_PATH: /var/lib/sqld/mekka.db
+      SQLD_HTTP_LISTEN_ADDR: 0.0.0.0:8080
+      SQLD_AUTH_JWT_KEY_FILE: /run/secrets/libsql-jwt-public.pem
+    volumes:
+      - libsql-data:/var/lib/sqld
+      - ./secrets/libsql-jwt-public.pem:/run/secrets/libsql-jwt-public.pem:ro
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--output", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+  caddy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    restart: unless-stopped
+    depends_on:
+      libsql:
+        condition: service_healthy
+    environment:
+      LIBSQL_DOMAIN: ${LIBSQL_DOMAIN:?Set LIBSQL_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+volumes:
+  libsql-data:
+  caddy-data:
+  caddy-config:

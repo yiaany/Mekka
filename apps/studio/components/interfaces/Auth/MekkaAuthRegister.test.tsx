@@ -114,6 +114,7 @@ describe('MekkaAuthRegister', () => {
               token: 'agent-token',
               expiresAt: Date.now() + 60_000,
               mode: 'read',
+              rowDataEnabled: false,
               tenant: { branchId: 'branch-main' },
             }),
           }
@@ -226,8 +227,46 @@ describe('MekkaAuthRegister', () => {
     expect(readButton).toBeEnabled()
     expect(await screen.findByText(/different isolated preview/i)).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('checkbox', { name: /enable read-write mcp/i }))
     expect(screen.getByRole('button', { name: 'Generate read-write token' })).toBeDisabled()
+  })
+
+  it('keeps row-data opt-in separate from read-write access and does not use localStorage', async () => {
+    const token = jwt(Date.now() + 60_000)
+    window.sessionStorage.setItem(storageKey, token)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/token')) {
+          return { ok: false, status: 503, json: async () => ({ code: 'unavailable' }) }
+        }
+        if (String(input).endsWith('/agent-token')) {
+          expect(JSON.parse(String(init?.body))).toMatchObject({ mode: 'read', allowRowData: true })
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              token: 'row-data-token',
+              expiresAt: Date.now() + 60_000,
+              mode: 'read',
+              rowDataEnabled: true,
+              tenant: { branchId: 'branch-main' },
+            }),
+          }
+        }
+        return { ok: true, status: 200, json: async () => ({ approvals: [] }) }
+      })
+    )
+
+    customRender(<MekkaAuthRegister />)
+
+    const rowData = await screen.findByRole('checkbox', { name: /allow this token to read table rows/i })
+    expect(rowData).not.toBeChecked()
+    fireEvent.click(rowData)
+    fireEvent.click(screen.getByRole('button', { name: 'Generate read-only token' }))
+
+    expect(await screen.findByText('Row data: enabled')).toBeInTheDocument()
+    expect(window.localStorage.length).toBe(0)
   })
 
   it('shows the preview branch and proposal ID for approvals', async () => {

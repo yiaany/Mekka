@@ -5,7 +5,7 @@
 ## Supported surfaces
 
 - Resources: `schema://current`, `schema://branch/{branchId}`, `policies://current`, `migrations://history`, `logs://recent`, `capabilities://session`.
-- Read tools: `inspect_schema`, `explain_query`, `list_migrations`, `get_policy_summary`.
+- Read tools: `inspect_schema`, `explain_query`, `list_migrations`, `get_policy_summary`, `query_rows`.
 - Mutation tools: `create_preview_branch`, `propose_migration`, `apply_to_preview`, `validate_changes`, `request_promotion`.
 - Local mode: call `startMcpStdio(context, dependencies)` after the local runtime has already authenticated and created a tenant-bound context.
 - Remote mode: route requests to `createMcpHttpResponse(request, dependencies)`. The MCP endpoint is stateless Streamable HTTP and supports JSON responses.
@@ -19,12 +19,13 @@ The authorization server owns PKCE and token issuance. Its verifier must validat
 
 ## Security boundaries
 
-- The endpoint requires `mcp:read`; expired capabilities are denied for server creation and every resource/tool read.
+- The endpoint requires `mcp:read`; expired capabilities are denied for server creation and every resource/tool read. `query_rows` additionally requires an explicit, tenant-bound `mcp:data:read` grant.
 - HTTP accepts only a bearer token. Raw tokens are not put into resources, logs, capability data, or tool arguments.
 - Resource and project tenant tuples must match exactly, including `generation`; unresolved or mismatched projects are denied.
 - `explain_query` parses the constrained query dialect and returns a compiler SQL template only. It does not execute SQL or return bound values.
 - Migration history omits SQL text. Logs omit message text and attributes and are marked as untrusted prompt input.
-- This version provides no direct production write tool, arbitrary SQL execution, row-data access, credential access, or token passthrough.
+- `query_rows` accepts exactly one manifest table, 1-32 explicit public columns, at most eight simple AND filters, one manifest order column, a 1-100 limit, and an offset up to 10,000. It applies the existing select policy rewrite before execution and returns at most 256 KiB; strings are capped at 16 KiB and BLOB cells at 64 KiB.
+- This version provides no direct production write tool, arbitrary SQL execution, credential access, token passthrough, joins, subqueries, expressions, or mutations through `query_rows`.
 
 ## Preview mutation workflow
 

@@ -43,7 +43,7 @@ export type Filter = Readonly<{
   column: string;
   operator: FilterOperator;
   negated: boolean;
-  value: string | readonly string[] | IsValue;
+  value: string | number | readonly (string | number)[] | IsValue;
 }>;
 
 export type FilterOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "in" | "is";

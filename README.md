@@ -166,7 +166,7 @@ Each subsystem ships in the repo and works against the same local project. Open 
 <summary><strong>Agent Access</strong> — scoped MCP tokens, preview-bound writes</summary>
 
 - One-hour tokens bound to a single tenant tuple and application session
-- Read access works immediately; writes open a disposable preview branch
+- Schema read access works immediately; bounded row reads require a separate explicit opt-in; writes open a disposable preview branch
 - Migration, validation, Studio approval, then one-time production promotion
 </details>
 
@@ -229,13 +229,14 @@ Mekka stores the migration artifact, SQL, schema hashes, and the destructive-ope
 | Tool | `explain_query` | Compile a constrained read query without executing it |
 | Tool | `list_migrations` | Applied migration metadata |
 | Tool | `get_policy_summary` | Sanitized policy summary |
+| Tool | `query_rows` | Bounded, policy-authorized rows from one public table |
 | Tool | `create_preview_branch` | Short-lived isolated preview from the parent |
 | Tool | `propose_migration` | Record a branch-bound migration plan, no DDL applied |
 | Tool | `apply_to_preview` | Apply the proposal to its exact preview only |
 | Tool | `validate_changes` | Validate the applied preview migration |
 | Tool | `request_promotion` | Ask Studio for approval, then step up |
 
-There is no direct production-write tool, no arbitrary SQL, no row-data access, no credential or token passthrough. Each tool is gated by a separate capability: `mcp:read`, `mcp:preview:create`, `mcp:preview:propose`, `mcp:preview:apply`, `mcp:preview:validate`, `mcp:promotion:request`.
+There is no direct production-write tool, no arbitrary SQL, no credential or token passthrough. `query_rows` requires explicit `mcp:data:read`, permits only manifest-resolved columns and simple bounded filters, and still applies row and field policy. Each tool is gated by a separate capability: `mcp:read`, `mcp:data:read`, `mcp:preview:create`, `mcp:preview:propose`, `mcp:preview:apply`, `mcp:preview:validate`, `mcp:promotion:request`.
 
 </details>
 
@@ -340,7 +341,7 @@ Local filesystem and S3-compatible providers, checksummed bounded reads, MIME al
 | Injection | User values always prepared-statement parameters, never interpolated |
 | Replay | SHA-256 request fingerprint, reusable idempotency keys, conflict on reuse with a different body |
 | Agent writes | Preview branch only, schema CAS on promotion, one-time approval, no production SQL tool |
-| MCP | No credential or token passthrough, no row data, logs and prompts marked untrusted |
+| MCP | No credential or token passthrough; row data needs explicit tenant-bound opt-in plus policy, and logs/prompts are marked untrusted |
 | Storage | Signed read grants with TTL, checksums, bounded objects, resumable leases with cleanup |
 | Errors | No secrets, SQL values, or stack traces; stable category codes |
 | Infrastructure | Backend stays on loopback behind a TLS reverse proxy; secrets mounted at runtime |

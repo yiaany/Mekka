@@ -14,6 +14,7 @@ type AgentTokenRecord = Readonly<{
   issuedAt: number;
   expiresAt: number;
   mode: AgentTokenMode;
+  allowRowData: number;
 }>;
 
 export type AgentTokenMode = "read" | "write";
@@ -24,9 +25,11 @@ export type AgentTokenStore = Readonly<{
     verified: VerifiedAuthAccessToken,
     expiresAt: number,
     mode?: AgentTokenMode,
+    allowRowData?: boolean,
   ): boolean;
   verify(tokenHash: string, now?: number): VerifiedAuthAccessToken | null;
   modeFor(tokenId: string, tenant: TenantIdentity, userId: string): AgentTokenMode | null;
+  rowDataAllowed(tokenId: string, tenant: TenantIdentity, userId: string): boolean;
   revokeSession(sessionId: string): void;
   cleanupExpired(now?: number, batchSize?: number): number;
   close(): void;
@@ -53,10 +56,12 @@ export function openAgentTokenStore(
       generation INTEGER NOT NULL,
       issued_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL,
-      mode TEXT NOT NULL DEFAULT 'read' CHECK (mode IN ('read', 'write'))
+      mode TEXT NOT NULL DEFAULT 'read' CHECK (mode IN ('read', 'write')),
+      allow_row_data INTEGER NOT NULL DEFAULT 0 CHECK (allow_row_data IN (0, 1))
     ) STRICT
   `);
   ensureModeColumn(database);
+  ensureRowDataColumn(database);
   database.run(
     "CREATE INDEX IF NOT EXISTS _mekka_agent_access_token_expiry_idx ON _mekka_agent_access_token (expires_at)",
   );
@@ -70,6 +75,7 @@ export function openAgentTokenStore(
       verified: VerifiedAuthAccessToken,
       expiresAt: number,
       mode: AgentTokenMode = "read",
+      allowRowData = false,
     ): boolean => {
       cleanupExpiredRows(database, Date.now(), 100);
       database
@@ -106,12 +112,13 @@ export function openAgentTokenStore(
             number,
             number,
             AgentTokenMode,
+            number,
           ]
         >(`
           INSERT INTO _mekka_agent_access_token (
             token_hash, user_id, session_id, token_id, organization_id, project_id,
-            environment_id, branch_id, generation, issued_at, expires_at, mode
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            environment_id, branch_id, generation, issued_at, expires_at, mode, allow_row_data
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           tokenHash,
@@ -126,6 +133,7 @@ export function openAgentTokenStore(
           verified.issuedAt,
           expiresAt,
           mode,
+          allowRowData ? 1 : 0,
         );
       return true;
     },
@@ -147,7 +155,7 @@ export function openAgentTokenStore(
             generation,
             issued_at AS issuedAt,
             expires_at AS expiresAt
-            , mode
+             , mode, allow_row_data AS allowRowData
           FROM _mekka_agent_access_token
           WHERE token_hash = ?
         `)
@@ -198,6 +206,29 @@ export function openAgentTokenStore(
         );
       return row?.mode ?? null;
     },
+    rowDataAllowed(tokenId, tenant, userId) {
+      const row = database
+        .query<
+          { allowRowData: number },
+          [string, string, string, string, string, number, string, number]
+        >(`
+          SELECT allow_row_data AS allowRowData FROM _mekka_agent_access_token
+          WHERE token_id = ? AND organization_id = ? AND project_id = ?
+            AND environment_id = ? AND branch_id = ? AND generation = ? AND user_id = ?
+            AND expires_at > ?
+        `)
+        .get(
+          tokenId,
+          tenant.organizationId,
+          tenant.projectId,
+          tenant.environmentId,
+          tenant.branchId,
+          tenant.generation,
+          userId,
+          Date.now(),
+        );
+      return row?.allowRowData === 1;
+    },
     revokeSession(sessionId) {
       database
         .query<never, [string]>("DELETE FROM _mekka_agent_access_token WHERE session_id = ?")
@@ -219,6 +250,17 @@ function ensureModeColumn(database: Database): void {
   if (!columns.some((column) => column.name === "mode")) {
     database.run(
       "ALTER TABLE _mekka_agent_access_token ADD COLUMN mode TEXT NOT NULL DEFAULT 'read' CHECK (mode IN ('read', 'write'))",
+    );
+  }
+}
+
+function ensureRowDataColumn(database: Database): void {
+  const columns = database
+    .query<{ name: string }, []>("PRAGMA table_info('_mekka_agent_access_token')")
+    .all();
+  if (!columns.some((column) => column.name === "allow_row_data")) {
+    database.run(
+      "ALTER TABLE _mekka_agent_access_token ADD COLUMN allow_row_data INTEGER NOT NULL DEFAULT 0 CHECK (allow_row_data IN (0, 1))",
     );
   }
 }

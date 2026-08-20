@@ -29,6 +29,8 @@ export function MekkaAuthRegister() {
   const [mcpTokenExpiresAt, setMcpTokenExpiresAt] = useState<number | null>(null)
   const [mcpWriteBranchId, setMcpWriteBranchId] = useState<string | null>(null)
   const [allowMcpWrite, setAllowMcpWrite] = useState(false)
+  const [allowRowData, setAllowRowData] = useState(false)
+  const [rowDataEnabled, setRowDataEnabled] = useState<boolean | null>(null)
   const [approvals, setApprovals] = useState<McpApproval[]>([])
   const authBase = `/auth/${organizationId}/${ref}/${environmentId}/${branchId}/${generation}`
   const applicationAccessTokenStorageKey = [
@@ -83,6 +85,7 @@ export function MekkaAuthRegister() {
       body: JSON.stringify({
         accessToken: applicationAccessToken,
         mode: allowMcpWrite ? 'write' : 'read',
+        allowRowData,
       }),
     })
     const payload: unknown = await response.json().catch(() => ({}))
@@ -93,12 +96,14 @@ export function MekkaAuthRegister() {
       setMcpToken(null)
       setMcpTokenExpiresAt(null)
       setMcpWriteBranchId(null)
+      setRowDataEnabled(null)
       throw new Error('Your application session is no longer valid. Sign in again.')
     }
     if (!response.ok || !hasAgentToken(payload)) throw new Error(readAgentTokenError(payload))
     setMcpToken(payload.token)
     setMcpTokenExpiresAt(payload.expiresAt)
     setMcpWriteBranchId(payload.mode === 'write' ? payload.tenant.branchId : null)
+    setRowDataEnabled(payload.rowDataEnabled)
     setMessage(
       payload.mode === 'write'
         ? 'Read-write Agent Access issued for an isolated preview branch.'
@@ -129,9 +134,11 @@ export function MekkaAuthRegister() {
     setEmail(workflow.email)
     setOtp(workflow.otp)
     setAllowMcpWrite(workflow.allowMcpWrite)
+    setAllowRowData(workflow.allowRowData)
     setMcpToken(workflow.mcpToken)
     setMcpTokenExpiresAt(workflow.mcpTokenExpiresAt)
     setMcpWriteBranchId(workflow.mcpWriteBranchId)
+    setRowDataEnabled(workflow.rowDataEnabled)
     setApprovals([])
     setIsWorkflowRestored(true)
     void recoverApplicationSession(authBase).then((result) => {
@@ -161,18 +168,22 @@ export function MekkaAuthRegister() {
       email,
       otp,
       allowMcpWrite,
+      allowRowData,
       mcpToken,
       mcpTokenExpiresAt,
       mcpWriteBranchId,
+      rowDataEnabled,
     })
   }, [
     allowMcpWrite,
+    allowRowData,
     authWorkflowStorageKey,
     email,
     isWorkflowRestored,
     mcpToken,
     mcpTokenExpiresAt,
     mcpWriteBranchId,
+    rowDataEnabled,
     name,
     otp,
   ])
@@ -189,6 +200,7 @@ export function MekkaAuthRegister() {
         setMcpToken(null)
         setMcpTokenExpiresAt(null)
         setMcpWriteBranchId(null)
+        setRowDataEnabled(null)
       },
       Math.max(0, mcpTokenExpiresAt - Date.now())
     )
@@ -246,6 +258,18 @@ export function MekkaAuthRegister() {
                 approving the exact SQL below.
               </span>
             </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={allowRowData}
+                onChange={(event) => setAllowRowData(event.target.checked)}
+              />
+              <span>
+                <strong>Allow this token to read table rows.</strong> The token can view selected
+                row values through bounded queries, but cannot run raw SQL or mutations.
+              </span>
+            </label>
             <div className="flex flex-wrap gap-2">
               <Button
                 size="tiny"
@@ -264,6 +288,11 @@ export function MekkaAuthRegister() {
                 Refresh MCP approvals
               </Button>
             </div>
+            {rowDataEnabled !== null && (
+              <p className="text-sm text-foreground-light">
+                Row data: {rowDataEnabled ? 'enabled' : 'disabled'}
+              </p>
+            )}
           </div>
         </Admonition>
       )}
@@ -425,6 +454,7 @@ export function MekkaAuthRegister() {
                 setMcpToken(null)
                 setMcpTokenExpiresAt(null)
                 setMcpWriteBranchId(null)
+                setRowDataEnabled(null)
                 setMessage('Signed in successfully.')
                 await queryClient.invalidateQueries({ queryKey: ['mekka-auth', ref, 'users'] })
               })
@@ -498,6 +528,7 @@ function hasAgentToken(payload: unknown): payload is {
   token: string
   expiresAt: number
   mode: 'read' | 'write'
+  rowDataEnabled: boolean
   tenant: { branchId: string }
 } {
   return (
@@ -508,7 +539,9 @@ function hasAgentToken(payload: unknown): payload is {
     'expiresAt' in payload &&
     typeof payload.expiresAt === 'number' &&
     'mode' in payload &&
-    (payload.mode === 'read' || payload.mode === 'write') &&
+        (payload.mode === 'read' || payload.mode === 'write') &&
+        'rowDataEnabled' in payload &&
+        typeof payload.rowDataEnabled === 'boolean' &&
     'tenant' in payload &&
     typeof payload.tenant === 'object' &&
     payload.tenant !== null &&
@@ -673,9 +706,11 @@ type AuthWorkflow = Readonly<{
   email: string
   otp: string
   allowMcpWrite: boolean
+  allowRowData: boolean
   mcpToken: string | null
   mcpTokenExpiresAt: number | null
   mcpWriteBranchId: string | null
+  rowDataEnabled: boolean | null
 }>
 
 function readAuthWorkflow(storageKey: string): AuthWorkflow {
@@ -684,9 +719,11 @@ function readAuthWorkflow(storageKey: string): AuthWorkflow {
     email: '',
     otp: '',
     allowMcpWrite: false,
+    allowRowData: false,
     mcpToken: null,
     mcpTokenExpiresAt: null,
     mcpWriteBranchId: null,
+    rowDataEnabled: null,
   }
   try {
     const raw = window.sessionStorage.getItem(storageKey)
@@ -702,11 +739,16 @@ function readAuthWorkflow(storageKey: string): AuthWorkflow {
       email: typeof record.email === 'string' ? record.email : '',
       otp: typeof record.otp === 'string' ? record.otp : '',
       allowMcpWrite: record.allowMcpWrite === true,
+      allowRowData: record.allowRowData === true,
       mcpToken: hasFreshMcpToken ? (record.mcpToken as string) : null,
       mcpTokenExpiresAt: hasFreshMcpToken ? expiresAt : null,
       mcpWriteBranchId:
         hasFreshMcpToken && typeof record.mcpWriteBranchId === 'string'
           ? record.mcpWriteBranchId
+          : null,
+      rowDataEnabled:
+        hasFreshMcpToken && typeof record.rowDataEnabled === 'boolean'
+          ? record.rowDataEnabled
           : null,
     }
   } catch {

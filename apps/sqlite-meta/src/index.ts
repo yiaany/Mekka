@@ -149,6 +149,7 @@ async function getMcpDependencies() {
         }) {
           const mode = agentTokens.modeFor(tokenId, tenant, actorId);
           if (mode === null) throw new Error("Agent Access grant is unavailable.");
+          const allowRowData = agentTokens.rowDataAllowed(tokenId, tenant, actorId);
           const actions =
             mode === "write"
               ? [
@@ -158,7 +159,7 @@ async function getMcpDependencies() {
                   mcp.mcpPreviewValidateAction,
                   mcp.mcpPromotionRequestAction,
                 ]
-              : [mcp.mcpCapabilityAction];
+              : [mcp.mcpCapabilityAction, ...(allowRowData ? [mcp.mcpDataReadAction] : [])];
           return Object.freeze([
             Object.freeze({
               id: `mcp-${mode}-${tokenId}`,
@@ -243,7 +244,9 @@ const app = createSqliteMetaApp({
     try {
       const auth = await getAuthRuntime();
       const verified = await auth.verifyAccessToken(accessToken);
-      const mode = await readAgentMode(request);
+      const agentRequest = await readAgentRequest(request);
+      const { mode, allowRowData } = agentRequest;
+      const rowDataEnabled = mode === "read" && allowRowData;
       if (mode === "write") requireInternalProxy(request);
       // Agent grants are independently revocable and are checked against the
       // source application session on every MCP request. They do not need to
@@ -309,7 +312,15 @@ const app = createSqliteMetaApp({
         }
       }
       const token = randomBytes(32).toString("base64url");
-      if (!agentTokens.issue(hashAgentAccessToken(token), grantIdentity, expiresAt, mode)) {
+      if (
+        !agentTokens.issue(
+          hashAgentAccessToken(token),
+          grantIdentity,
+          expiresAt,
+          mode,
+          rowDataEnabled,
+        )
+      ) {
         if (previewCreated) {
           await (await getMcpRuntime()).branches.deleteBranch(
             grantIdentity.tenant,
@@ -320,7 +331,7 @@ const app = createSqliteMetaApp({
         return Response.json({ error: "quota" }, { status: 429 });
       }
       return Response.json(
-        { token, expiresAt, mode, tenant: grantIdentity.tenant },
+        { token, expiresAt, mode, rowDataEnabled, tenant: grantIdentity.tenant },
         { headers: { "cache-control": "no-store" } },
       );
     } catch {
@@ -533,14 +544,21 @@ function sameTenant(left: typeof productionTenant, right: typeof productionTenan
   );
 }
 
-async function readAgentMode(request: Request): Promise<"read" | "write"> {
+async function readAgentRequest(
+  request: Request,
+): Promise<Readonly<{ mode: "read" | "write"; allowRowData: boolean }>> {
   const text = await request.text();
-  if (text.length === 0) return "read";
+  if (text.length === 0) return Object.freeze({ mode: "read", allowRowData: false });
   if (text.length > 1_024) throw new Error("Agent Access request is too large.");
   const value: unknown = JSON.parse(text);
-  return typeof value === "object" && value !== null && "mode" in value && value.mode === "write"
-    ? "write"
-    : "read";
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return Object.freeze({ mode: "read", allowRowData: false });
+  }
+  const record = value as Record<string, unknown>;
+  return Object.freeze({
+    mode: record.mode === "write" ? "write" : "read",
+    allowRowData: record.allowRowData === true,
+  });
 }
 
 function readApprovalState(value: unknown): "approved" | "rejected" | null {

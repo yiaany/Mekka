@@ -52,8 +52,52 @@ describe("Agent Access token store", () => {
     );
     expect(store.verify("2".repeat(64), timestamp + 150)).toBeNull();
     expect(store.verify("3".repeat(64), timestamp + 150)).not.toBeNull();
+    expect(
+      store.issue(
+        "4".repeat(64),
+        { ...verified, tokenId: "jwt-rows" },
+        timestamp + 300,
+        "read",
+        true,
+      ),
+    ).toBe(true);
+    expect(store.rowDataAllowed("jwt-rows", verified.tenant, verified.userId)).toBeTrue();
     store.revokeSession(verified.sessionId);
     expect(store.verify("3".repeat(64), timestamp + 150)).toBeNull();
+    store.close();
+  });
+
+  test("migrates existing grants with row-data access disabled", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mekka-agent-token-"));
+    directories.push(directory);
+    const path = join(directory, "agent-access.sqlite");
+    const database = new Database(path, { strict: true });
+    database.run(`CREATE TABLE _mekka_agent_access_token (
+      token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, token_id TEXT NOT NULL,
+      organization_id TEXT NOT NULL, project_id TEXT NOT NULL, environment_id TEXT NOT NULL,
+      branch_id TEXT NOT NULL, generation INTEGER NOT NULL, issued_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL, mode TEXT NOT NULL DEFAULT 'read'
+    ) STRICT`);
+    database.run(
+      `INSERT INTO _mekka_agent_access_token VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        "b".repeat(64),
+        "user-1",
+        "session-1",
+        "legacy",
+        "org-1",
+        "project-1",
+        "env-1",
+        "branch-1",
+        1,
+        1,
+        Date.now() + 60_000,
+        "read",
+      ],
+    );
+    database.close();
+    const store = openAgentTokenStore(path);
+    expect(store.rowDataAllowed("legacy", accessToken().tenant, "user-1")).toBeFalse();
     store.close();
   });
 });

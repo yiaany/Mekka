@@ -315,8 +315,8 @@ function compileFilter(
     case "gte":
     case "lt":
     case "lte": {
-      if (typeof filter.value !== "string") {
-        throw malformed(`${filter.operator} requires a scalar string value.`);
+      if (typeof filter.value !== "string" && typeof filter.value !== "number") {
+        throw malformed(`${filter.operator} requires a scalar string or number value.`);
       }
       parameters.push(filter.value);
       expression = `${column} ${comparisonOperator(filter.operator)} ?`;
@@ -329,8 +329,8 @@ function compileFilter(
       if (filter.value.length > limits.maxListSize) {
         throw limitExceeded(`in list exceeds the list limit of ${limits.maxListSize}.`);
       }
-      if (filter.value.some((value) => typeof value !== "string")) {
-        throw malformed("in requires a string list.");
+      if (filter.value.some((value) => typeof value !== "string" && typeof value !== "number")) {
+        throw malformed("in requires a string or number list.");
       }
       parameters.push(...filter.value);
       expression = `${column} IN (${filter.value.map(() => "?").join(", ")})`;

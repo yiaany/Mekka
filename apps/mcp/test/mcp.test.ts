@@ -23,6 +23,7 @@ import {
   type McpDependencies,
   type McpProject,
   mcpCapabilityAction,
+  mcpDataReadAction,
   mcpPreviewApplyAction,
   mcpPreviewCreateAction,
   mcpPreviewProposeAction,
@@ -83,6 +84,15 @@ function readCapability(tenantIdentity: TenantIdentity, expiresAt = now + 60_000
   };
 }
 
+function rowReadCapability(tenantIdentity: TenantIdentity): Capability {
+  return {
+    id: "cap-row-read-alpha",
+    tenant: tenantIdentity,
+    actions: [mcpDataReadAction],
+    expiresAt: now + 60_000,
+  };
+}
+
 const policies: PolicyDocument = {
   formatVersion: policyFormatVersion,
   tables: [
@@ -118,6 +128,10 @@ async function fixture(): Promise<{
   });
   adapter.execute({
     sql: "CREATE TABLE notes (id INTEGER PRIMARY KEY, owner_id TEXT NOT NULL, body TEXT NOT NULL, private_note TEXT)",
+  });
+  adapter.execute({
+    sql: "INSERT INTO notes (id, owner_id, body, private_note) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+    parameters: [1, "agent-alpha", "first", "secret-one", 2, "agent-other", "second", "secret-two"],
   });
   const migration = createMigrationArtifact({
     id: "migration-add-title",
@@ -173,6 +187,7 @@ describe("read-only MCP", () => {
         "inspect_schema",
         "list_migrations",
         "propose_migration",
+        "query_rows",
         "request_promotion",
         "validate_changes",
       ]);
@@ -202,6 +217,53 @@ describe("read-only MCP", () => {
         explanation.content[0]?.type === "text" ? explanation.content[0].text : "";
       expect(explanationText).toContain('"valuesIncluded":false');
       expect(explanationText).not.toContain("agent-alpha");
+    } finally {
+      testFixture.adapter.close();
+    }
+  });
+
+  test("requires explicit row-data capability and returns only policy-authorized bounded rows", async () => {
+    const testFixture = await fixture();
+    try {
+      const schemaOnly = await clientFor(
+        context(testFixture.project.tenant, [readCapability(testFixture.project.tenant)]),
+        testFixture.dependencies,
+      );
+      const denied = await schemaOnly.callTool({
+        name: "query_rows",
+        arguments: { table: "notes", columns: ["id", "body"] },
+      });
+      expect(denied.isError).toBeTrue();
+
+      const client = await clientFor(
+        context(testFixture.project.tenant, [
+          readCapability(testFixture.project.tenant),
+          rowReadCapability(testFixture.project.tenant),
+        ]),
+        testFixture.dependencies,
+      );
+      const result = await client.callTool({
+        name: "query_rows",
+        arguments: {
+          table: "notes",
+          columns: ["id", "body"],
+          filters: [{ column: "body", operator: "neq", value: "ignore'; DROP TABLE notes; --" }],
+          orderBy: { column: "id", direction: "asc" },
+          limit: 1,
+        },
+      });
+      expect(result.isError).not.toBeTrue();
+      const output = JSON.stringify(result.content);
+      expect(output).toContain('\\"rowCount\\":1');
+      expect(output).toContain('\\"body\\":\\"first\\"');
+      expect(output).not.toContain("secret-one");
+      expect(output).not.toContain("agent-other");
+
+      const hidden = await client.callTool({
+        name: "query_rows",
+        arguments: { table: "notes", columns: ["private_note"] },
+      });
+      expect(hidden.isError).toBeTrue();
     } finally {
       testFixture.adapter.close();
     }

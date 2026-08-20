@@ -1,6 +1,6 @@
 # Core capability matrix
 
-Verified on 19 August 2026. This matrix is the current product contract for the completed Core Engine slices; it does not promise PostgreSQL or full Supabase parity.
+Verified on 20 August 2026. This matrix is the current product contract for the completed Core Engine slices; it does not promise PostgreSQL or full Supabase parity.
 
 | Surface | Supported | Explicitly unsupported / deferred | Primary contract |
 | --- | --- | --- | --- |
@@ -9,7 +9,7 @@ Verified on 19 August 2026. This matrix is the current product contract for the 
 | Data engine | Portable SQLite subset on local Bun SQLite and authenticated remote libSQL; SQLite Meta table/row/schema/SQL and read-only MCP use the selected engine; parameterized CRUD, transaction rollback, bounded timeout/abort, typed errors, no automatic mutation retry | PostgreSQL dialect/features, automatic recovery of ambiguous mutations, destructive remote DDL without an external backup provider | `packages/engine-core`, `apps/sqlite-meta` |
 | libSQL replica | Optional embedded replica for explicitly typed reads, primary routing for typed writes, DDL, migrations and raw SQL; explicit primary or safe-error fallback; bounded sync/retry/timer lifecycle | Global consistency guarantee, multi-writer replication, automatic reconciliation | `packages/engine-core/src/replica.ts` |
 | Branches | Local SQLite schema-only preview, optional Turso/libSQL preview create/status/delete, tenant-derived provider names, idempotent provider create/delete, schema-CAS promotion | Divergent data merge, production data copying, multiple dependent migrations in one preview lifecycle | `packages/branch-core/README.md`, `packages/turso-branch`, `apps/sqlite-meta/src/previews.ts` |
-| MCP | Tenant-bound read resources/tools use the selected local or remote engine; local preview-only mutation workflow has Studio approval, promotion step-up and a durable control-plane ledger | Write-mode MCP previews in the self-hosted libSQL profile, direct production SQL, row-data access, credential/token passthrough, automatic approval, embedded OAuth issuer | `apps/mcp/README.md` |
+| MCP | Tenant-bound schema reads plus explicit `mcp:data:read` bounded row reads through the selected local or remote engine; current select policy is rewritten before row execution; local preview-only mutation workflow has Studio approval, promotion step-up and a durable control-plane ledger | Write-mode MCP previews in the self-hosted libSQL profile, direct production SQL, arbitrary SQL, joins/subqueries/expressions, credential/token passthrough, automatic approval, embedded OAuth issuer | `apps/mcp/README.md` |
 | Connect Analyzer | Capability-gated, read-only sandbox scan; Next.js/Vite React and package-manager detection; env-name/conflict detection; deterministic integration plan | Applying patches, GitHub App access, provider secret writes, repository code execution | `packages/onboarding-core/README.md`, `docs/connect-analyzer.md` |
 
 All tenant-sensitive operations require the complete `organization_id / project_id / environment_id / branch_id / generation` identity. Unsupported behavior must return an explicit error rather than silently approximating another system's semantics.

@@ -1,9 +1,9 @@
 # Session Lock
 
-- Session: 06A_SELF_HOSTED_LIBSQL
-- Status: COMPLETE
+- Session: 06B_MCP_SAFE_ROW_READS
+- Status: BLOCKED
 - Branch: banram_dev
-- Scope: Deploy and validate self-hosted libSQL as the remote data plane, including OpenCode MCP and security audit.
+- Scope: Add explicit, policy-authorized bounded MCP row reads without arbitrary SQL.
 - Branch note: the requested branch name was `bachram.dev`, but the actual branch in `C:\Users\ilyaa\OneDrive\Desktop\mekka-dev` is `banram_dev`; no branch switch, commit, or push was performed.
 - Implementation on August 19, 2026: added a pinned single-primary libSQL/Caddy Compose deployment, JWT public-key mount, persistent volumes, health checks, restart/graceful-stop policy, resource/log bounds, HTTPS reverse proxy, safe environment examples, and a shutdown-consistent off-host backup/restore runbook.
 - Security repairs: production now requires an explicit `MEKKA_DATA_ENGINE`; remote profiles require a server-side token reference; partial/invalid Turso provider configuration fails closed; Studio exposes only allowlisted authenticated engine diagnostics; no real secret was added. `bun audit` reported no known dependency vulnerabilities.
@@ -14,4 +14,9 @@
 - Full gate: `bun run check` completed successfully on August 19, 2026. The workspace runner now verifies Studio behavior without repeating coverage instrumentation; Studio coverage remains available separately through `test:ci`.
 - Remaining operational risks: one VPS/primary remains a single point of failure; backups require separate encrypted storage and periodic restore drills; destructive remote DDL is intentionally unavailable until an external backup provider is configured; Turso Cloud preview lifecycle and write-mode MCP previews remain typed unsupported in the self-hosted profile.
 - Audit conclusion: no absolute claim of zero bugs or vulnerabilities is possible. The checked guarantees include secret and URL redaction, HTTPS/localhost policy, scoped JWT auth, invalid credential denial, bounded timeouts/retries/results/logs/resources, parameterized values, tenant binding, idempotency, rollback, no accidental local user-data fallback, MCP capability boundaries, dependency audit, restart persistence, and restore verification.
-- Next session allowed: YES
+- Implementation on August 20, 2026: added `query_rows`, a structured read-only MCP tool requiring a distinct tenant-bound `mcp:data:read` capability. It accepts one public manifest table, 1-32 explicit columns, at most eight simple AND filters, one order column, a 1-100 limit and offset <= 10,000. It applies the existing select-policy rewrite before compiling one parameterized SELECT.
+- Agent Access now persists `allow_row_data` in the hashed SQLite grant store through an idempotent migration. Old grants default to disabled. The Studio checkbox is independently default-off and the issuance response reports only `rowDataEnabled`; neither permission nor token is written to localStorage.
+- Row outputs are bounded to 256 KiB, 16 KiB strings and 64 KiB BLOB cells; BigInt and BLOB use tagged safe serialization. MCP audit events contain tenant, table, column names, filter operator names/count, counts, fingerprint and result metadata only.
+- Passed verification: focused MCP/SQLite Meta/query compiler tests (72/72), `bun run typecheck`, `bun run typecheck:studio`, `bun run test:studio:fork` (26/26), `bun run repo:check`, `bun run format:check`, `bun run lint`, and `bun audit`.
+- Blocker: `bun run smoke:libsql` could not start because Docker Desktop's daemon was unavailable on August 20, 2026 (`//./pipe/dockerDesktopLinuxEngine` not found). `bun run check` was also attempted but exceeded the 10-minute runner timeout while executing the broad Studio suite. The required live self-hosted libSQL/OpenCode `query_rows` smoke and full `check` gate remain outstanding.
+- Next session allowed: NO

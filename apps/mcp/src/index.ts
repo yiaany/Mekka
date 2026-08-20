@@ -10,7 +10,7 @@ import {
   isDestructiveMigrationSql,
   type MigrationArtifact,
 } from "@mekka/migration-engine";
-import { type PolicyDocument, policyFormatVersion } from "@mekka/policy-engine";
+import { type PolicyDocument, policyFormatVersion, rewritePolicyQuery } from "@mekka/policy-engine";
 import {
   type Capability,
   createCorrelationId,
@@ -21,8 +21,17 @@ import {
   type TenantContext,
   type TenantIdentity,
 } from "@mekka/protocol";
-import { parseQuery } from "@mekka/query-ast";
-import { buildSchemaManifestAsync, type SchemaManifest } from "@mekka/schema-manifest";
+import {
+  parseQuery,
+  queryAstFormatVersion,
+  type FilterExpression,
+  type QueryAst,
+} from "@mekka/query-ast";
+import {
+  buildSchemaManifestAsync,
+  isReservedSchemaIdentifier,
+  type SchemaManifest,
+} from "@mekka/schema-manifest";
 import { compileSelect } from "@mekka/sqlite-compiler";
 import type { StorageAdapter, StorageValue } from "@mekka/storage-core";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -31,6 +40,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 
 export const mcpCapabilityAction = "mcp:read";
+export const mcpDataReadAction = "mcp:data:read";
 export const mcpPreviewCreateAction = "mcp:preview:create";
 export const mcpPreviewProposeAction = "mcp:preview:propose";
 export const mcpPreviewApplyAction = "mcp:preview:apply";
@@ -57,7 +67,35 @@ export type McpDependencies = Readonly<{
   resolveProject(context: TenantContext): Promise<McpProject> | McpProject;
   listLogs(context: TenantContext): Promise<readonly McpLogEntry[]> | readonly McpLogEntry[];
   mutations?: McpMutationWorkflow;
+  audit?: McpRowReadAuditSink;
   now?: () => number;
+}>;
+
+export type McpRowValue =
+  | string
+  | number
+  | null
+  | Readonly<{ type: "bigint"; value: string }>
+  | Readonly<{ type: "blob"; base64: string }>;
+
+export type McpRowReadAuditEvent = Readonly<{
+  action: "mcp.data.read";
+  actorId: string;
+  tenant: TenantIdentity;
+  correlationId: string;
+  table: string | null;
+  columns: readonly string[];
+  filterOperators: readonly string[];
+  filterCount: number;
+  requestedRowCount: number;
+  returnedRowCount: number;
+  result: "ok" | "forbidden" | "validation" | "quota" | "unsupported" | "infrastructure";
+  latencyMs: number;
+  fingerprint: string | null;
+}>;
+
+export type McpRowReadAuditSink = Readonly<{
+  record(event: McpRowReadAuditEvent): void | Promise<void>;
 }>;
 
 type MutationState = "proposed" | "applied" | "validated" | "promotion_pending" | "promoted";
@@ -206,6 +244,44 @@ const mutationCatalogBusyTimeoutMs = 5_000;
 const previewCreationStaleMs = 5 * 60_000;
 const expiredPreviewCleanupLimit = 100;
 const promotionClaimStaleMs = 5 * 60_000;
+const mcpRowReadDefaultLimit = 20;
+const mcpRowReadMaximumLimit = 100;
+const mcpRowReadMaximumOffset = 10_000;
+const mcpRowReadMaximumStringBytes = 16 * 1024;
+const mcpRowReadMaximumBlobBytes = 64 * 1024;
+const mcpRowReadMaximumResponseBytes = 256 * 1024;
+
+const mcpRowReadInputSchema = z.object({
+  table: z.string().min(1).max(128),
+  columns: z.array(z.string().min(1).max(128)).min(1).max(32),
+  filters: z
+    .array(
+      z.object({
+        column: z.string().min(1).max(128),
+        operator: z.enum(["eq", "neq", "gt", "gte", "lt", "lte", "is_null", "in"]),
+        value: z
+          .union([z.string().max(mcpRowReadMaximumStringBytes), z.number().finite(), z.null()])
+          .optional(),
+        values: z
+          .array(
+            z.union([z.string().max(mcpRowReadMaximumStringBytes), z.number().finite(), z.null()]),
+          )
+          .min(1)
+          .max(50)
+          .optional(),
+      }),
+    )
+    .max(8)
+    .optional(),
+  orderBy: z
+    .object({ column: z.string().min(1).max(128), direction: z.enum(["asc", "desc"]) })
+    .optional(),
+  limit: z.number().int().min(1).max(mcpRowReadMaximumLimit).optional(),
+  offset: z.number().int().min(0).max(mcpRowReadMaximumOffset).optional(),
+});
+
+type McpRowReadInput = z.infer<typeof mcpRowReadInputSchema>;
+type McpRowReadFilter = NonNullable<McpRowReadInput["filters"]>[number];
 
 export function createMcpServer(context: TenantContext, dependencies: McpDependencies): McpServer {
   const now = dependencies.now ?? Date.now;
@@ -292,6 +368,43 @@ export function createMcpServer(context: TenantContext, dependencies: McpDepende
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     },
     async () => safeMcpOperation(async () => toolJson(await inspectSchema(await project()))),
+  );
+  server.registerTool(
+    "query_rows",
+    {
+      description:
+        "Read bounded rows from one policy-authorized public table. It accepts no SQL and cannot mutate data.",
+      inputSchema: mcpRowReadInputSchema.shape,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) =>
+      safeMcpOperation(async () => {
+        const startedAt = now();
+        try {
+          requireMutationCapability(context, mcpDataReadAction, now());
+          const result = await queryRows(context, await project(), input);
+          await recordRowReadAudit(
+            dependencies.audit,
+            context,
+            input,
+            result.rows.length,
+            "ok",
+            startedAt,
+          );
+          return toolJson(result);
+        } catch (error) {
+          const safe = sanitizeMcpError(error);
+          await recordRowReadAudit(
+            dependencies.audit,
+            context,
+            input,
+            0,
+            auditResultCode(safe),
+            startedAt,
+          );
+          throw safe;
+        }
+      }),
   );
   server.registerTool(
     "explain_query",
@@ -1378,6 +1491,235 @@ function proposalSummary(proposal: McpMutationProposal): Readonly<Record<string,
   });
 }
 
+async function queryRows(
+  context: TenantContext,
+  project: McpProject,
+  input: McpRowReadInput,
+): Promise<
+  Readonly<{
+    table: string;
+    columns: readonly string[];
+    rows: readonly Record<string, McpRowValue>[];
+    rowCount: number;
+    limit: number;
+    offset: number;
+    truncated: boolean;
+  }>
+> {
+  const limit = input.limit ?? mcpRowReadDefaultLimit;
+  const offset = input.offset ?? 0;
+  const manifest = await inspectSchema(project);
+  const table = manifest.tables.find((candidate) => candidate.name === input.table);
+  if (!table || isReservedSchemaIdentifier(input.table)) throw new ProtocolError("forbidden");
+  const publicColumns = new Set(
+    table.columns.filter((column) => column.hidden === "none").map((column) => column.name),
+  );
+  if (
+    new Set(input.columns).size !== input.columns.length ||
+    input.columns.some((column) => !publicColumns.has(column))
+  ) {
+    throw new ProtocolError("forbidden");
+  }
+  const filters = input.filters ?? [];
+  for (const filter of filters) {
+    if (!publicColumns.has(filter.column)) throw new ProtocolError("forbidden");
+    validateRowReadFilter(filter);
+  }
+  if (input.orderBy && !publicColumns.has(input.orderBy.column))
+    throw new ProtocolError("forbidden");
+
+  const ast = createRowReadAst(input, limit + 1, offset);
+  let rewritten: ReturnType<typeof rewritePolicyQuery>;
+  try {
+    rewritten = rewritePolicyQuery(manifest, project.policies, context, "select", ast);
+  } catch {
+    // Policy parsing and rewriting are the authorization boundary. Never fall back to an unfiltered read.
+    throw new ProtocolError("forbidden");
+  }
+  const policyFields = new Set(rewritten.allowedFields);
+  if (
+    input.columns.some((column) => !policyFields.has(column)) ||
+    filters.some((filter) => !policyFields.has(filter.column)) ||
+    (input.orderBy !== undefined && !policyFields.has(input.orderBy.column))
+  ) {
+    throw new ProtocolError("forbidden");
+  }
+
+  let statement: ReturnType<typeof compileSelect>;
+  try {
+    statement = compileSelect(manifest, rewritten.ast, {
+      limits: { maxListSize: 50, maxParameters: 100 },
+    });
+  } catch {
+    throw new ProtocolError("forbidden");
+  }
+  const executed = await asyncExecutor(project.storage).execute<Record<string, StorageValue>>(
+    statement,
+  );
+  const truncated = executed.rows.length > limit;
+  const rows = executed.rows.slice(0, limit).map((row) => serializeRow(row, input.columns));
+  const output = Object.freeze({
+    table: input.table,
+    columns: Object.freeze([...input.columns]),
+    rows: Object.freeze(rows),
+    rowCount: rows.length,
+    limit,
+    offset,
+    truncated,
+  });
+  if (
+    new TextEncoder().encode(JSON.stringify(output)).byteLength > mcpRowReadMaximumResponseBytes
+  ) {
+    throw new ProtocolError("quota");
+  }
+  return output;
+}
+
+function createRowReadAst(input: McpRowReadInput, limit: number, offset: number): QueryAst {
+  return Object.freeze({
+    formatVersion: queryAstFormatVersion,
+    table: input.table,
+    select: Object.freeze({ kind: "columns" as const, columns: Object.freeze([...input.columns]) }),
+    filter: Object.freeze({
+      kind: "group" as const,
+      operator: "and" as const,
+      negated: false,
+      terms: Object.freeze<FilterExpression[]>(
+        (input.filters ?? []).map((filter) => {
+          if (filter.operator === "is_null") {
+            return Object.freeze({
+              kind: "filter" as const,
+              column: filter.column,
+              operator: "is" as const,
+              negated: false,
+              value: "null" as const,
+            });
+          }
+          const value =
+            filter.operator === "in"
+              ? (filter.values as readonly (string | number)[])
+              : (filter.value as string | number);
+          return Object.freeze({
+            kind: "filter" as const,
+            column: filter.column,
+            operator: filter.operator,
+            negated: false,
+            value,
+          });
+        }),
+      ),
+    }),
+    order: Object.freeze(input.orderBy ? [Object.freeze({ ...input.orderBy, nulls: null })] : []),
+    limit,
+    offset,
+  });
+}
+
+function validateRowReadFilter(filter: McpRowReadFilter): void {
+  if (filter.operator === "is_null") {
+    if (filter.value !== undefined || filter.values !== undefined)
+      throw new ProtocolError("validation");
+    return;
+  }
+  if (filter.operator === "in") {
+    if (
+      filter.value !== undefined ||
+      !filter.values ||
+      filter.values.some((value) => value === null)
+    ) {
+      throw new ProtocolError("validation");
+    }
+    return;
+  }
+  if (filter.values !== undefined || filter.value === undefined || filter.value === null) {
+    throw new ProtocolError("validation");
+  }
+}
+
+function auditResultCode(error: ProtocolError): McpRowReadAuditEvent["result"] {
+  switch (error.code) {
+    case "validation":
+    case "quota":
+    case "unsupported":
+    case "infrastructure":
+    case "forbidden":
+      return error.code;
+    default:
+      return "forbidden";
+  }
+}
+
+function serializeRow(
+  row: Record<string, StorageValue>,
+  columns: readonly string[],
+): Readonly<Record<string, McpRowValue>> {
+  const serialized: Record<string, McpRowValue> = {};
+  for (const column of columns) {
+    const value = row[column];
+    if (typeof value === "string") {
+      if (new TextEncoder().encode(value).byteLength > mcpRowReadMaximumStringBytes) {
+        throw new ProtocolError("quota");
+      }
+      serialized[column] = value;
+    } else if (typeof value === "number" || value === null) {
+      serialized[column] = value;
+    } else if (typeof value === "bigint") {
+      serialized[column] = Object.freeze({ type: "bigint", value: value.toString(10) });
+    } else if (value instanceof Uint8Array) {
+      if (value.byteLength > mcpRowReadMaximumBlobBytes) throw new ProtocolError("quota");
+      serialized[column] = Object.freeze({
+        type: "blob",
+        base64: Buffer.from(value).toString("base64"),
+      });
+    } else {
+      throw new ProtocolError("infrastructure");
+    }
+  }
+  return Object.freeze(serialized);
+}
+
+async function recordRowReadAudit(
+  sink: McpRowReadAuditSink | undefined,
+  context: TenantContext,
+  input: McpRowReadInput,
+  returnedRowCount: number,
+  result: McpRowReadAuditEvent["result"],
+  startedAt: number,
+): Promise<void> {
+  if (!sink) return;
+  const event: McpRowReadAuditEvent = Object.freeze({
+    action: "mcp.data.read",
+    actorId: context.actor.id,
+    tenant: context.tenant,
+    correlationId: context.correlationId,
+    table: typeof input.table === "string" ? input.table : null,
+    columns: Object.freeze([...(Array.isArray(input.columns) ? input.columns : [])]),
+    filterOperators: Object.freeze((input.filters ?? []).map((filter) => filter.operator)),
+    filterCount: input.filters?.length ?? 0,
+    requestedRowCount: input.limit ?? mcpRowReadDefaultLimit,
+    returnedRowCount,
+    result,
+    latencyMs: Math.max(0, Math.min(60_000, Date.now() - startedAt)),
+    fingerprint: createHash("sha256")
+      .update(
+        JSON.stringify({
+          table: input.table,
+          columns: input.columns,
+          filters: (input.filters ?? []).map(({ column, operator }) => ({ column, operator })),
+          orderBy: input.orderBy,
+          limit: input.limit,
+          offset: input.offset,
+        }),
+      )
+      .digest("hex"),
+  });
+  try {
+    await sink.record(event);
+  } catch {
+    // Audit delivery is best effort and never changes the authorization result.
+  }
+}
+
 function approvalSummary(approval: McpApprovalDecision): Readonly<Record<string, unknown>> {
   return Object.freeze({
     approvalId: approval.approvalId,
@@ -1577,20 +1919,8 @@ function sanitizedLogs(entries: readonly McpLogEntry[]): Readonly<Record<string,
 function capabilitySummary(context: TenantContext, now: number): Readonly<Record<string, unknown>> {
   return Object.freeze({
     tenant: context.tenant,
-    capabilities: Object.freeze(
-      context.capabilities
-        .filter(
-          (capability) =>
-            capability.expiresAt > now && capability.actions.includes(mcpCapabilityAction),
-        )
-        .map((capability) =>
-          Object.freeze({
-            id: capability.id,
-            actions: capability.actions,
-            expiresAt: capability.expiresAt,
-          }),
-        ),
-    ),
+    mcpReadEnabled: hasCapability(context, mcpCapabilityAction, now),
+    rowDataEnabled: hasCapability(context, mcpDataReadAction, now),
   });
 }
 

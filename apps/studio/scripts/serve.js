@@ -454,7 +454,7 @@ const SECURITY_HEADERS = [
 ]
 
 const port = Number(process.env.PORT || 8082)
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   try {
     for (const [key, value] of SECURITY_HEADERS) res.setHeader(key, value)
     const rawPathname = new URL(req.url ?? '/', 'http://studio.local').pathname
@@ -535,6 +535,26 @@ createServer(async (req, res) => {
     }
     res.end('Internal Server Error')
   }
-}).listen(port, () => {
+})
+
+const sockets = new Set()
+server.on('connection', (socket) => {
+  sockets.add(socket)
+  socket.once('close', () => sockets.delete(socket))
+})
+
+let closing = false
+function closeServer() {
+  if (closing) return
+  closing = true
+  // A self-hosted restart must release the port even when clients keep HTTP connections alive.
+  for (const socket of sockets) socket.destroy()
+  server.close(() => process.exit(0))
+}
+
+process.once('SIGINT', closeServer)
+process.once('SIGTERM', closeServer)
+
+server.listen(port, () => {
   console.log(`Studio listening on http://localhost:${port} (mode=${mode})`)
 })

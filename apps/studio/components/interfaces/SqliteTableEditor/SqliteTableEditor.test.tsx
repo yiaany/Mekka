@@ -162,6 +162,38 @@ describe("SQLite structured mutation resilience", () => {
     expect(clientState.current.createTable).toHaveBeenCalledTimes(1);
     expect(clientState.current.getSchemaHealth).toHaveBeenCalledTimes(2);
   });
+
+  test("shows a conflict without reconciling it as an applied schema change", async () => {
+    clientState.current = {
+      getSchemaHealth: vi.fn(() =>
+        Promise.resolve({
+          status: "ok",
+          formatVersion: 1,
+          schemaVersion: 1,
+          schemaHash: "a".repeat(64),
+        }),
+      ),
+      createTable: vi.fn(() =>
+        Promise.reject(
+          new StudioDomainError(
+            "conflict",
+            409,
+            "018e6c28-0000-7000-8000-000000000001" as never,
+          ),
+        ),
+      ),
+      listTables: vi.fn(),
+    };
+    renderWithQueryClient(<SqliteTableEditor />);
+
+    await screen.findByTestId("sqlite-table-editor");
+    fireEvent.change(screen.getByLabelText("Table name"), { target: { value: "notes" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create table" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The schema changed");
+    expect(screen.queryByRole("alert")).not.toHaveTextContent("appears applied");
+    expect(clientState.current.listTables).not.toHaveBeenCalled();
+  });
 });
 
 function renderWithQueryClient(element: React.ReactElement) {

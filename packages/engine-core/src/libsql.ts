@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   type Client,
   createClient,
@@ -5,7 +6,6 @@ import {
   type ResultSet,
   type Transaction,
 } from "@libsql/client";
-import { randomUUID } from "node:crypto";
 import { StorageAdapterError, validateStatement } from "@mekka/storage-core";
 import {
   type Engine,
@@ -689,6 +689,18 @@ export function mapLibsqlError(error: unknown): EngineError {
       return new EngineError(
         "ENGINE_CONFLICT",
         "The remote engine rejected the statement because of a constraint conflict.",
+        error,
+      );
+    }
+    if (
+      code === "SQL_INPUT_ERROR" &&
+      /\b(?:table|index|trigger|view)\s+(?:["'`][^"'`]+["'`]|\S+)\s+already exists\b/i.test(
+        error.message,
+      )
+    ) {
+      return new EngineError(
+        "ENGINE_CONFLICT",
+        "The remote engine rejected the operation because that schema object already exists.",
         error,
       );
     }

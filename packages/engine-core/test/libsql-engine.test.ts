@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { LibsqlError } from "@libsql/client";
 import {
   type Engine,
   EngineError,
+  type LibsqlOperationEvent,
+  mapLibsqlError,
   openLibsqlEngine,
   testLibsqlConnection,
-  type LibsqlOperationEvent,
 } from "../src/index";
 
 type RecordedRequest = Readonly<{
@@ -340,6 +342,18 @@ describe("libsql engine contract", () => {
       expect(caught, `status ${scenario.status}`).toBeInstanceOf(EngineError);
       expect((caught as EngineError).code, `status ${scenario.status}`).toBe(scenario.expected);
     }
+  });
+
+  test("maps duplicate schema objects from SQL_INPUT_ERROR to a failed conflict", () => {
+    const duplicate = mapLibsqlError(
+      new LibsqlError('table "notes" already exists', "SQL_INPUT_ERROR"),
+    );
+    const malformed = mapLibsqlError(
+      new LibsqlError('near "wat": syntax error', "SQL_INPUT_ERROR"),
+    );
+
+    expect(duplicate).toMatchObject({ code: "ENGINE_CONFLICT", outcome: "failed" });
+    expect(malformed).toMatchObject({ code: "ENGINE_FAILED", outcome: "failed" });
   });
 
   test("rejects forbidden statements with a typed engine error before any request", async () => {

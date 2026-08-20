@@ -72,6 +72,11 @@ export const DefaultLayout = ({
 
   const contentMinSizePercentage = 50;
   const contentMaxSizePercentage = 70;
+  // Persist panel sizes independently because the sidebar is conditionally removed on small screens.
+  const layoutSaveId =
+    activeSidebar?.component !== undefined && !isMobile
+      ? "default-layout-content-with-sidebar"
+      : "default-layout-content-content-only";
 
   useEffect(() => {
     if (!panelRef.current || !activeSidebar || isMobile) return;
@@ -109,9 +114,10 @@ export const DefaultLayout = ({
                 {!router.pathname.startsWith("/account") && <Sidebar />}
                 {/* Main Content with Layout Sidebar */}
                 <ResizablePanelGroup
+                  key={layoutSaveId}
                   orientation="horizontal"
                   className="h-full w-full overflow-x-hidden flex-1 flex flex-row gap-0"
-                  autoSaveId="default-layout-content"
+                  autoSaveId={layoutSaveId}
                 >
                   <ResizablePanel
                     id="panel-content"

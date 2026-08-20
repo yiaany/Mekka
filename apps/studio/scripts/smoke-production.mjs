@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { terminateProcessTree } from "./process-tree.js";
+
 const studioRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = path.resolve(studioRoot, "../..");
 const dataDirectory = await mkdtemp(path.join(tmpdir(), "mekka-production-smoke-"));
@@ -13,34 +15,8 @@ const [studioPort, sqliteMetaPort] = await Promise.all([freePort(), freePort()])
 const accessToken = "mekka-production-smoke-access-token";
 const baseUrl = `http://127.0.0.1:${studioPort}`;
 const authorization = `Basic ${Buffer.from(`smoke:${accessToken}`).toString("base64")}`;
-const child = spawn(
-  process.platform === "win32" ? "bun.exe" : "bun",
-  ["run", "--cwd", "apps/studio", "start:production"],
-  {
-    cwd: workspaceRoot,
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      MODE: "production",
-      MEKKA_LOCAL_DEV: "1",
-      PORT: String(studioPort),
-      SQLITE_META_PORT: String(sqliteMetaPort),
-      STUDIO_BACKEND_API_URL: `http://127.0.0.1:${sqliteMetaPort}`,
-      SQLITE_META_DATA_DIRECTORY: dataDirectory,
-      MEKKA_STUDIO_ACCESS_TOKEN: accessToken,
-      MEKKA_PUBLIC_URL: baseUrl,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  },
-);
-
 let output = "";
-child.stdout.on("data", (chunk) => {
-  output += chunk;
-});
-child.stderr.on("data", (chunk) => {
-  output += chunk;
-});
+let child = startProduction();
 
 try {
   await waitForReady();
@@ -434,19 +410,63 @@ try {
     throw new Error("Production smoke table was not deleted.");
   }
 
+  await stopProduction();
+  child = startProduction();
+  await waitForReady();
+  await expectStatus("/project/local/editor", 200, { authorization });
+
   console.log("[production-smoke] official Studio, SQLite, local Auth, session, and MCP flow passed");
 } catch (error) {
   console.error("[production-smoke] failed:", error);
   if (output.trim()) console.error(output.trim());
   process.exitCode = 1;
 } finally {
-  child.kill("SIGTERM");
+  await stopProduction();
+  await rm(dataDirectory, { recursive: true, force: true });
+}
+
+function startProduction() {
+  const runtime = spawn(
+    process.platform === "win32" ? "bun.exe" : "bun",
+    ["--smol", "apps/studio/scripts/start-production.js"],
+    {
+      cwd: workspaceRoot,
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        MODE: "production",
+        MEKKA_LOCAL_DEV: "1",
+        PORT: String(studioPort),
+        SQLITE_META_PORT: String(sqliteMetaPort),
+        STUDIO_BACKEND_API_URL: `http://127.0.0.1:${sqliteMetaPort}`,
+        SQLITE_META_DATA_DIRECTORY: dataDirectory,
+        MEKKA_STUDIO_ACCESS_TOKEN: accessToken,
+        MEKKA_PUBLIC_URL: baseUrl,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  runtime.stdout.on("data", (chunk) => {
+    output += chunk;
+  });
+  runtime.stderr.on("data", (chunk) => {
+    output += chunk;
+  });
+  return runtime;
+}
+
+async function stopProduction() {
+  if (child.exitCode !== null) return;
+  if (process.platform === "win32") terminateProcessTree(child);
+  else child.kill("SIGTERM");
   await Promise.race([
     new Promise((resolve) => child.once("exit", resolve)),
     new Promise((resolve) => setTimeout(resolve, 5_000)),
   ]);
-  if (child.exitCode === null) child.kill("SIGKILL");
-  await rm(dataDirectory, { recursive: true, force: true });
+  if (child.exitCode === null) {
+    child.kill("SIGKILL");
+    throw new Error("Production Studio did not stop after SIGTERM.");
+  }
 }
 
 async function waitForReady() {

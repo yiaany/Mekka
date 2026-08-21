@@ -2,7 +2,7 @@
 
 Этот документ предназначен для ручной проверки продукта перед следующим этапом разработки. Его можно проходить без знания кода: открывай указанные экраны, нажимай кнопки и сравнивай результат с разделом **Что должно произойти**.
 
-Дата чеклиста: **20 августа 2026 года**.
+Дата чеклиста: **21 августа 2026 года**.
 
 ## Что мы проверяем
 
@@ -31,7 +31,7 @@
 | Поле | Значение |
 | --- | --- |
 | URL Studio |  |
-| Версия или commit | `764d4f0` или более новый |
+| Версия или commit | `f20b587` или более новый |
 | Операционная система |  |
 | Браузер и версия |  |
 | Размер экрана |  |
@@ -751,13 +751,100 @@ https://example.test/callback#fragment
 2. Вызови `query_rows` для `cofounder_notes` с колонками `id` и `title`.
 3. Убедись, что запрос отклонен.
 4. Выпусти новый read-only token с включенным checkbox и убедись, что Studio показывает `Row data: enabled`.
-5. Вызови `query_rows` с `columns: ["id", "title"]`, одним filter, `orderBy`, `limit: 1`.
+5. Вызови `query_rows` с input ниже.
 
-**Что должно произойти:** schema-only token не видит строки. Opt-in token получает только выбранные policy-authorized строки и колонки. MCP не принимает SQL text, wildcard, joins, mutations или internal columns. Не публикуй row values и токены в баг-репорте.
+```json
+{
+  "table": "cofounder_notes",
+  "columns": ["id", "title"],
+  "filters": [{ "column": "id", "operator": "gte", "value": 1 }],
+  "orderBy": { "column": "id", "direction": "asc" },
+  "limit": 1,
+  "offset": 0
+}
+```
+
+**Что должно произойти:** schema-only token не видит строки. Opt-in token получает только выбранные policy-authorized строки и колонки. Ответ содержит `table`, `columns`, `rows`, `rowCount`, `limit`, `offset`, `truncated`; `rowCount` равен 1 и первая строка имеет `id: 1`. MCP не принимает SQL text, wildcard, joins, mutations или internal columns. Не публикуй row values и токены в баг-репорте.
 
 Результат: `[ ] PASS  [ ] FAIL  [ ] BLOCKED`
 
-### 11.6 MCP inspect_schema
+### 11.6 query_rows: filter, order, empty result и truncated
+
+Выполни четыре отдельных вызова с row-data token.
+
+1. Filter по равенству:
+
+```json
+{
+  "table": "cofounder_notes",
+  "columns": ["id", "title"],
+  "filters": [{ "column": "id", "operator": "eq", "value": 1 }]
+}
+```
+
+**Что должно произойти:** возвращается только строка `id: 1`.
+
+2. Order и limit:
+
+```json
+{
+  "table": "cofounder_notes",
+  "columns": ["id", "title"],
+  "orderBy": { "column": "id", "direction": "desc" },
+  "limit": 1
+}
+```
+
+**Что должно произойти:** возвращается строка с наибольшим ID; `rowCount` равен 1.
+
+3. Empty result:
+
+```json
+{
+  "table": "cofounder_notes",
+  "columns": ["id", "title"],
+  "filters": [{ "column": "id", "operator": "eq", "value": 999999 }]
+}
+```
+
+**Что должно произойти:** успешный ответ с `rows: []`, `rowCount: 0`, без stack trace и без лишних данных.
+
+4. Truncated:
+
+```json
+{
+  "table": "cofounder_notes",
+  "columns": ["id", "title"],
+  "orderBy": { "column": "id", "direction": "asc" },
+  "limit": 1
+}
+```
+
+**Что должно произойти:** если в таблице минимум две строки, наружу возвращается только одна строка и `truncated: true`. Если строк меньше двух, отметить `NOT APPLICABLE`.
+
+Результат: `[ ] PASS  [ ] FAIL  [ ] BLOCKED  [ ] NOT APPLICABLE`
+
+### 11.7 query_rows: security negative tests
+
+Проверь по одному input. После каждого вызова открой Table Editor и убедись, что таблица и строки не изменились.
+
+| Проверка | Input или действие | Что должно произойти |
+| --- | --- | --- |
+| Raw SQL отсутствует | Добавь поле `sql` со значением `SELECT * FROM cofounder_notes` | Tool не должен принять или выполнить SQL; строки не раскрываются. |
+| Wildcard | `"columns": ["*"]` | Validation/forbidden error. |
+| Internal table | `"table": "sqlite_schema"` или `"table": "_mekka_migrations"` | Forbidden error. |
+| Hidden/unknown column | `"columns": ["private_note"]` или `"columns": ["missing"]` | Forbidden error. |
+| Injection-like value | Filter value `"x'; DROP TABLE cofounder_notes; --"` | Значение трактуется только как data; таблица не меняется. |
+| Unsupported operator | `"operator": "like"` | Validation error. |
+| Oversized pagination | `"limit": 101` или `"offset": 10001` | Validation error. |
+| Invalid `in` | Пустой `values: []` или 51 значений | Validation error. |
+| Mutation tool | Вызови `propose_migration` с row-data read token | Forbidden/unsupported; schema не меняется. |
+
+**Что должно произойти для всех пунктов:** нет row values в error response, нет credentials, database URL, bound parameter dump или stack trace. Нельзя обходить policy и tenant boundary.
+
+Результат: `[ ] PASS  [ ] FAIL  [ ] BLOCKED`
+
+### 11.8 MCP inspect_schema
 
 1. Подключи OpenCode или другой MCP-клиент к `/mcp`.
 2. Передай temporary token через environment variable или Authorization header.
@@ -773,7 +860,7 @@ https://example.test/callback#fragment
 
 Результат: `[ ] PASS  [ ] FAIL  [ ] BLOCKED`
 
-### 11.7 Другие read-only MCP tools
+### 11.9 Другие read-only MCP tools
 
 Проверь:
 
@@ -787,7 +874,7 @@ explain_query
 
 Результат: `[ ] PASS  [ ] FAIL  [ ] BLOCKED`
 
-### 11.8 Попытка write через read token
+### 11.10 Попытка write через read token
 
 Попроси MCP вызвать `propose_migration` с read-only token.
 
@@ -795,7 +882,7 @@ explain_query
 
 Результат: `[ ] PASS  [ ] FAIL  [ ] BLOCKED`
 
-### 11.9 Read-write token в self-hosted profile
+### 11.11 Read-write token в self-hosted profile
 
 1. Отметь `Enable read-write MCP for this token`.
 2. Нажми `Generate read-write token`.
@@ -804,7 +891,7 @@ explain_query
 
 Результат: `[ ] PASS  [ ] FAIL`
 
-### 11.10 Refresh MCP approvals
+### 11.12 Refresh MCP approvals
 
 Нажми `Refresh MCP approvals`.
 

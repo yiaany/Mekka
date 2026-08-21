@@ -1,8 +1,14 @@
-import { createFileRoute, Outlet, useMatches } from '@tanstack/react-router'
+import { createFileRoute, Outlet, redirect, useMatches } from '@tanstack/react-router'
 
 import SettingsLayout from '@/components/layouts/ProjectSettingsLayout/SettingsLayout'
+import { STUDIO_FEATURES } from '@/lib/fork-config'
 
 export const Route = createFileRoute('/project/$ref/settings')({
+  beforeLoad: ({ params }) => {
+    if (!STUDIO_FEATURES.settings) {
+      throw redirect({ to: '/project/$ref/editor', params: { ref: params.ref } })
+    }
+  },
   component: SettingsShell,
 })
 

@@ -131,6 +131,10 @@ assert.equal(
   "/project/local/editor",
 );
 assert.equal(
+  getForkProjectRedirect("/project/local/realtime/inspector"),
+  "/project/local/editor",
+);
+assert.equal(
   getForkProjectRedirect("/project/_/storage/files"),
   "/project/local/editor",
 );

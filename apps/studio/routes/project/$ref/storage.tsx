@@ -1,9 +1,15 @@
-import { createFileRoute, Outlet, useMatches } from '@tanstack/react-router'
+import { createFileRoute, Outlet, redirect, useMatches } from '@tanstack/react-router'
 
 import { StorageBucketsLayout } from '@/components/layouts/StorageLayout/StorageBucketsLayout'
 import StorageLayout from '@/components/layouts/StorageLayout/StorageLayout'
+import { STUDIO_FEATURES } from '@/lib/fork-config'
 
 export const Route = createFileRoute('/project/$ref/storage')({
+  beforeLoad: ({ params }) => {
+    if (!STUDIO_FEATURES.storage) {
+      throw redirect({ to: '/project/$ref/editor', params: { ref: params.ref } })
+    }
+  },
   component: StorageShell,
 })
 

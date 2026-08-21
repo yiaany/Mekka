@@ -138,7 +138,7 @@ describe('Mekka framework server-route parity', () => {
       expect(request.url).toBe(`${backendUrl}/auth-local/agent-token`)
       expect(request.headers.get('authorization')).toBe('Bearer application-access-token')
       expect(request.headers.get('x-mekka-internal-proxy')).toBe('internal-proxy-token')
-      expect(await request.json()).toEqual({ mode: 'write' })
+      expect(await request.json()).toEqual({ mode: 'write', allowRowData: false })
       return Response.json({ token: 'agent-token', expiresAt: 42, mode: 'write' })
     }))
     const body = JSON.stringify({ accessToken: 'application-access-token', mode: 'write' })

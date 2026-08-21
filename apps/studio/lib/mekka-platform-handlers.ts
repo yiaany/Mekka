@@ -63,7 +63,7 @@ export async function handleAgentTokenRequest({
         'content-type': 'application/json',
         ...(internalProxyToken ? { 'x-mekka-internal-proxy': internalProxyToken } : {}),
       },
-      body: JSON.stringify({ mode: payload.mode ?? 'read' }),
+      body: JSON.stringify({ mode: payload.mode ?? 'read', allowRowData: payload.allowRowData === true }),
       signal: AbortSignal.timeout(5_000),
     })
   } catch {
@@ -157,14 +157,17 @@ function normalizeSplat(value: string | undefined): string | null {
   return segments.map(encodeURIComponent).join('/')
 }
 
-function hasAccessToken(payload: unknown): payload is { accessToken: string; mode?: 'read' | 'write' } {
+function hasAccessToken(
+  payload: unknown
+): payload is { accessToken: string; mode?: 'read' | 'write'; allowRowData?: boolean } {
   return (
     typeof payload === 'object' &&
     payload !== null &&
     'accessToken' in payload &&
     typeof payload.accessToken === 'string' &&
     payload.accessToken.length > 0 &&
-    (!('mode' in payload) || payload.mode === 'read' || payload.mode === 'write')
+    (!('mode' in payload) || payload.mode === 'read' || payload.mode === 'write') &&
+    (!('allowRowData' in payload) || typeof payload.allowRowData === 'boolean')
   )
 }
 

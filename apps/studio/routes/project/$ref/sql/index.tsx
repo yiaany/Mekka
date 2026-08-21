@@ -1,11 +1,7 @@
-import { createFileRoute } from '@tanstack/react-router'
-
-import SQLEditorIndexPage from '@/pages/project/[ref]/sql/index'
+import { createFileRoute, redirect } from '@tanstack/react-router'
 
 export const Route = createFileRoute('/project/$ref/sql/')({
-  component: SQLEditorIndexRoute,
+  beforeLoad: ({ params }) => {
+    throw redirect({ to: '/project/$ref/sql/$id', params: { ref: params.ref, id: 'new' } })
+  },
 })
-
-function SQLEditorIndexRoute() {
-  return <SQLEditorIndexPage dehydratedState={undefined} />
-}

@@ -1,8 +1,14 @@
-import { createFileRoute, Outlet, useMatches } from '@tanstack/react-router'
+import { createFileRoute, Outlet, redirect, useMatches } from '@tanstack/react-router'
 
 import RealtimeLayout from '@/components/layouts/RealtimeLayout/RealtimeLayout'
+import { STUDIO_FEATURES } from '@/lib/fork-config'
 
 export const Route = createFileRoute('/project/$ref/realtime')({
+  beforeLoad: ({ params }) => {
+    if (!STUDIO_FEATURES.realtime) {
+      throw redirect({ to: '/project/$ref/editor', params: { ref: params.ref } })
+    }
+  },
   component: RealtimeShell,
 })
 

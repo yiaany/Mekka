@@ -12,7 +12,14 @@ import {
   parseTenantIdentity,
   tenantHeaders,
 } from "../../packages/protocol/src/index";
-import { createAsyncSchemaManifestCache } from "../../packages/schema-manifest/src/index";
+import {
+  buildSchemaManifestAsync,
+  createAsyncSchemaManifestCache,
+} from "../../packages/schema-manifest/src/index";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { createMcpServer, mcpCapabilityAction, mcpDataReadAction } from "../../apps/mcp/src/index";
+import { createSelfHostedMcpReadPolicy } from "../../apps/sqlite-meta/src/mcp-policy";
 
 const root = resolve(import.meta.dir, "../..");
 const runId = `${Date.now()}-${process.pid}`;
@@ -83,7 +90,8 @@ try {
     });
   assertValue(await readValue(client, 99), null, "transaction rollback");
   await smokeSqliteMeta(client);
-  smokeOpenCodeMcp(sourceUrl);
+  await smokeMcpRows(client);
+  if (process.env.MEKKA_SKIP_OPENCODE_SMOKE !== "1") smokeOpenCodeMcp(sourceUrl);
   await smokeSqliteMetaRuntime(sourceUrl);
   await client.close();
 
@@ -163,6 +171,80 @@ try {
   }
   docker(["image", "rm", "--force", image], true);
   rmSync(temporaryDirectory, { recursive: true, force: true });
+}
+
+async function smokeMcpRows(engine: ReturnType<typeof openLibsqlEngine>): Promise<void> {
+  const tenant = parseTenantIdentity({
+    organizationId: "org-mcp-smoke",
+    projectId: "project-mcp-smoke",
+    environmentId: "env-mcp-smoke",
+    branchId: "branch-main",
+    generation: 1,
+  });
+  const capability = (action: string) => ({
+    id: `cap-${action.replaceAll(/[^a-z]/g, "")}`,
+    tenant,
+    actions: [action],
+    expiresAt: Date.now() + 60_000,
+  });
+  const dependencies = {
+    async resolveProject() {
+      const manifest = await buildSchemaManifestAsync(engine);
+      return { tenant, storage: engine, policies: createSelfHostedMcpReadPolicy(manifest) };
+    },
+    listLogs: () => Object.freeze([]),
+  };
+  const connect = async (actions: string[]) => {
+    const server = createMcpServer(
+      createTenantContext({
+        tenant,
+        actor: { kind: "agent", id: "agent-mcp-smoke" },
+        capabilities: actions.map(capability),
+        correlationId: createCorrelationId(),
+      }),
+      dependencies,
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = new Client({ name: "libsql-smoke", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), mcp.connect(clientTransport)]);
+    return mcp;
+  };
+
+  const schemaOnly = await connect([mcpCapabilityAction]);
+  try {
+    const denied = await schemaOnly.callTool({
+      name: "query_rows",
+      arguments: { table: "runtime_items", columns: ["id", "value"] },
+    });
+    if (denied.isError !== true)
+      throw new Error("Schema-only remote MCP read unexpectedly succeeded.");
+  } finally {
+    await schemaOnly.close();
+  }
+
+  const rowReader = await connect([mcpCapabilityAction, mcpDataReadAction]);
+  try {
+    const result = await rowReader.callTool({
+      name: "query_rows",
+      arguments: {
+        table: "runtime_items",
+        columns: ["id", "value"],
+        orderBy: { column: "id", direction: "asc" },
+        limit: 1,
+      },
+    });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    const output = JSON.parse(text) as { rows?: Array<{ value?: unknown }>; rowCount?: number };
+    if (
+      result.isError === true ||
+      output.rowCount !== 1 ||
+      output.rows?.[0]?.value !== "remote-runtime"
+    ) {
+      throw new Error("Remote libSQL MCP query_rows did not return the expected bounded row.");
+    }
+  } finally {
+    await rowReader.close();
+  }
 }
 
 function createToken(key: Parameters<typeof sign>[2], expiresAt: number): string {
@@ -414,7 +496,7 @@ function smokeOpenCodeMcp(url: string): void {
       "run",
       "--format",
       "json",
-      "Use only the mekka-local MCP server. Call inspect_schema and report only table names. Do not read repository files and do not use shell tools.",
+      'Use only the mekka-local MCP server. First call inspect_schema. Then call query_rows for table runtime_items with columns ["id","value"], orderBy id asc, limit 1. Report only the table name and returned row. Do not read repository files and do not use shell tools.',
     ],
     {
       cwd: root,
@@ -429,8 +511,13 @@ function smokeOpenCodeMcp(url: string): void {
       },
     },
   );
-  if (!output.includes("mekka-local_inspect_schema") || !output.includes("runtime_items")) {
-    throw new Error("OpenCode did not inspect the remote libSQL schema through MCP.");
+  if (
+    !output.includes("mekka-local_inspect_schema") ||
+    !output.includes("mekka-local_query_rows") ||
+    !output.includes("runtime_items") ||
+    !output.includes("remote-runtime")
+  ) {
+    throw new Error("OpenCode did not inspect and read the remote libSQL row through MCP.");
   }
 }
 

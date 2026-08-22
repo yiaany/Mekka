@@ -135,6 +135,10 @@ assert.equal(
   "/project/local/editor",
 );
 assert.equal(
+  getForkProjectRedirect("/project/local/logs"),
+  "/project/local/editor",
+);
+assert.equal(
   getForkProjectRedirect("/project/_/storage/files"),
   "/project/local/editor",
 );

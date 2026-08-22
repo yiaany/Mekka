@@ -25,6 +25,7 @@ The authorization server owns PKCE and token issuance. Its verifier must validat
 - `explain_query` parses the constrained query dialect and returns a compiler SQL template only. It does not execute SQL or return bound values.
 - Migration history omits SQL text. Logs omit message text and attributes and are marked as untrusted prompt input.
 - `query_rows` accepts exactly one manifest table, 1-32 explicit public columns, at most eight simple AND filters, one manifest order column, a 1-100 limit, and an offset up to 10,000. It applies the existing select policy rewrite before execution and returns at most 256 KiB; strings are capped at 16 KiB and BLOB cells at 64 KiB.
+- The self-hosted profile installs an explicit select policy for every current public manifest table. It allows all rows and public columns only after `mcp:data:read` opt-in; internal and hidden objects remain absent from the policy. Deployments needing row-level restrictions must replace this profile policy with their own policy source.
 - This version provides no direct production write tool, arbitrary SQL execution, credential access, token passthrough, joins, subqueries, expressions, or mutations through `query_rows`.
 
 ## Preview mutation workflow

@@ -146,6 +146,31 @@ describe("policy engine v1", () => {
     ).toMatchObject({ allowed: false, allowedFields: [], matchedRules: ["owner-select"] });
   });
 
+  test("supports an explicit unconditional select policy without weakening missing-policy denial", () => {
+    const manifest = notesManifest();
+    const publicRead: PolicyDocument = {
+      formatVersion: policyFormatVersion,
+      tables: [
+        {
+          table: "notes",
+          rules: [
+            {
+              name: "public-read",
+              action: "select",
+              fields: { allow: ["id", "body"], deny: [] },
+            },
+          ],
+        },
+      ],
+    };
+    const ast = parseQuery(manifest, "notes", "select=id,body&id=gte.1&order=id.asc&limit=2");
+    const rewritten = rewritePolicyQuery(manifest, publicRead, context("alice"), "select", ast);
+
+    expect(rewritten.ast).toEqual(ast);
+    expect(rewritten.allowedFields).toEqual(["id", "body"]);
+    expect(rewritten.matchedRules).toEqual(["public-read"]);
+  });
+
   test("runtime simulator and query rewrite enforce the same select decision", async () => {
     const adapter = await createTemporaryAdapter();
 

@@ -766,6 +766,8 @@ https://example.test/callback#fragment
 
 **Что должно произойти:** schema-only token не видит строки. Opt-in token получает только выбранные policy-authorized строки и колонки. Ответ содержит `table`, `columns`, `rows`, `rowCount`, `limit`, `offset`, `truncated`; `rowCount` равен 1 и первая строка имеет `id: 1`. MCP не принимает SQL text, wildcard, joins, mutations или internal columns. Не публикуй row values и токены в баг-репорте.
 
+В текущем self-hosted profile policy явно разрешает все строки и только public manifest columns после opt-in. Это ожидаемый beta contract, а не отсутствие policy. Internal/hidden tables и columns по-прежнему запрещены.
+
 Результат: `[ ] PASS  [ ] FAIL  [ ] BLOCKED`
 
 ### 11.6 query_rows: filter, order, empty result и truncated

@@ -147,12 +147,15 @@ export function rewritePolicyQuery(
     throw forbidden("Selected fields are not permitted by policy.");
   }
 
-  const policyTerms = rules.map((rule) => compilePredicate(rule.using, context));
-  const policyFilter = freezeGroup("or", false, policyTerms);
-  const filter =
-    ast.filter.terms.length === 0
-      ? policyFilter
-      : freezeGroup("and", false, [ast.filter, policyFilter]);
+  const hasUnconditionalRule = rules.some((rule) => rule.using === undefined);
+  const policyTerms = rules.flatMap((rule) =>
+    rule.using === undefined ? [] : [compilePredicate(rule.using, context)],
+  );
+  const filter = hasUnconditionalRule
+    ? ast.filter
+    : ast.filter.terms.length === 0
+      ? freezeGroup("or", false, policyTerms)
+      : freezeGroup("and", false, [ast.filter, freezeGroup("or", false, policyTerms)]);
   const select =
     action === "select" && ast.select.kind === "all"
       ? Object.freeze({ kind: "columns" as const, columns: Object.freeze(policyFields) })
@@ -351,10 +354,7 @@ function validateRule(rule: PolicyRule, visible: ReadonlySet<string>): void {
   ) {
     throw malformed("Policy rule has an invalid shape.");
   }
-  if (
-    (rule.action === "select" || rule.action === "update" || rule.action === "delete") &&
-    rule.using === undefined
-  ) {
+  if ((rule.action === "update" || rule.action === "delete") && rule.using === undefined) {
     throw malformed(`Policy rule "${rule.name}" requires a using predicate.`);
   }
   if ((rule.action === "insert" || rule.action === "update") && rule.check === undefined) {

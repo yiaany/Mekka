@@ -1,8 +1,14 @@
-import { createFileRoute, Outlet, useMatches } from '@tanstack/react-router'
+import { createFileRoute, Outlet, redirect, useMatches } from '@tanstack/react-router'
 
 import LogsLayout from '@/components/layouts/LogsLayout/LogsLayout'
+import { STUDIO_FEATURES } from '@/lib/fork-config'
 
 export const Route = createFileRoute('/project/$ref/logs')({
+  beforeLoad: ({ params }) => {
+    if (!STUDIO_FEATURES.logs) {
+      throw redirect({ to: '/project/$ref/editor', params: { ref: params.ref } })
+    }
+  },
   component: LogsShell,
 })
 

@@ -1,8 +1,9 @@
 import { createTenantContext, parseTenantIdentity } from "../packages/protocol/src/index";
 import { openLibsqlEngine } from "../packages/engine-core/src/index";
 import { openStorageAdapter } from "../packages/storage-core/src/index";
-import { policyFormatVersion } from "../packages/policy-engine/src/index";
-import { mcpCapabilityAction, startMcpStdio } from "../apps/mcp/src/index";
+import { createSelfHostedMcpReadPolicy } from "../apps/sqlite-meta/src/mcp-policy";
+import { mcpCapabilityAction, mcpDataReadAction, startMcpStdio } from "../apps/mcp/src/index";
+import { buildSchemaManifestAsync } from "../packages/schema-manifest/src/index";
 
 const tenant = parseTenantIdentity({
   organizationId: "org-opencode-smoke",
@@ -41,7 +42,7 @@ const context = createTenantContext({
     {
       id: "opencode-smoke-read",
       tenant,
-      actions: [mcpCapabilityAction],
+      actions: [mcpCapabilityAction, mcpDataReadAction],
       expiresAt: Number.MAX_SAFE_INTEGER,
     },
   ],
@@ -49,11 +50,10 @@ const context = createTenantContext({
 });
 
 await startMcpStdio(context, {
-  resolveProject: () => ({
-    tenant,
-    storage,
-    policies: Object.freeze({ formatVersion: policyFormatVersion, tables: Object.freeze([]) }),
-  }),
+  async resolveProject() {
+    const manifest = await buildSchemaManifestAsync(storage);
+    return { tenant, storage, policies: createSelfHostedMcpReadPolicy(manifest) };
+  },
   listLogs: () => Object.freeze([]),
 });
 

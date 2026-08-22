@@ -172,7 +172,7 @@ export const EditorTabs = () => {
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
         <Tabs
           className="w-full flex"
-          value={hasNewTab ? 'new' : (tabs.activeTab ?? undefined)}
+          value={hasNewTab ? 'new' : (tabs.activeTab ?? '')}
           onValueChange={handleTabChange}
         >
           <CollapseButton hideTabs={false} />

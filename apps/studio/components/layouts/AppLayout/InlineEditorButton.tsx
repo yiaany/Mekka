@@ -1,8 +1,11 @@
 import { SqlEditor } from 'icons'
+import { useParams } from 'common'
+import { useRouter } from 'next/router'
 import { cn, KeyboardShortcut } from 'ui'
 
 import { SIDEBAR_KEYS } from '@/components/layouts/ProjectLayout/LayoutSidebar/LayoutSidebarProvider'
 import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
+import { IS_PLATFORM } from '@/lib/constants'
 import { useTrack } from '@/lib/telemetry/track'
 import { SHORTCUT_IDS } from '@/state/shortcuts/registry'
 import { useIsShortcutEnabled } from '@/state/shortcuts/useIsShortcutEnabled'
@@ -15,12 +18,19 @@ const InlineEditorKeyboardTooltip = () => {
 }
 
 export const InlineEditorButton = () => {
+  const { ref } = useParams()
+  const router = useRouter()
   const { activeSidebar, toggleSidebar } = useSidebarManagerSnapshot()
   const isOpen = activeSidebar?.id === SIDEBAR_KEYS.EDITOR_PANEL
   const track = useTrack()
 
   const handleClick = () => {
     track('header_inline_editor_button_clicked')
+    const destination = getInlineEditorDestination(ref)
+    if (destination !== null) {
+      void router.push(destination)
+      return
+    }
     toggleSidebar(SIDEBAR_KEYS.EDITOR_PANEL)
   }
 
@@ -50,4 +60,8 @@ export const InlineEditorButton = () => {
       <span className="sr-only">SQL Editor</span>
     </ButtonTooltip>
   )
+}
+
+export function getInlineEditorDestination(ref: string | undefined): string | null {
+  return !IS_PLATFORM && ref !== undefined ? `/project/${ref}/sql/new` : null
 }

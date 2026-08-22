@@ -177,6 +177,42 @@ try {
   if (readMutation.isError !== true) {
     throw new Error("Read-only Agent Access unexpectedly received mutation scope.");
   }
+  const schemaOnlyRows = await callMcpTool(agentGrant.token, "query_rows", {
+    table: "users",
+    columns: ["id", "name"],
+  });
+  if (schemaOnlyRows.isError !== true) {
+    throw new Error("Schema-only Agent Access unexpectedly read row data.");
+  }
+  const rowDataGrant = await requestJson("/api/platform/project-auth/local/agent-token", {
+    authorization,
+    method: "POST",
+    body: JSON.stringify({
+      accessToken: sessionTokens.accessToken,
+      mode: "read",
+      allowRowData: true,
+    }),
+  });
+  if (rowDataGrant.rowDataEnabled !== true || typeof rowDataGrant.token !== "string") {
+    throw new Error("Production Auth did not issue explicit row-data Agent Access.");
+  }
+  const queriedRows = readMcpToolJson(
+    await expectMcpToolSuccess(rowDataGrant.token, "query_rows", {
+      table: "users",
+      columns: ["id", "name"],
+      filters: [{ column: "id", operator: "gte", value: 1 }],
+      orderBy: { column: "id", direction: "asc" },
+      limit: 1,
+      offset: 0,
+    }),
+  );
+  if (
+    queriedRows?.rowCount !== 1 ||
+    queriedRows?.rows?.[0]?.name !== "Alice" ||
+    queriedRows?.truncated !== true
+  ) {
+    throw new Error("Production MCP query_rows did not return the bounded policy-authorized row.");
+  }
 
   const writeGrant = await requestJson("/api/platform/project-auth/local/agent-token", {
     authorization,

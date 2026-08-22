@@ -1,7 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
-import { policyFormatVersion } from "@mekka/policy-engine";
 import { openSqliteEngine, type Engine } from "@mekka/engine-core";
 import {
   createCorrelationId,
@@ -22,6 +21,7 @@ import {
   readInternalProxyToken,
 } from "./internal-proxy";
 import type { LocalMcpRuntime, McpApprovalRecord } from "./mcp-runtime";
+import { createSelfHostedMcpReadPolicy } from "./mcp-policy";
 import { openPreviewDependencies } from "./preview-configuration";
 
 const port = readPort(process.env.SQLITE_META_PORT ?? "3001");
@@ -111,17 +111,12 @@ async function getMcpDependencies() {
   return {
     createMcpHttpResponse: mcp.createMcpHttpResponse,
     dependencies: {
-      resolveProject(context: ReturnType<typeof createTenantContext>) {
+      async resolveProject(context: ReturnType<typeof createTenantContext>) {
+        const project = resolveDataProject(context.tenant);
         return {
           tenant: context.tenant,
-          storage:
-            engineController.engine === null
-              ? resolveStorage(context.tenant)
-              : resolveDataProject(context.tenant).engine,
-          policies: Object.freeze({
-            formatVersion: policyFormatVersion,
-            tables: Object.freeze([]),
-          }),
+          storage: project.engine,
+          policies: createSelfHostedMcpReadPolicy(await project.schemaCache.get()),
         };
       },
       listLogs: () => Object.freeze([]),

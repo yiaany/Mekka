@@ -1,8 +1,6 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
 
 import { EditorBaseLayout } from "@/components/layouts/editors/EditorBaseLayout";
-import SQLEditorLayout from "@/components/layouts/SQLEditorLayout/SQLEditorLayout";
-import { SQLEditorMenu } from "@/components/layouts/SQLEditorLayout/SQLEditorMenu";
 
 export const Route = createFileRoute("/project/$ref/sql")({
   component: SQLEditorShell,
@@ -20,10 +18,8 @@ export const Route = createFileRoute("/project/$ref/sql")({
 // authenticated).
 function SQLEditorShell() {
   return (
-    <EditorBaseLayout productMenu={<SQLEditorMenu />} product="SQL Editor">
-      <SQLEditorLayout>
-        <Outlet />
-      </SQLEditorLayout>
+    <EditorBaseLayout product="SQL Editor">
+      <Outlet />
     </EditorBaseLayout>
   );
 }

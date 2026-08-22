@@ -8,9 +8,9 @@
 
 **KEEP THE BACKEND. FIRE THE FLEET.**
 
-Database · Auth · Storage · Realtime · Studio · safe agent access. One Bun project, one SQLite file.
+Database · Auth · Storage · Realtime · Studio · safe agent access. Local SQLite or remote libSQL, one product surface.
 
-[![CI](https://github.com/yiaany/mekka/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yiaany/mekka/actions/workflows/ci.yml)
+[![CI](https://github.com/yiaany/Mekka/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yiaany/Mekka/actions/workflows/ci.yml)
 ![Bun](https://img.shields.io/badge/Bun-1.3.14-242424?style=flat-square&logo=bun&logoColor=fff)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=fff)
 ![SQLite](https://img.shields.io/badge/data-SQLite--native-0f80cc?style=flat-square&logo=sqlite&logoColor=fff)
@@ -22,13 +22,27 @@ npx mekka
 ```
 downloads, installs, builds, starts the backend, and opens Studio at `http://127.0.0.1:8082`.
 
-&nbsp;·&nbsp; [Run it](#run-it) &nbsp;·&nbsp; [Request path](#request-path) &nbsp;·&nbsp; [What's inside](#whats-inside) &nbsp;·&nbsp; [Agent access](#agent-access) &nbsp;·&nbsp; [API surface](#api-surface) &nbsp;·&nbsp; [Security](#security) &nbsp;·&nbsp; [Compare](#how-it-compares) &nbsp;·&nbsp; [License](#license)
+&nbsp;·&nbsp; [What runs today](#what-runs-today) &nbsp;·&nbsp; [Run it](#run-it) &nbsp;·&nbsp; [Request path](#request-path) &nbsp;·&nbsp; [What's inside](#whats-inside) &nbsp;·&nbsp; [Agent access](#agent-access-without-production-roulette) &nbsp;·&nbsp; [API surface](#api-surface) &nbsp;·&nbsp; [Security](#security-model) &nbsp;·&nbsp; [Compare](#how-it-compares) &nbsp;·&nbsp; [License](#license)
 
 </div>
 
 ## Why Mekka exists
 
-Supabase taught the market to expect a database, Auth, Storage, Realtime, and a dashboard in the same box. Mekka keeps that product shape and cuts the infrastructure bill underneath it. The current release runs on Bun and SQLite. The database is a file you own. Studio ships in the repo. You can trace the request path without drawing a map of twelve services first.
+Supabase taught the market to expect a database, Auth, Storage, Realtime, and a dashboard in the same box. Mekka keeps that product shape without requiring a fleet of services for the core workflow. The current release runs on Bun and supports two SQLite-compatible data profiles: a local Bun SQLite database for development and an authenticated remote libSQL primary for self-hosted deployments. Studio, Auth, policy, migrations, and MCP ship in the same repository.
+
+## What runs today
+
+| Surface | Local profile | Self-hosted libSQL profile |
+| --- | --- | --- |
+| User data | Bun SQLite in the project data directory | Authenticated remote libSQL over HTTPS |
+| Studio | Table Editor, restricted SQL Editor, Authentication, Agent Access | The same supported Studio surface; unsupported upstream routes redirect away |
+| Schema and rows | Manifest-backed table, column, index, row, and restricted SQL APIs | The same contracts through the selected remote engine; no local user-data fallback |
+| MCP metadata | `inspect_schema`, migrations, policy summary, constrained query explanation | The same tools against remote libSQL |
+| MCP row data | Explicit opt-in `query_rows` with `mcp:data:read` | Explicit opt-in `query_rows` against remote libSQL |
+| Agent writes | Isolated local preview, validation, Studio approval, guarded promotion | Typed `unsupported`; self-hosted libSQL previews are not faked locally |
+| Control plane | Local SQLite stores for Auth, sessions, grants, approvals, and audit state | The same local control plane; database credentials remain server-side |
+
+The remote profile does not silently fall back to a project `.sqlite` file. If libSQL authentication, routing, or policy resolution fails, the request fails.
 
 Every request carries the full tenant identity, and every user value stays a prepared-statement parameter. That's the contract:
 
@@ -39,7 +53,7 @@ Every request carries the full tenant identity, and every user value stays a pre
 | What it can touch | Type-resolved tables and columns from the schema manifest |
 | How big it can be | Row cap, request byte cap, response byte cap, object cap, timeouts |
 | Replay safety | SHA-256 fingerprint and reusable idempotency keys |
-| Writes from agents | Disposable preview branch, then one-time human-approved promotion |
+| Writes from agents | Preview branch plus one-time human-approved promotion when the selected engine profile supports previews; otherwise typed `unsupported` |
 
 Deep PostgreSQL compatibility still belongs on PostgreSQL. Mekka rejects unsupported behavior instead of faking it. Teams that need native RLS, stored procedures, ranges, or a large extension catalog should use the real thing. Everyone else has been paying a Postgres tax for features their app never touches.
 
@@ -57,7 +71,7 @@ sequenceDiagram
     participant P as Policy Engine
     participant S as Schema Manifest
     participant X as SQLite Compiler
-    participant DB as SQLite / Storage
+    participant DB as Bun SQLite / remote libSQL
     participant R as Realtime
 
     C->>G: request + tenant headers + bearer token
@@ -81,7 +95,7 @@ Mutations carry idempotency keys. Payloads, results, uploads, queues, and Realti
 <details>
 <summary><strong>The local backend stays on loopback.</strong> Click for the deployment shape.</summary>
 
-The default backend binds `127.0.0.1:3001`, Studio serves `127.0.0.1:8082`. Put a trusted TLS reverse proxy in front of Studio, persist the data directory, and run a restore before trusting a backup.
+The default backend binds `127.0.0.1:3001`, Studio serves `127.0.0.1:8082`. Put a trusted TLS reverse proxy in front of Studio, persist the control-plane data directory, and run a restore before trusting a backup. In the libSQL profile, the user database runs separately behind its own authenticated HTTPS endpoint.
 
 ```bash
 bun run build
@@ -111,12 +125,14 @@ docker build \
 Each subsystem ships in the repo and works against the same local project. Open any of them to see what it actually does.
 
 <details>
-<summary><strong>Database</strong> — typed reads and writes on a file you own</summary>
+<summary><strong>Database</strong> — one typed contract across local SQLite and remote libSQL</summary>
 
 - Tables, columns, indexes, migrations, schema hashes, checkpoints, backup, and restore
 - Tables and columns resolve through a versioned schema manifest; values always bind as parameters
 - Reads compile to one prepared statement, bounded by row, byte, and timeout caps
 - Writes are idempotent via a SHA-256 fingerprint and reusable keys
+- `MEKKA_DATA_ENGINE` selects local SQLite, remote libSQL, or the optional embedded-replica profile
+- Remote mode uses authenticated libSQL directly and refuses accidental local user-data fallback
 </details>
 
 <details>
@@ -147,18 +163,20 @@ Each subsystem ships in the repo and works against the same local project. Open 
 </details>
 
 <details>
-<summary><strong>Branches</strong> — disposable previews, guarded promotion</summary>
+<summary><strong>Branches</strong> — disposable previews where the selected profile supports them</summary>
 
 - Short-lived preview branches with their own Auth and credential lifecycle
 - One validated migration per preview lifecycle, schema-CAS promotion, and restore points
 - Durable retries and TTL cleanup of stale previews
+- Self-hosted libSQL intentionally returns `unsupported` for write-mode MCP previews; Turso-backed preview lifecycle is a separate profile
 </details>
 
 <details>
-<summary><strong>Studio</strong> — tables, SQL, users, providers, files, approvals</summary>
+<summary><strong>Studio</strong> — the supported database and Auth workflow</summary>
 
-- Tables, SQL editor, users, Auth providers, files, agent grants, previews, and approvals
-- The SQL editor runs one restricted statement, blocks system tables, and enforces LIMITs
+- Table Editor, restricted SQL Editor, Auth users/providers/configuration, Agent Access, and approval review
+- The SQL editor runs one restricted statement, blocks system tables, and enforces LIMITs; guarded writes require an explicit checkbox
+- Disabled upstream Storage, Realtime, Logs, and Settings routes redirect to the supported project surface in the self-hosted Studio profile
 - Screenshots below come from the current project, not a design mockup
 </details>
 
@@ -166,8 +184,9 @@ Each subsystem ships in the repo and works against the same local project. Open 
 <summary><strong>Agent Access</strong> — scoped MCP tokens, preview-bound writes</summary>
 
 - One-hour tokens bound to a single tenant tuple and application session
-- Schema read access works immediately; bounded row reads require a separate explicit opt-in; writes open a disposable preview branch
-- Migration, validation, Studio approval, then one-time production promotion
+- Schema read access works immediately; bounded row reads require a separate default-off checkbox and `mcp:data:read`
+- Local write mode uses migration, preview validation, Studio approval, and one-time promotion
+- Self-hosted libSQL write mode remains a typed `unsupported` operation
 </details>
 
 <details>
@@ -201,18 +220,18 @@ Studio contains code derived from Supabase Studio under Apache License 2.0. Prov
 
 ## Agent access without production roulette
 
-An AI agent should not need your production database password. Mekka gives it a short-lived token bound to one organization, project, environment, branch, generation, and application session. Read access works immediately. Write access opens a disposable preview.
+An AI agent should not need your database password or libSQL JWT. Mekka gives it a short-lived token bound to one organization, project, environment, branch, generation, and application session. Schema access and row access are separate grants. Write access exists only where the active engine profile can create an isolated preview.
 
 ```text
 Agent
   → one-hour scoped token
-  → isolated preview branch
-  → migration and validation
-  → exact SQL approval in Studio
-  → one-time production promotion
+  → schema-only metadata by default
+  → optional bounded row reads after explicit opt-in
+  → optional isolated preview for supported write profiles
+  → exact migration approval before production promotion
 ```
 
-Mekka stores the migration artifact, SQL, schema hashes, and the destructive-operation flag. Studio shows the change before approval. The approval secret works once and only for that artifact. Promotion checks the production schema again before it runs. The agent can break its preview; production stays behind a human decision and a schema check.
+For profiles with write previews, Mekka stores the migration artifact, SQL, schema hashes, and the destructive-operation flag. Studio shows the change before approval. The approval secret works once and only for that artifact. Promotion checks the production schema again before it runs. The agent can break its preview; production stays behind a human decision and a schema check.
 
 <details>
 <summary><strong>The MCP surface is deliberately small.</strong> Click to open the full tool list.</summary>
@@ -237,6 +256,35 @@ Mekka stores the migration artifact, SQL, schema hashes, and the destructive-ope
 | Tool | `request_promotion` | Ask Studio for approval, then step up |
 
 There is no direct production-write tool, no arbitrary SQL, no credential or token passthrough. `query_rows` requires explicit `mcp:data:read`, permits only manifest-resolved columns and simple bounded filters, and still applies row and field policy. Each tool is gated by a separate capability: `mcp:read`, `mcp:data:read`, `mcp:preview:create`, `mcp:preview:propose`, `mcp:preview:apply`, `mcp:preview:validate`, `mcp:promotion:request`.
+
+</details>
+
+<details>
+<summary><strong><code>query_rows</code> contract.</strong> Click to inspect the row-read boundary.</summary>
+
+```json
+{
+  "table": "notes",
+  "columns": ["id", "title"],
+  "filters": [{ "column": "id", "operator": "gte", "value": 1 }],
+  "orderBy": { "column": "id", "direction": "asc" },
+  "limit": 20,
+  "offset": 0
+}
+```
+
+| Boundary | Contract |
+| --- | --- |
+| Capability | Separate `mcp:data:read`; ordinary `mcp:read` remains schema-only |
+| Tables | One current public manifest table; `_mekka_*`, `sqlite_*`, hidden, generated, and virtual surfaces are excluded |
+| Projection | 1–32 unique explicit public columns; no `*`, aliases, expressions, joins, or functions |
+| Filters | Up to 8 AND terms using `eq`, `neq`, `gt`, `gte`, `lt`, `lte`, `is_null`, or `in` |
+| `in` values | 1–50 scalar values |
+| Pagination | Default limit 20, maximum 100; offset maximum 10,000 |
+| Execution | Exactly one policy-rewritten, parameterized `SELECT` through the selected engine |
+| Output | Maximum 256 KiB; strings 16 KiB per cell; BLOBs 64 KiB per cell; BigInt and BLOB use tagged serialization |
+
+The self-hosted beta policy permits all rows and public manifest columns after the user enables row access. Deployments that need row-level restrictions must supply a stricter policy source. Prompt text, filter values, row values, logs, and database content cannot create or elevate this capability.
 
 </details>
 
@@ -340,7 +388,7 @@ Local filesystem and S3-compatible providers, checksummed bounded reads, MIME al
 | Auth | `better-auth` with email OTP, password reset, Google and GitHub OAuth |
 | Injection | User values always prepared-statement parameters, never interpolated |
 | Replay | SHA-256 request fingerprint, reusable idempotency keys, conflict on reuse with a different body |
-| Agent writes | Preview branch only, schema CAS on promotion, one-time approval, no production SQL tool |
+| Agent writes | Preview branch only where supported, schema CAS on promotion, one-time approval, no production SQL tool; unsupported profiles fail closed |
 | MCP | No credential or token passthrough; row data needs explicit tenant-bound opt-in plus policy, and logs/prompts are marked untrusted |
 | Storage | Signed read grants with TTL, checksums, bounded objects, resumable leases with cleanup |
 | Errors | No secrets, SQL values, or stack traces; stable category codes |
@@ -355,13 +403,13 @@ Security research is welcome. Source access makes review possible; it doesn't pr
 | | Mekka | Supabase | DIY on Postgres |
 | --- | --- | --- | --- |
 | Auth, Storage, Realtime, dashboard in one box | Yes | Yes | You build it |
-| Runs on one process, one file | Yes, Bun + SQLite | No, a fleet of services | No, a stack of containers |
-| Safe agent writes via preview branches | Yes, scoped tokens + approval | Some branch support | You build it |
+| Starts as a small single-node deployment | Yes; local SQLite is one Bun runtime, remote libSQL adds one data service | No, a managed service fleet | Usually several containers and operators |
+| Safe agent writes via preview branches | Yes in preview-capable profiles; self-hosted libSQL fails closed | Some branch support | You build it |
 | Prompt- and tool-driven changes stay off production | Yes, single Studio approval | Partial | You build it |
 | Supabase-js data subset for common CRUD | Yes, tested | Native | You write the adapter |
 | Works against a checked-out repo offline | Yes | No | No |
 | Native Postgres RLS, RPC, extensions | No, explicit error | Yes | Yes |
-| Local infrastructure cost | One Bun process | Cloud services | Containers, ops |
+| Infrastructure floor | One local Bun runtime, or Bun plus one libSQL primary | Managed cloud services | Database, gateway, auth, storage, monitoring, ops |
 
 ## Run it
 
@@ -387,6 +435,25 @@ bun run dev
 
 Local state stays in `apps/studio/.local/`.
 
+### Self-hosted libSQL profile
+
+Run the pinned single-primary libSQL deployment behind Caddy HTTPS, issue a scoped EdDSA client JWT, and configure Mekka with server-only environment variables:
+
+```dotenv
+MEKKA_DATA_ENGINE=libsql-remote
+MEKKA_LIBSQL_URL=https://libsql.example.com
+MEKKA_LIBSQL_TOKEN_ENV=MEKKA_LIBSQL_TOKEN
+MEKKA_LIBSQL_TOKEN=<scoped-client-jwt>
+```
+
+```bash
+docker compose -f deploy/libsql/compose.yaml up -d
+bun run smoke:libsql
+bun run --cwd apps/studio start:production
+```
+
+The baseline is one writable primary with persistent storage. It is not multi-writer and does not claim automatic failover or PITR. Backups must be encrypted, stored off-host, and restored into an isolated volume during drills. See [`docs/runbooks/self-hosted-libsql.md`](docs/runbooks/self-hosted-libsql.md).
+
 ## Verification and development
 
 `bun run check` runs the full gate: formatting, lint, typecheck (core and Studio), the CLI suite, workspace tests, Studio tests, the production build, and smoke tests.
@@ -406,6 +473,7 @@ Local state stays in `apps/studio/.local/`.
 | `bun run typecheck:studio` | Typecheck Studio |
 | `bun run build` | Build packages and Studio |
 | `bun run smoke:studio:production` | Test the production Studio path |
+| `bun run smoke:libsql` | Build a disposable authenticated libSQL container and verify CRUD, MCP row reads, restart, backup, and restore |
 | `bun run smoke:health` | Test the health service |
 | `bun audit` | Check dependency advisories |
 
@@ -420,17 +488,18 @@ Read [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request.
 
 | Ready now | Still being built |
 | --- | --- |
-| SQLite engine with a typed Data API | libSQL/Turso remote databases and embedded replicas |
-| Auth: sessions, JWT/JWKS, OAuth, refresh | PGlite isolated runtimes, JSONB, pgvector |
-| Storage: local and S3 providers, signed grants | Managed preview databases and primary write routing |
+| Local SQLite and authenticated remote libSQL under one typed engine contract | PostgreSQL data plane, JSONB, pgvector, and pooled protocol access |
+| Optional libSQL embedded replica with typed read routing and bounded sync | Managed PostgreSQL provisioning, backup status, PITR, and failover surfaces |
+| Auth: sessions, JWT/JWKS, OAuth, refresh | Cloud OAuth authorization server for remote MCP clients |
+| Storage: local and S3 providers, signed grants | Broader Storage compatibility and transforms |
 | Realtime changefeeds, Broadcast, Presence | Distributed Realtime coordinator |
-| Preview branches with guarded promotion | Divergent data merge and multiple dependent migrations |
-| Scoped agent access with Studio approvals | Embedded OAuth issuer for MCP |
-| Studio, SQL editor, users, providers, files | Functions provisioning and an edge runtime |
+| Local preview branches with guarded promotion; optional Turso preview lifecycle | Self-hosted libSQL write previews, divergent data merge, multiple dependent migrations |
+| Scoped MCP schema reads and explicit bounded row reads | Multi-engine MCP and project RBAC/approval policy expansion |
+| Restricted Studio tables, SQL, Auth, Agent Access, and approvals | Functions provisioning and an edge runtime |
 | Supabase-js data subset, tested | Full PostgREST parity items |
-| Health service and smoke suite | Production monitoring, backup drills, incident runbooks |
+| Disposable libSQL CRUD/MCP/restart/restore smoke | Managed cloud monitoring and provider-operated recovery workflows |
 
-Mekka is ready for a controlled local deployment with test data. The engine track through libSQL and PGlite has to land and pass its storage, migration, branch, security, and failure tests before it absorbs a paid cloud's production workload.
+Mekka is ready for controlled local and self-hosted libSQL beta testing. The current single-primary profile still requires operator-owned monitoring, off-host backups, restore drills, TLS, secret rotation, and capacity planning before it should carry important production data.
 
 </details>
 
@@ -445,6 +514,7 @@ Mekka is ready for a controlled local deployment with test data. The engine trac
 | `apps/health-service` | Health check example |
 | `packages/auth-core` | Sessions, JWT/JWKS, OAuth, token rotation |
 | `packages/storage-core` | Database adapter and object storage |
+| `packages/engine-core` | Local SQLite, remote libSQL, replica routing, typed outcomes |
 | `packages/realtime-core` | Changefeeds, channels, Broadcast, Presence |
 | `packages/branch-core` | Preview lifecycle and guarded promotion |
 | `packages/migration-engine` | Migration artifacts, checkpoints, restore |

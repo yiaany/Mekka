@@ -1,6 +1,6 @@
 # Core capability matrix
 
-Verified on 20 August 2026. This matrix is the current product contract for the completed Core Engine slices; it does not promise PostgreSQL or full Supabase parity.
+Verified on 22 August 2026. This matrix is the current product contract for the completed Core Engine slices; it does not promise PostgreSQL or full Supabase parity.
 
 | Surface | Supported | Explicitly unsupported / deferred | Primary contract |
 | --- | --- | --- | --- |
@@ -20,5 +20,5 @@ All tenant-sensitive operations require the complete `organization_id / project_
 - Set `MEKKA_DATA_ENGINE=libsql-replica` and `MEKKA_LIBSQL_REPLICA_PATH` to enable the optional embedded read replica. `MEKKA_LIBSQL_REPLICA_FALLBACK` is `safe-error` by default; periodic sync is disabled by default and must be explicitly bounded.
 - The self-hosted profile leaves every `MEKKA_TURSO_*` variable absent, so preview endpoints return typed `unsupported` without blocking engine diagnostics. A separate Turso-backed profile must set all provider variables together; partial configuration fails startup.
 - `deploy/libsql/compose.yaml` provides a pinned single-primary server behind Caddy TLS with JWT authentication, persistent volumes, bounded logs/resources, and health checks. Operational limits and shutdown-consistent off-host backup/restore are documented in `docs/runbooks/self-hosted-libsql.md`.
-- `bun run smoke:libsql` verifies the actual pinned server with scoped EdDSA JWT authentication, CRUD, rollback, denied invalid/expired credentials, SQLite Meta table/row/schema/SQL, OpenCode MCP schema inspection, container restart persistence, and restore into a new volume. The remote runtime check also verifies that no local project database is created.
+- `bun run smoke:libsql` verifies the actual pinned server with scoped EdDSA JWT authentication, CRUD, rollback, denied invalid/expired credentials, SQLite Meta table/row/schema/SQL, schema-only MCP denial, explicit remote `query_rows`, OpenCode MCP schema/row access, container restart persistence, and restore into a new volume. The remote runtime check also verifies that no local project database is created.
 - Provider credentials were not available for this release gate, so the live Turso smoke was not run. Deterministic remote-provider contract tests cover the supported path; a credentialed deployment must run the provider probe and one create/use/delete walkthrough before enabling previews.

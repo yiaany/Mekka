@@ -72,4 +72,4 @@ Keep the previous reviewed image digest and latest verified off-host backup. Sto
 - Backups must live outside the VPS and restore drills remain an operator responsibility.
 - Turso Cloud preview lifecycle is unsupported in this self-hosted profile.
 - Local SQLite remains for development, isolated tests, Auth, approvals, and other documented control-plane metadata.
-- Until SQLite Meta's synchronous storage contract is replaced, table/row/schema/MCP production data paths are not allowed to claim remote libSQL operation solely because `/engine/test-connection` succeeds.
+- SQLite Meta table/row/schema/restricted-SQL paths and MCP schema/row reads use the selected remote engine. A successful `/engine/test-connection` is still only a connectivity signal; release verification must run the full disposable CRUD, MCP, restart, backup, and restore smoke.

@@ -6,9 +6,11 @@
 
 # Mekka
 
-**KEEP THE BACKEND. FIRE THE FLEET.**
+**Experimental source-available backend for SQLite and libSQL.**
 
-Database · Auth · Storage · Realtime · Studio · safe agent access. Local SQLite or remote libSQL, one product surface.
+Typed data API · local Auth · object Storage · Realtime primitives · Studio · scoped MCP access.
+
+Built for fast local iteration and human-and-agent-native workflows, with local SQLite and authenticated remote libSQL profiles.
 
 [![CI](https://github.com/yiaany/Mekka/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yiaany/Mekka/actions/workflows/ci.yml)
 ![Bun](https://img.shields.io/badge/Bun-1.3.14-242424?style=flat-square&logo=bun&logoColor=fff)
@@ -22,13 +24,15 @@ npx mekka
 ```
 downloads, installs, builds, starts the backend, and opens Studio at `http://127.0.0.1:8082`.
 
-&nbsp;·&nbsp; [What runs today](#what-runs-today) &nbsp;·&nbsp; [Run it](#run-it) &nbsp;·&nbsp; [Request path](#request-path) &nbsp;·&nbsp; [What's inside](#whats-inside) &nbsp;·&nbsp; [Agent access](#agent-access-without-production-roulette) &nbsp;·&nbsp; [API surface](#api-surface) &nbsp;·&nbsp; [Security](#security-model) &nbsp;·&nbsp; [Compare](#how-it-compares) &nbsp;·&nbsp; [License](#license)
+&nbsp;·&nbsp; [What runs today](#what-runs-today) &nbsp;·&nbsp; [Run it](#run-it) &nbsp;·&nbsp; [Request path](#request-path) &nbsp;·&nbsp; [What's inside](#whats-inside) &nbsp;·&nbsp; [Agent access](#agent-access-without-production-roulette) &nbsp;·&nbsp; [API surface](#api-surface) &nbsp;·&nbsp; [Security](#security-model) &nbsp;·&nbsp; [Status](#capability-and-status) &nbsp;·&nbsp; [License](#license)
 
 </div>
 
 ## Why Mekka exists
 
-Supabase taught the market to expect a database, Auth, Storage, Realtime, and a dashboard in the same box. Mekka keeps that product shape without requiring a fleet of services for the core workflow. The current release runs on Bun and supports two SQLite-compatible data profiles: a local Bun SQLite database for development and an authenticated remote libSQL primary for self-hosted deployments. Studio, Auth, policy, migrations, and MCP ship in the same repository.
+Mekka explores a compact backend surface for people and agents working on the same application. The current release runs on Bun and supports two SQLite-compatible data profiles: a local Bun SQLite database for development and an authenticated remote libSQL primary for self-hosted deployments. A typed data API, Studio, Auth, policy, migrations, Storage, Realtime primitives, and scoped MCP access ship in the same repository.
+
+The project is experimental and targets controlled local development and self-hosted beta evaluation. It does not claim full Supabase or PostgreSQL compatibility.
 
 ## What runs today
 
@@ -55,9 +59,7 @@ Every request carries the full tenant identity, and every user value stays a pre
 | Replay safety | SHA-256 fingerprint and reusable idempotency keys |
 | Writes from agents | Preview branch plus one-time human-approved promotion when the selected engine profile supports previews; otherwise typed `unsupported` |
 
-Deep PostgreSQL compatibility still belongs on PostgreSQL. Mekka rejects unsupported behavior instead of faking it. Teams that need native RLS, stored procedures, ranges, or a large extension catalog should use the real thing. Everyone else has been paying a Postgres tax for features their app never touches.
-
-> **Mekka is coming for the teams that want Supabase's product and none of its weight.**
+Deep PostgreSQL compatibility still belongs on PostgreSQL. Mekka rejects unsupported behavior instead of faking it. Teams that need native RLS, stored procedures, ranges, or a large extension catalog should use PostgreSQL directly.
 
 ## Request path
 
@@ -398,18 +400,18 @@ Security research is welcome. Source access makes review possible; it doesn't pr
 
 </details>
 
-## How it compares
+## Capability and status
 
-| | Mekka | Supabase | DIY on Postgres |
-| --- | --- | --- | --- |
-| Auth, Storage, Realtime, dashboard in one box | Yes | Yes | You build it |
-| Starts as a small single-node deployment | Yes; local SQLite is one Bun runtime, remote libSQL adds one data service | No, a managed service fleet | Usually several containers and operators |
-| Safe agent writes via preview branches | Yes in preview-capable profiles; self-hosted libSQL fails closed | Some branch support | You build it |
-| Prompt- and tool-driven changes stay off production | Yes, single Studio approval | Partial | You build it |
-| Supabase-js data subset for common CRUD | Yes, tested | Native | You write the adapter |
-| Works against a checked-out repo offline | Yes | No | No |
-| Native Postgres RLS, RPC, extensions | No, explicit error | Yes | Yes |
-| Infrastructure floor | One local Bun runtime, or Bun plus one libSQL primary | Managed cloud services | Database, gateway, auth, storage, monitoring, ops |
+| Capability | Current status |
+| --- | --- |
+| Local data | Bun SQLite in one local runtime |
+| Self-hosted data | Authenticated remote libSQL with a single writable primary |
+| Data access | Typed API and a tested subset of common `supabase-js` CRUD operations |
+| Human workflow | Studio surfaces for tables, restricted SQL, Auth, Agent Access, and approvals |
+| Agent workflow | Scoped MCP schema tools and explicit, bounded row reads |
+| Agent writes | Preview and human approval where the selected engine supports it; otherwise explicit `unsupported` |
+| PostgreSQL features | Native RLS, RPC, extensions, ranges, and full PostgREST parity are not supported |
+| Maturity | Experimental beta for controlled local development and self-hosted evaluation |
 
 ## Run it
 
@@ -547,6 +549,6 @@ Large companies and cloud providers may not repackage Mekka as a competing hoste
 
 <div align="center">
 
-> **WE'RE BUILDING THE REASON TO LEAVE SUPABASE.**
+> **Early beta. Validate the documented limitations before using important data.**
 
 </div>

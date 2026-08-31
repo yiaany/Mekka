@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import {
   cloneProject,
@@ -363,7 +363,6 @@ test("installs only for fresh or incomplete projects unless explicitly overridde
 test("npx resolves the CLI package inside a checkout with a distinct root name", () => {
   const checkout = resolve(import.meta.dirname, "../../..");
   const cleanCheckout = join(tmpdir(), `mekka-cli-npx-${process.pid}-${Date.now()}`);
-  const npxCli = resolve(dirname(process.execPath), "node_modules/npm/bin/npx-cli.js");
   const rootPackage = JSON.parse(
     readFileSync(resolve(import.meta.dirname, "../../../package.json"), "utf8"),
   );
@@ -382,10 +381,10 @@ test("npx resolves the CLI package inside a checkout with a distinct root name",
     readFileSync(resolve(checkout, "packages/mekka-cli/bin/mekka.js")),
   );
   try {
-    const result = spawnSync(process.execPath, [npxCli, "mekka", "--version"], {
+    const result = spawnSync("npx mekka --version", {
       cwd: cleanCheckout,
       encoding: "utf8",
-      shell: false,
+      shell: true,
       timeout: 60_000,
     });
     assert.equal(result.status, 0, result.error?.message ?? result.stderr);
